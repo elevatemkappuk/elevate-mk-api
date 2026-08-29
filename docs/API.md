@@ -9,7 +9,7 @@ This document describes the HTTP API currently implemented in the Django server 
 Current base path and versioning convention:
 
 - Base prefix: `/api/v1/`
-- Current Elevate API routes are defined in `accounts.urls` and mounted from `config.urls`
+- Current Elevate API routes are defined in `accounts.urls` and `people.urls`, both mounted from `config.urls`
 - Machine-readable OpenAPI schema: `/api/schema/`
 - Swagger UI: `/api/docs/`
 - ReDoc: `/api/redoc/`
@@ -24,6 +24,7 @@ Local development URLs when running `manage.py runserver` on the default port:
 - Login endpoint: `http://localhost:8000/api/v1/auth/login/`
 - Logout endpoint: `http://localhost:8000/api/v1/auth/logout/`
 - Me endpoint: `http://localhost:8000/api/v1/auth/me/`
+- People endpoint: `http://localhost:8000/api/v1/people/`
 
 Environment-relative URL patterns:
 
@@ -34,6 +35,7 @@ Environment-relative URL patterns:
 - Login endpoint: `{BASE_URL}/api/v1/auth/login/`
 - Logout endpoint: `{BASE_URL}/api/v1/auth/logout/`
 - Me endpoint: `{BASE_URL}/api/v1/auth/me/`
+- People endpoint: `{BASE_URL}/api/v1/people/`
 
 Deployment note:
 
@@ -47,6 +49,7 @@ Currently implemented Elevate endpoints:
 - `POST /api/v1/auth/login/`
 - `POST /api/v1/auth/logout/`
 - `GET /api/v1/auth/me/`
+- `GET /api/v1/people/`
 
 No other Elevate API endpoints are currently implemented.
 
@@ -85,6 +88,7 @@ Current implementation is serializer-based and expects request bodies appropriat
 - `POST /api/v1/auth/login/`: JSON body with `email` and `password`
 - `POST /api/v1/auth/logout/`: no request fields are required
 - `GET /api/v1/auth/me/`: no request body
+- `GET /api/v1/people/`: query parameters only
 
 The test suite exercises JSON requests for the auth endpoints.
 
@@ -318,9 +322,94 @@ Staff authorization note:
 - their `staff_roles` value is an empty list
 - no Staff CRUD endpoints are currently implemented
 
+## Endpoint: `GET /api/v1/people/`
+Purpose:
+- Return the first read-only Staff CRM People directory listing.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` required
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+People visibility rule:
+
+- The endpoint exposes `BUSINESS` Person records only
+- `TECHNICAL` Person records are never returned
+- `TECHNICAL` exclusion still applies for `record_state=active`, `record_state=archived`, and `record_state=all`
+- A `TECHNICAL` Person linked to a CRM-admin User is still excluded
+- A `BUSINESS` Person linked to a CRM-admin User is still included
+
+Query parameters:
+
+| Parameter | Required | Default | Allowed values / behavior |
+| --- | --- | --- | --- |
+| `record_state` | no | `active` | `active`, `archived`, `all` |
+| `q` | no | empty | Case-insensitive search across `first_name`, `last_name`, `primary_email`, `mobile`, plus full-name matching |
+| `ordering` | no | `last_name` | `first_name`, `-first_name`, `last_name`, `-last_name`, `created_at`, `-created_at`, `updated_at`, `-updated_at` |
+| `page` | no | `1` | Standard DRF page-number pagination |
+| `page_size` | no | `25` | `25`, `50`, or `100` only |
+
+`record_state` semantics:
+
+- `active`: `BUSINESS` Persons with `archived_at IS NULL`
+- `archived`: `BUSINESS` Persons with `archived_at IS NOT NULL`
+- `all`: all `BUSINESS` Persons regardless of `archived_at`
+- Invalid `record_state`, `ordering`, or unsupported `page_size` values return `400 Bad Request`
+
+Response shape:
+
+- Standard DRF page-number pagination: `count`, `next`, `previous`, `results`
+
+Returned Person fields:
+
+- `id`
+- `first_name`
+- `last_name`
+- `primary_email`
+- `mobile`
+- `location`
+- `age_range`
+- `gender`
+- `archived_at`
+- `created_at`
+- `updated_at`
+
+Fields intentionally not exposed:
+
+- `record_type`
+- User authentication internals
+- Django `is_staff`
+- Django `is_superuser`
+- Staff role-assignment internals
+
+Example response:
+```json
+{
+  "count": 1,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": 14,
+      "first_name": "Amina",
+      "last_name": "Zulu",
+      "primary_email": "amina@example.com",
+      "mobile": "991000001",
+      "location": "Lilongwe",
+      "age_range": "",
+      "gender": "",
+      "archived_at": null,
+      "created_at": "2026-08-29T12:00:00Z",
+      "updated_at": "2026-08-29T12:00:00Z"
+    }
+  ]
+}
+```
+
 ## Planned API Areas
 Planned, not yet implemented:
 
-- broader people/domain APIs around the `Person` model
+- broader people/domain APIs around the `Person` model beyond the current read-only list endpoint
 - additional first-party authenticated application endpoints under the `/api/v1/` convention
 - separate authorization-aware staff CRM capabilities once the authorization model exists

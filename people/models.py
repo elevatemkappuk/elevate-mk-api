@@ -1,6 +1,17 @@
 from django.db import models
 
 
+class PersonQuerySet(models.QuerySet):
+    def business(self):
+        return self.filter(record_type=Person.RecordType.BUSINESS)
+
+    def active_business(self):
+        return self.business().filter(archived_at__isnull=True)
+
+    def archived_business(self):
+        return self.business().filter(archived_at__isnull=False)
+
+
 class Person(models.Model):
     class RecordType(models.TextChoices):
         BUSINESS = "BUSINESS", "Business"
@@ -24,6 +35,8 @@ class Person(models.Model):
 
     class Meta:
         ordering = ["last_name", "first_name", "id"]
+
+    objects = PersonQuerySet.as_manager()
 
     def __str__(self):
         return f"{self.first_name} {self.last_name}"
