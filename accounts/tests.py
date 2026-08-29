@@ -182,7 +182,20 @@ class AuthenticationApiTests(TestCase):
         self.assertEqual(response.data["email"], "member@example.com")
         self.assertEqual(response.data["person"]["id"], self.user.person_id)
         self.assertEqual(response.data["person"]["first_name"], "Member")
+        self.assertEqual(response.data["staff_roles"], [])
         self.assertIn("_auth_user_id", self.client.session)
+
+    def test_staff_user_receives_active_role_codes_in_login_response(self):
+        StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role)
+
+        response = self.client.post(
+            self.login_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["staff_roles"], [StaffRole.CRM_ADMIN])
 
     def test_invalid_password_is_rejected(self):
         response = self.client.post(
@@ -337,6 +350,10 @@ class AuthenticationApiTests(TestCase):
         self.assertIn("/api/v1/auth/csrf/", response.json()["paths"])
         me_schema = response.json()["components"]["schemas"]["CurrentUser"]
         self.assertIn("staff_roles", me_schema["properties"])
+        login_schema = response.json()["paths"]["/api/v1/auth/login/"]["post"]["responses"]["200"][
+            "content"
+        ]["application/json"]["schema"]["$ref"]
+        self.assertEqual(login_schema, "#/components/schemas/CurrentUser")
 
     def test_swagger_ui_endpoint_is_reachable(self):
         response = self.client.get("/api/docs/")

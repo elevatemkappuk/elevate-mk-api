@@ -9,7 +9,6 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.serializers import (
-    AuthenticatedUserSerializer,
     AuthErrorSerializer,
     CurrentUserSerializer,
     DetailSerializer,
@@ -59,7 +58,7 @@ class LoginView(APIView):
         ),
         request=LoginSerializer,
         responses={
-            200: AuthenticatedUserSerializer,
+            200: CurrentUserSerializer,
             400: OpenApiResponse(
                 response=AuthErrorSerializer,
                 description="Generic authentication failure or request validation error.",
@@ -75,7 +74,7 @@ class LoginView(APIView):
         user = serializer.validated_data["user"]
         login(request, user)
 
-        return Response(AuthenticatedUserSerializer(user).data, status=status.HTTP_200_OK)
+        return Response(CurrentUserSerializer(user).data, status=status.HTTP_200_OK)
 
 
 @method_decorator(csrf_protect, name="dispatch")

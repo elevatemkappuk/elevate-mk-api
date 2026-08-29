@@ -194,7 +194,7 @@ Example response:
     "last_name": "Example",
     "primary_email": null
   },
-  "staff_roles": []
+  "staff_roles": ["CRM_ADMIN"]
 }
 ```
 
@@ -212,6 +212,7 @@ Security behavior:
 - Does not reveal whether the email exists.
 - Rejects inactive users through the same generic failure message.
 - On success, calls Django `login()` to create the authenticated session.
+- Returns the same current-user shape used by `GET /api/v1/auth/me/`, including active `staff_roles`.
 - Passwords are never returned.
 
 ## Endpoint: `POST /api/v1/auth/logout/`
