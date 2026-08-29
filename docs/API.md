@@ -25,6 +25,7 @@ Local development URLs when running `manage.py runserver` on the default port:
 - Logout endpoint: `http://localhost:8000/api/v1/auth/logout/`
 - Me endpoint: `http://localhost:8000/api/v1/auth/me/`
 - People endpoint: `http://localhost:8000/api/v1/people/`
+- Person detail endpoint: `http://localhost:8000/api/v1/people/{person_id}/`
 
 Environment-relative URL patterns:
 
@@ -36,6 +37,7 @@ Environment-relative URL patterns:
 - Logout endpoint: `{BASE_URL}/api/v1/auth/logout/`
 - Me endpoint: `{BASE_URL}/api/v1/auth/me/`
 - People endpoint: `{BASE_URL}/api/v1/people/`
+- Person detail endpoint: `{BASE_URL}/api/v1/people/{person_id}/`
 
 Deployment note:
 
@@ -50,6 +52,7 @@ Currently implemented Elevate endpoints:
 - `POST /api/v1/auth/logout/`
 - `GET /api/v1/auth/me/`
 - `GET /api/v1/people/`
+- `GET /api/v1/people/{person_id}/`
 
 No other Elevate API endpoints are currently implemented.
 
@@ -89,6 +92,7 @@ Current implementation is serializer-based and expects request bodies appropriat
 - `POST /api/v1/auth/logout/`: no request fields are required
 - `GET /api/v1/auth/me/`: no request body
 - `GET /api/v1/people/`: query parameters only
+- `GET /api/v1/people/{person_id}/`: path parameter only
 
 The test suite exercises JSON requests for the auth endpoints.
 
@@ -404,6 +408,71 @@ Example response:
       "updated_at": "2026-08-29T12:00:00Z"
     }
   ]
+}
+```
+
+## Endpoint: `GET /api/v1/people/{person_id}/`
+Purpose:
+- Return the first read-only Person 360-degree foundation record for the Staff CRM People domain.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` required
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+People visibility rule:
+
+- The endpoint exposes `BUSINESS` Person records only
+- Active and archived `BUSINESS` records are both retrievable by direct ID
+- `TECHNICAL` Person records are never returned
+- Requesting a `TECHNICAL` Person ID returns `404 Not Found`
+- A `TECHNICAL` Person linked to a CRM-admin User still returns `404`
+- A `BUSINESS` Person linked to a CRM-admin User still returns `200 OK`
+- A missing Person ID also returns `404 Not Found`
+
+Path parameter:
+
+| Parameter | Required | Type | Notes |
+| --- | --- | --- | --- |
+| `person_id` | yes | integer | Primary key of a CRM-visible `BUSINESS` Person |
+
+Returned Person fields:
+
+- `id`
+- `first_name`
+- `last_name`
+- `primary_email`
+- `mobile`
+- `location`
+- `age_range`
+- `gender`
+- `archived_at`
+- `created_at`
+- `updated_at`
+
+Fields intentionally not exposed:
+
+- `record_type`
+- User authentication internals
+- Django `is_staff`
+- Django `is_superuser`
+- Staff role-assignment internals
+
+Example response:
+```json
+{
+  "id": 14,
+  "first_name": "Amina",
+  "last_name": "Zulu",
+  "primary_email": "amina@example.com",
+  "mobile": "991000001",
+  "location": "Lilongwe",
+  "age_range": "",
+  "gender": "",
+  "archived_at": null,
+  "created_at": "2026-08-29T12:00:00Z",
+  "updated_at": "2026-08-29T12:00:00Z"
 }
 ```
 

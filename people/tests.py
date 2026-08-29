@@ -120,6 +120,7 @@ class PeopleApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.url = "/api/v1/people/"
+        self.detail_url = "/api/v1/people/{person_id}/"
 
         self.non_staff_user = User.objects.create_user(
             email="nonstaff@example.com",
@@ -209,6 +210,9 @@ class PeopleApiTests(TestCase):
 
     def get_ids(self, response):
         return [result["id"] for result in response.data["results"]]
+
+    def get_detail_url(self, person_id):
+        return self.detail_url.format(person_id=person_id)
 
     def test_anonymous_user_receives_401(self):
         response = self.client.get(self.url)
@@ -407,3 +411,99 @@ class PeopleApiTests(TestCase):
         result_ids = self.get_ids(response)
         self.assertNotIn(self.technical_person.id, result_ids)
         self.assertNotIn(self.archived_technical_person.id, result_ids)
+
+    def test_detail_anonymous_user_receives_401(self):
+        response = self.client.get(self.get_detail_url(self.active_business.id))
+        self.assertEqual(response.status_code, 401)
+
+    def test_detail_authenticated_non_staff_user_receives_403(self):
+        self.authenticate(self.non_staff_user)
+        response = self.client.get(self.get_detail_url(self.active_business.id))
+        self.assertEqual(response.status_code, 403)
+
+    def test_detail_crm_admin_receives_200(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_detail_url(self.active_business.id))
+        self.assertEqual(response.status_code, 200)
+
+    def test_detail_crm_manager_receives_200(self):
+        self.authenticate(self.manager_user)
+        response = self.client.get(self.get_detail_url(self.active_business.id))
+        self.assertEqual(response.status_code, 200)
+
+    def test_detail_crm_viewer_receives_200(self):
+        self.authenticate(self.viewer_user)
+        response = self.client.get(self.get_detail_url(self.active_business.id))
+        self.assertEqual(response.status_code, 200)
+
+    def test_detail_active_business_person_is_returned(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_detail_url(self.active_business.id))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["id"], self.active_business.id)
+
+    def test_detail_archived_business_person_is_returned(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_detail_url(self.archived_business.id))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["id"], self.archived_business.id)
+        self.assertIsNotNone(response.data["archived_at"])
+
+    def test_detail_technical_person_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_detail_url(self.technical_person.id))
+        self.assertEqual(response.status_code, 404)
+
+    def test_detail_technical_person_linked_to_crm_admin_returns_404(self):
+        self.authenticate(self.technical_admin_user)
+        response = self.client.get(self.get_detail_url(self.technical_admin_user.person_id))
+        self.assertEqual(response.status_code, 404)
+
+    def test_detail_business_person_linked_to_crm_admin_is_returned(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_detail_url(self.business_admin_person.id))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["id"], self.business_admin_person.id)
+
+    def test_detail_nonexistent_id_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_detail_url(999999))
+        self.assertEqual(response.status_code, 404)
+
+    def test_detail_returns_expected_person_fields(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_detail_url(self.active_business.id))
+
+        self.assertEqual(
+            set(response.data.keys()),
+            {
+                "id",
+                "first_name",
+                "last_name",
+                "primary_email",
+                "mobile",
+                "location",
+                "age_range",
+                "gender",
+                "archived_at",
+                "created_at",
+                "updated_at",
+            },
+        )
+
+    def test_detail_does_not_return_record_type(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_detail_url(self.active_business.id))
+        self.assertNotIn("record_type", response.data)
+
+    def test_detail_does_not_return_auth_or_staff_internals(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_detail_url(self.active_business.id))
+
+        self.assertNotIn("user", response.data)
+        self.assertNotIn("is_staff", response.data)
+        self.assertNotIn("is_superuser", response.data)
+        self.assertNotIn("staff_role_assignments", response.data)

@@ -33,7 +33,12 @@ class HasPeopleAccess(HasActiveStaffRoleCodes):
     )
 
 
-class PeopleListView(generics.ListAPIView):
+class BusinessPersonQuerysetMixin:
+    def get_business_people_queryset(self):
+        return Person.objects.business()
+
+
+class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
     serializer_class = PersonListSerializer
     permission_classes = [IsAuthenticated, HasPeopleAccess]
     pagination_class = PeoplePagination
@@ -101,7 +106,7 @@ class PeopleListView(generics.ListAPIView):
     def get_queryset(self):
         params = getattr(self, "validated_query_params", self.get_validated_query_params())
 
-        queryset = Person.objects.all()
+        queryset = self.get_business_people_queryset()
         queryset = self.apply_record_state(queryset, params["record_state"])
         queryset = self.apply_search(queryset, params.get("q", ""))
         return queryset.order_by(*self.ORDERING_MAP[params["ordering"]])
@@ -132,3 +137,52 @@ class PeopleListView(generics.ListAPIView):
             | Q(mobile__icontains=query)
             | Q(full_name__icontains=query)
         )
+
+
+class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
+    serializer_class = PersonListSerializer
+    permission_classes = [IsAuthenticated, HasPeopleAccess]
+    lookup_url_kwarg = "person_id"
+
+    @extend_schema(
+        operation_id="people_retrieve",
+        summary="Retrieve CRM Person",
+        description=(
+            "Returns a single BUSINESS Person record for the Staff CRM People domain. "
+            "Archived BUSINESS records remain retrievable by direct ID. "
+            "TECHNICAL persons are outside the CRM People domain and return 404."
+        ),
+        responses={
+            200: PersonListSerializer,
+            401: OpenApiResponse(description="Authentication credentials were not provided."),
+            403: OpenApiResponse(description="You do not have a permitted active staff role."),
+            404: OpenApiResponse(
+                description="No BUSINESS Person matches the supplied ID within the CRM People domain."
+            ),
+        },
+        tags=["People"],
+        examples=[
+            OpenApiExample(
+                "Person detail",
+                value={
+                    "id": 14,
+                    "first_name": "Amina",
+                    "last_name": "Zulu",
+                    "primary_email": "amina@example.com",
+                    "mobile": "991000001",
+                    "location": "Lilongwe",
+                    "age_range": "",
+                    "gender": "",
+                    "archived_at": None,
+                    "created_at": "2026-08-29T12:00:00Z",
+                    "updated_at": "2026-08-29T12:00:00Z",
+                },
+                response_only=True,
+            )
+        ],
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    def get_queryset(self):
+        return self.get_business_people_queryset()
