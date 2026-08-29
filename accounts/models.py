@@ -11,23 +11,34 @@ def normalize_email_address(email):
 class UserManager(DjangoUserManager):
     use_in_migrations = True
 
+    def get_by_natural_key(self, username):
+        return self.get(**{self.model.USERNAME_FIELD: normalize_email_address(username)})
+
     def _create_user(self, email, password, **extra_fields):
         if not email:
             raise ValueError("The email address must be set.")
 
+        email = normalize_email_address(email)
         person = extra_fields.pop("person", None)
         person_first_name = extra_fields.pop("person_first_name", None)
         person_last_name = extra_fields.pop("person_last_name", None)
+        person_primary_email = extra_fields.pop("person_primary_email", None)
+        if person_primary_email:
+            person_primary_email = normalize_email_address(person_primary_email)
 
         if person is None:
             if not person_first_name or not person_last_name:
                 raise ValueError("User creation requires a linked person or person name details.")
+            person_kwargs = {
+                "first_name": person_first_name,
+                "last_name": person_last_name,
+            }
+            if person_primary_email:
+                person_kwargs["primary_email"] = person_primary_email
             person = Person.objects.create(
-                first_name=person_first_name,
-                last_name=person_last_name,
+                **person_kwargs,
             )
 
-        email = normalize_email_address(email)
         user = self.model(email=email, person=person, **extra_fields)
         user.set_password(password)
         user.save(using=self._db)
@@ -41,6 +52,7 @@ class UserManager(DjangoUserManager):
     def create_superuser(self, email, password=None, **extra_fields):
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", True)
+        extra_fields.setdefault("person_primary_email", normalize_email_address(email))
 
         if extra_fields.get("is_staff") is not True:
             raise ValueError("Superuser must have is_staff=True.")
@@ -58,7 +70,7 @@ class User(AbstractUser):
     person = models.OneToOneField(Person, on_delete=models.PROTECT, related_name="user")
 
     USERNAME_FIELD = "email"
-    REQUIRED_FIELDS = ["person"]
+    REQUIRED_FIELDS = []
 
     objects = UserManager()
 

@@ -1,3 +1,8 @@
+import os
+from io import StringIO
+from unittest import mock
+
+from django.core.management import call_command, get_commands
 from django.db import IntegrityError
 from django.test import TestCase
 
@@ -61,6 +66,7 @@ class UserModelTests(TestCase):
         self.assertTrue(user.is_superuser)
         self.assertIsNotNone(user.person_id)
         self.assertEqual(user.person.first_name, "Admin")
+        self.assertEqual(user.person.primary_email, "admin@example.com")
 
     def test_user_names_are_sourced_from_person(self):
         user = User.objects.create_user(
@@ -75,3 +81,26 @@ class UserModelTests(TestCase):
         self.assertNotIn("last_name", field_names)
         self.assertEqual(user.get_full_name(), "Jordan Lee")
         self.assertEqual(user.get_short_name(), "Jordan")
+
+    def test_createsuperuser_command_is_overridden_by_accounts_app(self):
+        self.assertEqual(get_commands()["createsuperuser"], "accounts")
+
+    def test_createsuperuser_command_creates_linked_person_without_person_id(self):
+        stdout = StringIO()
+
+        with mock.patch.dict(os.environ, {"DJANGO_SUPERUSER_PASSWORD": "testpass123"}, clear=False):
+            call_command(
+                "createsuperuser",
+                interactive=False,
+                email="CliAdmin@Example.com",
+                person_first_name="Cli",
+                person_last_name="Admin",
+                stdout=stdout,
+            )
+
+        user = User.objects.get(email="cliadmin@example.com")
+        self.assertTrue(user.is_staff)
+        self.assertTrue(user.is_superuser)
+        self.assertEqual(user.person.first_name, "Cli")
+        self.assertEqual(user.person.last_name, "Admin")
+        self.assertEqual(user.person.primary_email, "cliadmin@example.com")
