@@ -69,6 +69,35 @@ Current product direction recorded in the codebase:
 - Elevate applications are intended to maintain independent login sessions at this stage
 - shared-login SSO is not currently implemented
 
+## Session Isolation Strategy
+Architectural decision:
+
+- Elevate applications are intended to maintain independent login sessions
+- logging into one Elevate application should not intentionally create a shared-login or SSO session for another application
+- Django Admin is a technical administration interface, not part of the Elevate Staff CRM authentication experience
+- the authentication architecture should not rely on a shared parent-domain session cookie
+
+Current implication:
+
+- Staff CRM authentication and Django Admin authentication should be treated as separate browser-session concerns unless a future explicit SSO design changes that decision
+
+## Cookie Domain Strategy
+Architectural decision:
+
+- Django session cookies should remain host-scoped
+- do not broaden cookie scope to a parent domain merely to share login state across Elevate subdomains
+
+Examples of what this architecture intentionally avoids:
+
+- `SESSION_COOKIE_DOMAIN = ".elevatemk.org"`
+- `SESSION_COOKIE_DOMAIN = ".staging.elevatemk.org"`
+
+Why this matters:
+
+- a parent-domain cookie can make the same session credential available to multiple Elevate subdomains
+- that would undermine the intended independent-session behavior between separate applications and technical interfaces
+- this repository does not currently document any explicit SSO requirement that would justify that tradeoff
+
 ## CSRF Bootstrap Endpoint
 Current bootstrap endpoint:
 
@@ -127,6 +156,7 @@ Current implementation relies on Django's normal session framework:
 - `sessionid` remains HttpOnly and browser-managed
 - the frontend must not read or manually manage `sessionid`
 - the CSRF bootstrap flow relies on `csrftoken` remaining JavaScript-readable so the frontend can send `X-CSRFToken`
+- Django session cookies are intended to remain host-scoped unless a future explicit SSO requirement changes that direction
 
 This repository does not currently introduce a custom cookie format or token layer on top of Django sessions.
 
@@ -144,6 +174,26 @@ Current local browser configuration:
 - the frontend should call `GET /api/v1/auth/csrf/` first, then send the `csrftoken` value back in `X-CSRFToken`
 - `sessionid` remains HttpOnly/browser-managed and is not exposed to JavaScript
 
+Current local-development artifact:
+
+- because Django Admin and the API may be served from the same Django host during development, logging into Django Admin on `localhost` can result in the browser reusing the same Django session for API requests on `localhost`
+
+Important clarification:
+
+- this is a local host-sharing artifact
+- it is not, by itself, evidence of a Django security failure
+- it does not match Elevate MK's intended independent-session application architecture
+
+Practical isolated local testing convention:
+
+- CRM/API flow: `localhost`
+- Django technical admin: `http://127.0.0.1:8000/admin/`
+
+Why that convention works:
+
+- browsers treat `localhost` and `127.0.0.1` as different cookie hosts
+- a session created for `127.0.0.1` is not automatically reused for `localhost`
+
 Important development rule:
 
 - do not mix `localhost` and `127.0.0.1` across frontend and backend URLs during a session-authenticated browser flow
@@ -153,6 +203,56 @@ Why that matters:
 - CORS origin matching is exact
 - CSRF trusted-origin matching is exact
 - cookies and browser-origin behavior become harder to reason about if one side uses `localhost` and the other uses `127.0.0.1`
+
+## Cross-Origin CRM/API Browser Flow
+Architectural decision:
+
+- separate CRM and API hostnames are compatible with Django session authentication
+- cross-origin does not imply a shared cookie across all subdomains
+
+Expected browser configuration for a CRM frontend talking to a separate API host:
+
+- the exact CRM origin must be allowed by CORS
+- credentialed CORS must be enabled
+- the CRM origin must be included in `CSRF_TRUSTED_ORIGINS`
+- the browser sends the API host's session cookie back to that API host
+- the `csrftoken` and `X-CSRFToken` flow remains required for unsafe requests
+
+This is different from parent-domain cookie sharing:
+
+- the session cookie remains scoped to the API host
+- the frontend can make credentialed requests to that API host
+- the browser does not thereby expose the same session cookie to every Elevate subdomain
+
+## Illustrative Staging Topology
+Illustrative, not contractual:
+
+- CRM frontend: `https://crm.staging.elevatemk.org`
+- API: `https://api.staging.elevatemk.org`
+- Django technical admin: `https://django-admin.staging.elevatemk.org`
+
+Architecture principle for that topology:
+
+- these are separate hostnames
+- with host-scoped cookies, a session created for the Django Admin host is not automatically shared with the API host
+- the CRM frontend would still need the expected CORS and CSRF configuration to talk to the API host
+
+Status note:
+
+- the exact final staging DNS, proxy, and TLS details are not yet documented here as contractual deployment configuration
+
+## Production Principle
+Architectural decision:
+
+- the Staff CRM frontend and Django technical admin should remain independently addressable
+- API authentication cookies should be scoped to the API host
+- technical Django Admin authentication should not intentionally grant Staff CRM access
+- Staff CRM operational authorization remains based on `StaffRole` and `StaffRoleAssignment`, not Django `is_staff` or `is_superuser`
+
+Operational implication:
+
+- staging and production isolation should be achieved through hostname and cookie-scope configuration
+- do not introduce custom session middleware solely to solve the localhost same-host development artifact
 
 ## How Authenticated Requests Become `request.user`
 Current request path:

@@ -72,6 +72,12 @@ Current behavior:
 - Login establishes that session with `django.contrib.auth.login()`.
 - Logout invalidates it with `django.contrib.auth.logout()`.
 
+Architectural direction:
+
+- Elevate applications are intended to keep independent login sessions
+- Django technical admin is not part of the Staff CRM authentication experience
+- the API should not rely on a broad shared parent-domain session cookie for application login sharing
+
 ## Content Type Expectations
 Current implementation is serializer-based and expects request bodies appropriate for DRF parsing.
 
@@ -107,6 +113,12 @@ Current local browser-development expectation:
 - `sessionid` stays HttpOnly/browser-managed
 - `csrftoken` is readable by JavaScript so the frontend can construct `X-CSRFToken`
 - do not mix `localhost` and `127.0.0.1` in this flow because origin matching is exact
+
+Local isolation note:
+
+- if Django Admin and the API are both served from the same development Django host, the browser can reuse that same host-scoped Django session across `/admin/` and `/api/...`
+- that is a localhost development artifact, not intended Elevate application-level shared login
+- for isolated local testing, use `localhost` for CRM/API and `http://127.0.0.1:8000/admin/` for Django Admin
 
 ## Endpoint: `GET /api/v1/auth/csrf/`
 Purpose:
