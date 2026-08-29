@@ -4,20 +4,24 @@ from rest_framework import serializers
 from accounts.models import User, normalize_email_address
 
 
+class PersonSummarySerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    first_name = serializers.CharField()
+    last_name = serializers.CharField()
+    primary_email = serializers.EmailField(allow_null=True)
+
+
 class AuthenticatedUserSerializer(serializers.ModelSerializer):
-    person = serializers.SerializerMethodField()
+    person = PersonSummarySerializer(read_only=True)
 
     class Meta:
         model = User
         fields = ("id", "email", "person")
 
-    def get_person(self, obj):
-        return {
-            "id": obj.person_id,
-            "first_name": obj.person.first_name,
-            "last_name": obj.person.last_name,
-            "primary_email": obj.person.primary_email,
-        }
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["person"] = PersonSummarySerializer(instance.person).data
+        return data
 
 
 class LoginSerializer(serializers.Serializer):
@@ -42,3 +46,10 @@ class LoginSerializer(serializers.Serializer):
         attrs["email"] = email
         attrs["user"] = user
         return attrs
+
+
+class AuthErrorSerializer(serializers.Serializer):
+    detail = serializers.ListField(
+        child=serializers.CharField(),
+        help_text="Generic authentication or validation error messages.",
+    )

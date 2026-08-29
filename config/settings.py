@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     'people',
     'accounts',
     'rest_framework',
+    'drf_spectacular',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -137,6 +138,13 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "accounts.authentication.SessionAuthentication",
     ],
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Elevate MK API",
+    "DESCRIPTION": "Backend API for the Elevate MK digital ecosystem.",
+    "VERSION": "1.0.0",
 }
 
 

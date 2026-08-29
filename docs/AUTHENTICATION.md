@@ -157,6 +157,8 @@ Current behavior:
 - `CsrfViewMiddleware` is enabled globally.
 - `LoginView` and `LogoutView` are explicitly decorated with `csrf_protect`.
 - The API uses cookie/session authentication, so CSRF protection is required for state-changing requests.
+- The OpenAPI/Swagger documentation does not bypass CSRF or change runtime authentication behavior.
+- Swagger UI documents the session-authenticated endpoints, but browser-based testing against login/logout still needs a valid Django CSRF token.
 
 Why CSRF matters here:
 

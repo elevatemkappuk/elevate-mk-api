@@ -220,3 +220,32 @@ class AuthenticationApiTests(TestCase):
         response = self.client.get(self.me_url)
 
         self.assertEqual(response.status_code, 401)
+
+    def test_openapi_schema_endpoint_is_reachable(self):
+        response = self.client.get("/api/schema/?format=json")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"].split(";")[0], "application/vnd.oai.openapi+json")
+        self.assertIn("openapi", response.json())
+        self.assertIn("/api/v1/auth/login/", response.json()["paths"])
+
+    def test_swagger_ui_endpoint_is_reachable(self):
+        response = self.client.get("/api/docs/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "swagger-ui")
+
+    def test_redoc_endpoint_is_reachable(self):
+        response = self.client.get("/api/redoc/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "redoc")
+
+    def test_openapi_schema_generation_command_succeeds(self):
+        stdout = StringIO()
+
+        call_command("spectacular", validate=True, stdout=stdout)
+
+        output = stdout.getvalue()
+        self.assertIn("openapi: 3.0.3", output)
+        self.assertIn("/api/v1/auth/login/", output)

@@ -10,6 +10,33 @@ Current base path and versioning convention:
 
 - Base prefix: `/api/v1/`
 - Current Elevate API routes are defined in `accounts.urls` and mounted from `config.urls`
+- Machine-readable OpenAPI schema: `/api/schema/`
+- Swagger UI: `/api/docs/`
+- ReDoc: `/api/redoc/`
+
+Local development URLs when running `manage.py runserver` on the default port:
+
+- Swagger UI: `http://127.0.0.1:8000/api/docs/`
+- ReDoc: `http://127.0.0.1:8000/api/redoc/`
+- OpenAPI schema: `http://127.0.0.1:8000/api/schema/`
+- Login endpoint: `http://127.0.0.1:8000/api/v1/auth/login/`
+- Logout endpoint: `http://127.0.0.1:8000/api/v1/auth/logout/`
+- Me endpoint: `http://127.0.0.1:8000/api/v1/auth/me/`
+
+Environment-relative URL patterns:
+
+- Swagger UI: `{BASE_URL}/api/docs/`
+- ReDoc: `{BASE_URL}/api/redoc/`
+- OpenAPI schema: `{BASE_URL}/api/schema/`
+- Login endpoint: `{BASE_URL}/api/v1/auth/login/`
+- Logout endpoint: `{BASE_URL}/api/v1/auth/logout/`
+- Me endpoint: `{BASE_URL}/api/v1/auth/me/`
+
+Deployment note:
+
+- The path structure above is current implementation.
+- The hostname, scheme, and port will vary by environment such as local development, staging, and production.
+- Treat the OpenAPI/UI paths as environment-relative rather than hard-coded to `127.0.0.1:8000`.
 
 Currently implemented Elevate endpoints:
 
@@ -18,6 +45,20 @@ Currently implemented Elevate endpoints:
 - `GET /api/v1/auth/me/`
 
 No other Elevate API endpoints are currently implemented.
+
+## OpenAPI Documentation
+Current documentation endpoints:
+
+- OpenAPI schema: `GET /api/schema/`
+- Swagger UI: `GET /api/docs/`
+- ReDoc: `GET /api/redoc/`
+
+Current documentation roles:
+
+- `/api/schema/` is the machine-readable endpoint contract for implemented API behavior
+- this `API.md` file is higher-level developer documentation with explanatory context and examples
+
+The OpenAPI schema is generated with drf-spectacular from the current DRF views, serializers, authentication configuration, and explicit schema annotations.
 
 ## Authentication Expectations
 Current behavior:
