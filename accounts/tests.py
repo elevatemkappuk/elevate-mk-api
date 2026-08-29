@@ -4,7 +4,8 @@ from unittest import mock
 
 from django.core.management import call_command, get_commands
 from django.db import IntegrityError
-from django.test import TestCase
+from django.test import TestCase, override_settings
+from rest_framework.test import APIClient
 
 from accounts.models import User
 
@@ -104,3 +105,118 @@ class UserModelTests(TestCase):
         self.assertEqual(user.person.first_name, "Cli")
         self.assertEqual(user.person.last_name, "Admin")
         self.assertEqual(user.person.primary_email, "cliadmin@example.com")
+
+
+@override_settings(ROOT_URLCONF="config.urls")
+class AuthenticationApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.password = "testpass123"
+        self.user = User.objects.create_user(
+            email="Member@Example.com",
+            password=self.password,
+            person_first_name="Member",
+            person_last_name="Example",
+        )
+        self.login_url = "/api/v1/auth/login/"
+        self.logout_url = "/api/v1/auth/logout/"
+        self.me_url = "/api/v1/auth/me/"
+
+    def test_successful_login_with_valid_email_and_password(self):
+        response = self.client.post(
+            self.login_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["email"], "member@example.com")
+        self.assertEqual(response.data["person"]["id"], self.user.person_id)
+        self.assertEqual(response.data["person"]["first_name"], "Member")
+        self.assertIn("_auth_user_id", self.client.session)
+
+    def test_invalid_password_is_rejected(self):
+        response = self.client.post(
+            self.login_url,
+            {"email": "member@example.com", "password": "wrongpass"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["detail"][0], "Invalid email or password.")
+
+    def test_unknown_email_is_rejected(self):
+        response = self.client.post(
+            self.login_url,
+            {"email": "unknown@example.com", "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["detail"][0], "Invalid email or password.")
+
+    def test_case_normalized_email_login(self):
+        response = self.client.post(
+            self.login_url,
+            {"email": "MEMBER@EXAMPLE.COM", "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["email"], "member@example.com")
+
+    def test_inactive_user_cannot_log_in(self):
+        self.user.is_active = False
+        self.user.save(update_fields=["is_active"])
+
+        response = self.client.post(
+            self.login_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["detail"][0], "Invalid email or password.")
+
+    def test_authenticated_me_returns_user_and_person(self):
+        self.client.post(
+            self.login_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+
+        response = self.client.get(self.me_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["id"], self.user.id)
+        self.assertEqual(response.data["person"]["first_name"], "Member")
+        self.assertNotIn("password", response.data)
+
+    def test_anonymous_me_returns_401(self):
+        response = self.client.get(self.me_url)
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_logout_invalidates_authenticated_session(self):
+        self.client.post(
+            self.login_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+
+        response = self.client.post(self.logout_url, {}, format="json")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertNotIn("_auth_user_id", self.client.session)
+
+    def test_authenticated_access_fails_after_logout(self):
+        self.client.post(
+            self.login_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+        self.client.post(self.logout_url, {}, format="json")
+
+        response = self.client.get(self.me_url)
+
+        self.assertEqual(response.status_code, 401)
