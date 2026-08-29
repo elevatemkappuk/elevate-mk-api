@@ -1,5 +1,6 @@
 from django.contrib.auth import login, logout
 from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.csrf import csrf_protect
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import status
@@ -10,8 +11,37 @@ from rest_framework.views import APIView
 from accounts.serializers import (
     AuthenticatedUserSerializer,
     AuthErrorSerializer,
+    DetailSerializer,
     LoginSerializer,
 )
+
+
+@method_decorator(ensure_csrf_cookie, name="dispatch")
+class CsrfView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    @extend_schema(
+        operation_id="auth_csrf",
+        summary="Bootstrap a CSRF cookie",
+        description=(
+            "Bootstraps Django CSRF protection for cookie and session-based clients by "
+            "forcing Django to issue a csrftoken cookie. This endpoint does not create "
+            "a login session and does not authenticate the caller. Clients should send "
+            "the csrftoken value back in the X-CSRFToken header on subsequent unsafe requests."
+        ),
+        request=None,
+        responses={
+            200: OpenApiResponse(
+                response=DetailSerializer,
+                description="CSRF cookie issued in the csrftoken response cookie.",
+            ),
+        },
+        tags=["Authentication"],
+        auth=[],
+    )
+    def get(self, request):
+        return Response({"detail": "CSRF cookie set."}, status=status.HTTP_200_OK)
 
 
 @method_decorator(csrf_protect, name="dispatch")

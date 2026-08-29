@@ -69,6 +69,21 @@ Current product direction recorded in the codebase:
 - Elevate applications are intended to maintain independent login sessions at this stage
 - shared-login SSO is not currently implemented
 
+## CSRF Bootstrap Endpoint
+Current bootstrap endpoint:
+
+- `GET /api/v1/auth/csrf/`
+
+Current bootstrap flow:
+
+1. The client calls `GET /api/v1/auth/csrf/`.
+2. Django issues the `csrftoken` cookie.
+3. The client reads the cookie value.
+4. The client sends that value back in the `X-CSRFToken` header on unsafe requests such as login and logout.
+5. Login can then succeed and establish the normal Django `sessionid` cookie.
+
+This endpoint is public, does not create a login session, and does not authenticate the caller.
+
 ## How Login Works
 Current login endpoint:
 
@@ -76,18 +91,24 @@ Current login endpoint:
 
 Current login flow:
 
-1. The request sends `email` and `password`.
-2. `LoginSerializer` normalizes the email.
-3. Django `authenticate()` checks the credentials against the custom `User`.
-4. Invalid credentials and inactive accounts are rejected with the same generic error.
-5. On success, `LoginView` calls Django `login(request, user)`.
-6. Django persists the authenticated user ID in the server-side session and returns a session cookie to the client.
+1. The client first obtains a `csrftoken` cookie from `GET /api/v1/auth/csrf/`.
+2. The request sends `email` and `password` plus `X-CSRFToken`.
+3. `LoginSerializer` normalizes the email.
+4. Django `authenticate()` checks the credentials against the custom `User`.
+5. Invalid credentials and inactive accounts are rejected with the same generic error.
+6. On success, `LoginView` calls Django `login(request, user)`.
+7. Django persists the authenticated user ID in the server-side session and returns a session cookie to the client.
 
 Request-flow diagram:
 ```text
 Client
+  -> GET /api/v1/auth/csrf/
+Server
+  -> set csrftoken cookie
+Client
   -> POST /api/v1/auth/login/ {email, password}
 Server
+  -> validate X-CSRFToken against csrftoken cookie
   -> normalize email
   -> authenticate against accounts.User
   -> login(request, user)
@@ -155,10 +176,11 @@ Client
 Current behavior:
 
 - `CsrfViewMiddleware` is enabled globally.
+- `GET /api/v1/auth/csrf/` uses Django's normal CSRF cookie issuance behavior.
 - `LoginView` and `LogoutView` are explicitly decorated with `csrf_protect`.
 - The API uses cookie/session authentication, so CSRF protection is required for state-changing requests.
 - The OpenAPI/Swagger documentation does not bypass CSRF or change runtime authentication behavior.
-- Swagger UI documents the session-authenticated endpoints, but browser-based testing against login/logout still needs a valid Django CSRF token.
+- Swagger UI documents the session-authenticated endpoints, but browser-based testing against login/logout still needs a valid CSRF bootstrap request and matching `X-CSRFToken` header.
 
 Why CSRF matters here:
 

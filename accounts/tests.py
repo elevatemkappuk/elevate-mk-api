@@ -111,6 +111,7 @@ class UserModelTests(TestCase):
 class AuthenticationApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.csrf_client = APIClient(enforce_csrf_checks=True)
         self.password = "testpass123"
         self.user = User.objects.create_user(
             email="Member@Example.com",
@@ -118,9 +119,52 @@ class AuthenticationApiTests(TestCase):
             person_first_name="Member",
             person_last_name="Example",
         )
+        self.csrf_url = "/api/v1/auth/csrf/"
         self.login_url = "/api/v1/auth/login/"
         self.logout_url = "/api/v1/auth/logout/"
         self.me_url = "/api/v1/auth/me/"
+
+    def test_csrf_bootstrap_returns_200(self):
+        response = self.client.get(self.csrf_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["detail"], "CSRF cookie set.")
+
+    def test_csrf_bootstrap_sets_csrftoken_cookie(self):
+        response = self.client.get(self.csrf_url)
+
+        self.assertIn("csrftoken", response.cookies)
+
+    def test_csrf_bootstrap_does_not_require_authentication(self):
+        response = self.client.get(self.csrf_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("_auth_user_id", self.client.session)
+
+    def test_login_fails_with_403_when_csrf_enforcement_enabled_and_no_token_is_supplied(self):
+        response = self.csrf_client.post(
+            self.login_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertNotIn("_auth_user_id", self.csrf_client.session)
+
+    def test_login_succeeds_with_matching_csrf_cookie_and_header(self):
+        csrf_response = self.csrf_client.get(self.csrf_url)
+        csrf_token = csrf_response.cookies["csrftoken"].value
+
+        response = self.csrf_client.post(
+            self.login_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["email"], "member@example.com")
+        self.assertIn("_auth_user_id", self.csrf_client.session)
 
     def test_successful_login_with_valid_email_and_password(self):
         response = self.client.post(
@@ -228,6 +272,7 @@ class AuthenticationApiTests(TestCase):
         self.assertEqual(response["Content-Type"].split(";")[0], "application/vnd.oai.openapi+json")
         self.assertIn("openapi", response.json())
         self.assertIn("/api/v1/auth/login/", response.json()["paths"])
+        self.assertIn("/api/v1/auth/csrf/", response.json()["paths"])
 
     def test_swagger_ui_endpoint_is_reachable(self):
         response = self.client.get("/api/docs/")

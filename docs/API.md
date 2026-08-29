@@ -13,12 +13,14 @@ Current base path and versioning convention:
 - Machine-readable OpenAPI schema: `/api/schema/`
 - Swagger UI: `/api/docs/`
 - ReDoc: `/api/redoc/`
+- CSRF bootstrap endpoint: `/api/v1/auth/csrf/`
 
 Local development URLs when running `manage.py runserver` on the default port:
 
 - Swagger UI: `http://127.0.0.1:8000/api/docs/`
 - ReDoc: `http://127.0.0.1:8000/api/redoc/`
 - OpenAPI schema: `http://127.0.0.1:8000/api/schema/`
+- CSRF bootstrap endpoint: `http://127.0.0.1:8000/api/v1/auth/csrf/`
 - Login endpoint: `http://127.0.0.1:8000/api/v1/auth/login/`
 - Logout endpoint: `http://127.0.0.1:8000/api/v1/auth/logout/`
 - Me endpoint: `http://127.0.0.1:8000/api/v1/auth/me/`
@@ -28,6 +30,7 @@ Environment-relative URL patterns:
 - Swagger UI: `{BASE_URL}/api/docs/`
 - ReDoc: `{BASE_URL}/api/redoc/`
 - OpenAPI schema: `{BASE_URL}/api/schema/`
+- CSRF bootstrap endpoint: `{BASE_URL}/api/v1/auth/csrf/`
 - Login endpoint: `{BASE_URL}/api/v1/auth/login/`
 - Logout endpoint: `{BASE_URL}/api/v1/auth/logout/`
 - Me endpoint: `{BASE_URL}/api/v1/auth/me/`
@@ -40,6 +43,7 @@ Deployment note:
 
 Currently implemented Elevate endpoints:
 
+- `GET /api/v1/auth/csrf/`
 - `POST /api/v1/auth/login/`
 - `POST /api/v1/auth/logout/`
 - `GET /api/v1/auth/me/`
@@ -71,6 +75,7 @@ Current behavior:
 ## Content Type Expectations
 Current implementation is serializer-based and expects request bodies appropriate for DRF parsing.
 
+- `GET /api/v1/auth/csrf/`: no request body
 - `POST /api/v1/auth/login/`: JSON body with `email` and `password`
 - `POST /api/v1/auth/logout/`: no request fields are required
 - `GET /api/v1/auth/me/`: no request body
@@ -81,8 +86,48 @@ The test suite exercises JSON requests for the auth endpoints.
 Current behavior:
 
 - Django `CsrfViewMiddleware` is enabled globally.
+- `GET /api/v1/auth/csrf/` is the bootstrap endpoint that causes Django to issue the `csrftoken` cookie.
 - `LoginView` and `LogoutView` are explicitly wrapped with `csrf_protect`.
 - Because the API uses cookie/session authentication, state-changing requests should include a valid CSRF token.
+
+Current bootstrap flow:
+
+1. `GET /api/v1/auth/csrf/`
+2. Django returns `200 OK` and sets the `csrftoken` cookie
+3. The client reads that cookie value
+4. The client sends `X-CSRFToken: <token>` on unsafe requests such as login and logout
+
+## Endpoint: `GET /api/v1/auth/csrf/`
+Purpose:
+- Bootstrap Django CSRF protection for cookie and session-based clients.
+
+Authentication:
+- Public endpoint
+
+Request parameters:
+- None
+
+Successful response:
+- Status: `200 OK`
+
+Example response:
+```json
+{
+  "detail": "CSRF cookie set."
+}
+```
+
+Cookie behavior:
+
+- Sets the Django `csrftoken` cookie using normal Django CSRF machinery
+- Does not create an authenticated session
+- Does not authenticate the caller
+
+Security behavior:
+
+- Intended to be called before unsafe requests like login and logout
+- Clients should send the cookie value back in the `X-CSRFToken` header
+- Does not weaken existing CSRF enforcement
 
 The repository currently documents server behavior, not a browser integration flow. No CSRF-bypass behavior is implemented.
 
@@ -105,6 +150,9 @@ Purpose:
 
 Authentication:
 - Public endpoint
+
+CSRF:
+- Requires a valid Django CSRF token on real cookie-based client flows
 
 Request body:
 
@@ -160,6 +208,9 @@ Purpose:
 
 Authentication:
 - Authenticated session required
+
+CSRF:
+- Requires a valid Django CSRF token
 
 Request body:
 - No fields required

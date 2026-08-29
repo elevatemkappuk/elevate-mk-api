@@ -53,3 +53,7 @@ class AuthErrorSerializer(serializers.Serializer):
         child=serializers.CharField(),
         help_text="Generic authentication or validation error messages.",
     )
+
+
+class DetailSerializer(serializers.Serializer):
+    detail = serializers.CharField()
