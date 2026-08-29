@@ -8,6 +8,7 @@ from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from accounts.models import User
+from people.models import Person
 from staff_access.admin import StaffRoleAdmin, StaffRoleAssignmentAdmin
 from staff_access.models import StaffRole, StaffRoleAssignment
 
@@ -100,6 +101,20 @@ class StaffRoleAssignmentModelTests(TestCase):
         StaffRoleAssignment.objects.assign_role(user=self.user, role=self.viewer_role)
         self.assertFalse(StaffRoleAssignment.objects.active().exists())
 
+    def test_active_staff_role_assignment_still_works_for_technical_person_user(self):
+        technical_user = User.objects.create_user(
+            email="technical@example.com",
+            password="testpass123",
+            person_first_name="Technical",
+            person_last_name="User",
+            person_record_type=Person.RecordType.TECHNICAL,
+        )
+
+        assignment = StaffRoleAssignment.objects.assign_role(user=technical_user, role=self.admin_role)
+
+        self.assertEqual(assignment.user.person.record_type, Person.RecordType.TECHNICAL)
+        self.assertTrue(StaffRoleAssignment.objects.active().filter(pk=assignment.pk).exists())
+
 
 @override_settings(ROOT_URLCONF="staff_access.test_urls")
 class StaffPermissionTests(TestCase):
@@ -134,6 +149,19 @@ class StaffPermissionTests(TestCase):
         StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.manager_role)
         self.client.force_authenticate(user=self.staff_user)
         response = self.client.get("/test-permissions/manager-or-admin/")
+        self.assertEqual(response.status_code, 200)
+
+    def test_technical_person_user_with_active_staff_role_is_allowed(self):
+        technical_user = User.objects.create_user(
+            email="technical-staff@example.com",
+            password="testpass123",
+            person_first_name="Technical",
+            person_last_name="Staff",
+            person_record_type=Person.RecordType.TECHNICAL,
+        )
+        StaffRoleAssignment.objects.assign_role(user=technical_user, role=self.admin_role)
+        self.client.force_authenticate(user=technical_user)
+        response = self.client.get("/test-permissions/admin-only/")
         self.assertEqual(response.status_code, 200)
 
     def test_revoked_role_receives_403(self):

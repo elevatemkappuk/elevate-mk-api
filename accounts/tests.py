@@ -9,6 +9,7 @@ from django.conf import settings
 from rest_framework.test import APIClient
 
 from accounts.models import User
+from people.models import Person
 from staff_access.models import StaffRole, StaffRoleAssignment
 
 
@@ -24,6 +25,7 @@ class UserModelTests(TestCase):
         self.assertIsNotNone(user.person_id)
         self.assertEqual(user.person.first_name, "Casey")
         self.assertEqual(user.person.last_name, "Morgan")
+        self.assertEqual(user.person.record_type, Person.RecordType.BUSINESS)
         self.assertEqual(User.objects.count(), 1)
 
     def test_email_is_the_username_field(self):
@@ -70,6 +72,7 @@ class UserModelTests(TestCase):
         self.assertIsNotNone(user.person_id)
         self.assertEqual(user.person.first_name, "Admin")
         self.assertEqual(user.person.primary_email, "admin@example.com")
+        self.assertEqual(user.person.record_type, Person.RecordType.TECHNICAL)
 
     def test_user_names_are_sourced_from_person(self):
         user = User.objects.create_user(
@@ -107,6 +110,7 @@ class UserModelTests(TestCase):
         self.assertEqual(user.person.first_name, "Cli")
         self.assertEqual(user.person.last_name, "Admin")
         self.assertEqual(user.person.primary_email, "cliadmin@example.com")
+        self.assertEqual(user.person.record_type, Person.RecordType.TECHNICAL)
 
 
 @override_settings(ROOT_URLCONF="config.urls")
@@ -239,6 +243,26 @@ class AuthenticationApiTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data["detail"][0], "Invalid email or password.")
+
+    def test_user_linked_to_technical_person_can_still_authenticate(self):
+        technical_user = User.objects.create_user(
+            email="technical@example.com",
+            password=self.password,
+            person_first_name="Technical",
+            person_last_name="User",
+            person_record_type=Person.RecordType.TECHNICAL,
+        )
+
+        response = self.client.post(
+            self.login_url,
+            {"email": "technical@example.com", "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["id"], technical_user.id)
+        self.assertEqual(response.data["person"]["id"], technical_user.person_id)
+        self.assertEqual(response.data["staff_roles"], [])
 
     def test_authenticated_me_returns_user_and_person(self):
         self.client.post(

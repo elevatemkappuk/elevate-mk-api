@@ -23,6 +23,7 @@ class UserManager(DjangoUserManager):
         person_first_name = extra_fields.pop("person_first_name", None)
         person_last_name = extra_fields.pop("person_last_name", None)
         person_primary_email = extra_fields.pop("person_primary_email", None)
+        person_record_type = extra_fields.pop("person_record_type", Person.RecordType.BUSINESS)
         if person_primary_email:
             person_primary_email = normalize_email_address(person_primary_email)
 
@@ -32,6 +33,7 @@ class UserManager(DjangoUserManager):
             person_kwargs = {
                 "first_name": person_first_name,
                 "last_name": person_last_name,
+                "record_type": person_record_type,
             }
             if person_primary_email:
                 person_kwargs["primary_email"] = person_primary_email
@@ -53,6 +55,7 @@ class UserManager(DjangoUserManager):
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", True)
         extra_fields.setdefault("person_primary_email", normalize_email_address(email))
+        extra_fields.setdefault("person_record_type", Person.RecordType.TECHNICAL)
 
         if extra_fields.get("is_staff") is not True:
             raise ValueError("Superuser must have is_staff=True.")

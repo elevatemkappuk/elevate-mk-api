@@ -26,6 +26,7 @@ Current rules:
 Information deliberately stored on `Person` instead of `User`:
 
 - Human name: `first_name`, `last_name`
+- Person record classification: `record_type`
 - Person contact/profile details: `primary_email`, `mobile`, `location`
 - Person demographic/profile placeholders: `age_range`, `gender`
 - Person lifecycle metadata: `archived_at`, `created_at`, `updated_at`
@@ -96,6 +97,7 @@ Purpose:
 | Field | Type | Null / Blank | Default / Automatic | Notes |
 | --- | --- | --- | --- | --- |
 | `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
+| `record_type` | `CharField(max_length=20)` | not null, `blank=False` | `BUSINESS` | Classification of business-domain versus technical/bootstrap identity |
 | `first_name` | `CharField(max_length=150)` | not null, `blank=False` | none | Required |
 | `last_name` | `CharField(max_length=150)` | not null, `blank=False` | none | Required |
 | `primary_email` | `EmailField` | `null=True`, `blank=True` | none | Optional, not unique |
@@ -111,6 +113,9 @@ Purpose:
 Current implementation:
 
 - Default primary key on `id`
+- `record_type` choices:
+  - `BUSINESS`
+  - `TECHNICAL`
 - No unique constraints beyond the primary key
 - Default model ordering is `last_name`, `first_name`, `id`
 - `__str__()` returns `"first_name last_name"`
@@ -125,12 +130,22 @@ Currently implemented rules:
 
 - A person can exist without any linked authentication account.
 - A person name is authoritative for display/name identity.
+- `record_type=BUSINESS` is the default for newly created people.
+- `record_type=TECHNICAL` is available for bootstrap or technical identities that still need a `Person`.
+- `record_type` and `archived_at` are independent.
+- `record_type` does not determine whether a person has a `User`, future `Membership`, or `StaffRoleAssignment`.
 - No hard-delete behavior is implemented at the application level.
 - Archiving is represented only by the optional `archived_at` field. No automatic archive workflow exists.
 
 Planned, not yet implemented:
 
 - Richer profile, membership, staff-role, interests, skills, tagging, notes, event, and engagement structures
+
+Future People-view filtering rules:
+
+- Normal People: `record_type = BUSINESS` and `archived_at IS NULL`
+- Archived People: `record_type = BUSINESS` and `archived_at IS NOT NULL`
+- `TECHNICAL` people are excluded from both normal and archived CRM People views
 
 ## Model: `accounts.User`
 Database table: `accounts_user`
@@ -189,6 +204,7 @@ Current `accounts.UserManager` behavior:
   - `is_staff=True`
   - `is_superuser=True`
   - `person_primary_email` defaults to the normalized auth email
+  - newly auto-created linked people default to `record_type=TECHNICAL`
 - Natural-key lookup is normalized by email, so authentication and createsuperuser duplicate checks use normalized email
 
 ### Domain Rules
@@ -199,6 +215,7 @@ Currently implemented rules:
 - User email is normalized to lowercase before storage.
 - Email uniqueness is enforced on the normalized stored value.
 - Human names are not duplicated onto `User`; `Person` remains authoritative.
+- `Person.record_type` does not control whether the linked user can authenticate.
 
 Planned, not yet implemented:
 

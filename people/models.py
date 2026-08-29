@@ -2,6 +2,15 @@ from django.db import models
 
 
 class Person(models.Model):
+    class RecordType(models.TextChoices):
+        BUSINESS = "BUSINESS", "Business"
+        TECHNICAL = "TECHNICAL", "Technical"
+
+    record_type = models.CharField(
+        max_length=20,
+        choices=RecordType.choices,
+        default=RecordType.BUSINESS,
+    )
     first_name = models.CharField(max_length=150)
     last_name = models.CharField(max_length=150)
     primary_email = models.EmailField(blank=True, null=True)

@@ -15,6 +15,7 @@ Authentication and staff authorization are separate concerns:
 Current backend rule:
 
 - staff authorization is evaluated from active `StaffRoleAssignment` rows whose linked `StaffRole` is also active
+- `Person.record_type` does not determine staff authorization
 
 ## Canonical V1 Roles
 Currently implemented canonical roles:
@@ -81,6 +82,13 @@ Current rule:
 - backend role evaluation is authoritative
 
 Client-provided role claims are not part of the current architecture.
+
+## Authorization and Person Classification
+Current clarification:
+
+- CRM role assignment does not determine `Person.record_type`
+- a `CRM_ADMIN` user can be linked to either a `BUSINESS` or `TECHNICAL` person
+- staff access remains evaluated from active `StaffRoleAssignment` data rather than person classification
 
 ## Currently Implemented vs Planned
 Currently implemented:

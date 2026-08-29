@@ -68,6 +68,8 @@ Current product direction recorded in the codebase:
 
 - Elevate applications are intended to maintain independent login sessions at this stage
 - shared-login SSO is not currently implemented
+- some bootstrap or technical human accounts may still require a linked `Person`, and those can use `record_type=TECHNICAL`
+- `Person.record_type` does not control authentication; active and valid linked users can still authenticate
 
 ## Session Isolation Strategy
 Architectural decision:
