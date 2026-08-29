@@ -182,7 +182,8 @@ Example response:
     "first_name": "Member",
     "last_name": "Example",
     "primary_email": null
-  }
+  },
+  "staff_roles": []
 }
 ```
 
@@ -266,6 +267,7 @@ Returned fields:
 - Linked person `first_name`
 - Linked person `last_name`
 - Linked person `primary_email`
+- active staff role codes in deterministic order as `staff_roles`
 
 Fields not returned:
 
@@ -273,6 +275,7 @@ Fields not returned:
 - Django `is_staff`
 - Django `is_superuser`
 - any Elevate staff-role or CRM authorization data
+- except for `staff_roles`, which intentionally exposes active operational role codes for the authenticated user
 
 Error responses:
 
@@ -283,7 +286,13 @@ Error responses:
 Security behavior:
 
 - Reads `request.user` from the authenticated Django session.
-- Exposes only a concise account/person summary.
+- Exposes only a concise account/person summary plus active staff role codes.
+
+Staff authorization note:
+
+- authenticated non-staff users still receive `200 OK`
+- their `staff_roles` value is an empty list
+- no Staff CRUD endpoints are currently implemented
 
 ## Planned API Areas
 Planned, not yet implemented:

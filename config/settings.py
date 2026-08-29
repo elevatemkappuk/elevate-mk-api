@@ -40,6 +40,7 @@ ALLOWED_HOSTS = []
 INSTALLED_APPS = [
     'people',
     'accounts',
+    'staff_access',
     'rest_framework',
     'drf_spectacular',
     'django.contrib.admin',

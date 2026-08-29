@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 from accounts.serializers import (
     AuthenticatedUserSerializer,
     AuthErrorSerializer,
+    CurrentUserSerializer,
     DetailSerializer,
     LoginSerializer,
 )
@@ -108,13 +109,13 @@ class MeView(APIView):
         summary="Get the current authenticated user",
         description=(
             "Returns the concise authenticated account summary for the current Django "
-            "session, including the linked Person record."
+            "session, including the linked Person record and active operational staff role codes."
         ),
         responses={
-            200: AuthenticatedUserSerializer,
+            200: CurrentUserSerializer,
             401: OpenApiResponse(description="Authentication credentials were not provided."),
         },
         tags=["Authentication"],
     )
     def get(self, request):
-        return Response(AuthenticatedUserSerializer(request.user).data, status=status.HTTP_200_OK)
+        return Response(CurrentUserSerializer(request.user).data, status=status.HTTP_200_OK)

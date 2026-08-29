@@ -146,7 +146,7 @@ Django middleware
 DRF session authentication
   -> attach authenticated request.user
 View
-  -> return current user/person summary
+  -> return current user/person summary plus active staff role codes
 ```
 
 ## Logout and Session Invalidation
@@ -231,6 +231,13 @@ Why the distinction matters:
 
 - authentication answers who the user is
 - authorization answers what the user is allowed to do in the application
+
+Current `/api/v1/auth/me/` behavior:
+
+- remains an identity/authentication endpoint for any authenticated user
+- includes `staff_roles` so the client can see the authenticated user's active operational staff role codes
+- does not become a staff-only endpoint
+- does not use Django `is_staff` or `is_superuser` as Elevate operational authorization
 
 ## Planned Authorization
 Planned, not yet implemented:

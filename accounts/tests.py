@@ -8,6 +8,7 @@ from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from accounts.models import User
+from staff_access.models import StaffRole, StaffRoleAssignment
 
 
 class UserModelTests(TestCase):
@@ -123,6 +124,9 @@ class AuthenticationApiTests(TestCase):
         self.login_url = "/api/v1/auth/login/"
         self.logout_url = "/api/v1/auth/logout/"
         self.me_url = "/api/v1/auth/me/"
+        self.admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
+        self.manager_role = StaffRole.objects.get(code=StaffRole.CRM_MANAGER)
+        self.viewer_role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
 
     def test_csrf_bootstrap_returns_200(self):
         response = self.client.get(self.csrf_url)
@@ -234,7 +238,64 @@ class AuthenticationApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["id"], self.user.id)
         self.assertEqual(response.data["person"]["first_name"], "Member")
+        self.assertEqual(response.data["staff_roles"], [])
         self.assertNotIn("password", response.data)
+
+    def test_staff_user_receives_active_role_codes_in_me(self):
+        StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role)
+        self.client.post(
+            self.login_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+
+        response = self.client.get(self.me_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["staff_roles"], [StaffRole.CRM_ADMIN])
+
+    def test_multiple_active_roles_are_returned_deterministically(self):
+        StaffRoleAssignment.objects.assign_role(user=self.user, role=self.manager_role)
+        StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role)
+        self.client.post(
+            self.login_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+
+        response = self.client.get(self.me_url)
+
+        self.assertEqual(
+            response.data["staff_roles"],
+            [StaffRole.CRM_ADMIN, StaffRole.CRM_MANAGER],
+        )
+
+    def test_revoked_roles_are_excluded_from_me(self):
+        assignment = StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role)
+        assignment.revoke()
+        self.client.post(
+            self.login_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+
+        response = self.client.get(self.me_url)
+
+        self.assertEqual(response.data["staff_roles"], [])
+
+    def test_inactive_staff_roles_are_excluded_from_me(self):
+        self.viewer_role.is_active = False
+        self.viewer_role.save(update_fields=["is_active"])
+        StaffRoleAssignment.objects.assign_role(user=self.user, role=self.viewer_role)
+        self.client.post(
+            self.login_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+
+        response = self.client.get(self.me_url)
+
+        self.assertEqual(response.data["staff_roles"], [])
 
     def test_anonymous_me_returns_401(self):
         response = self.client.get(self.me_url)
@@ -273,6 +334,8 @@ class AuthenticationApiTests(TestCase):
         self.assertIn("openapi", response.json())
         self.assertIn("/api/v1/auth/login/", response.json()["paths"])
         self.assertIn("/api/v1/auth/csrf/", response.json()["paths"])
+        me_schema = response.json()["components"]["schemas"]["CurrentUser"]
+        self.assertIn("staff_roles", me_schema["properties"])
 
     def test_swagger_ui_endpoint_is_reachable(self):
         response = self.client.get("/api/docs/")

@@ -10,6 +10,8 @@ The current Elevate-owned models are:
 
 - `people.Person`
 - `accounts.User`
+- `staff_access.StaffRole`
+- `staff_access.StaffRoleAssignment`
 
 Django-managed framework tables also exist because this project uses Django authentication, permissions, content types, admin, and server-side sessions. Those framework tables are not documented field-by-field here.
 
@@ -50,8 +52,38 @@ Information deliberately stored on `User`:
 | gender            |                                  | date_joined        |
 | archived_at       |                                  | person_id (O2O)    |
 | created_at        |                                  +--------------------+
-| updated_at        |
-+-------------------+
+| updated_at        |                                           |
++-------------------+                                           | 1
+                                                                |
+                                                                | 0..*
+                                             +----------------------------------+
+                                             | staff_access_staffroleassignment |
+                                             +----------------------------------+
+                                             | id (PK)                          |
+                                             | user_id (FK)                     |
+                                             | role_id (FK)                     |
+                                             | is_active                        |
+                                             | assigned_at                      |
+                                             | assigned_by_id (FK, null)        |
+                                             | revoked_at (null)                |
+                                             | revoked_by_id (FK, null)         |
+                                             | created_at                       |
+                                             | updated_at                       |
+                                             +----------------------------------+
+                                                           |
+                                                           | 0..*
+                                                           |
+                                                           | 1
+                                             +--------------------------+
+                                             | staff_access_staffrole   |
+                                             +--------------------------+
+                                             | id (PK)                  |
+                                             | code (unique)            |
+                                             | name                     |
+                                             | is_active                |
+                                             | created_at               |
+                                             | updated_at               |
+                                             +--------------------------+
 ```
 
 ## Model: `people.Person`
@@ -170,7 +202,94 @@ Currently implemented rules:
 
 Planned, not yet implemented:
 
-- Elevate-specific operational authorization such as staff CRM roles and assignments
+- broader Elevate operational authorization beyond the current staff role foundation
+
+## Model: `staff_access.StaffRole`
+Database table: `staff_access_staffrole`
+
+Purpose:
+- Stores canonical operational staff role definitions for backend authorization.
+
+### Fields
+| Field | Type | Null / Blank | Default / Automatic | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
+| `code` | `CharField(max_length=100, unique=True)` | not null, `blank=False` | none | Stable machine-readable authorization identifier |
+| `name` | `CharField(max_length=255)` | not null, `blank=False` | none | Human-readable role name |
+| `is_active` | `BooleanField` | not null | `True` | Inactive roles are excluded from active authorization evaluation |
+| `created_at` | `DateTimeField` | not null | `auto_now_add=True` | Set automatically on create |
+| `updated_at` | `DateTimeField` | not null | `auto_now=True` | Updated automatically on save |
+
+### Constraints and Behavior
+Current implementation:
+
+- `code` is unique
+- default ordering is by `code`
+- canonical roles are seeded deterministically by migration:
+  - `CRM_ADMIN`
+  - `CRM_MANAGER`
+  - `CRM_VIEWER`
+
+### Relationships
+| Related Model | Relationship | Direction | on_delete | Notes |
+| --- | --- | --- | --- | --- |
+| `staff_access.StaffRoleAssignment` | foreign key target | reverse relation `role.assignments` | `PROTECT` on the assignment side | Role deletion is blocked while referenced |
+
+### Domain Rules
+Currently implemented rules:
+
+- `code` is the stable backend authorization identifier
+- role activity is part of access evaluation
+- Django Groups are not the primary Elevate operational role model
+
+## Model: `staff_access.StaffRoleAssignment`
+Database table: `staff_access_staffroleassignment`
+
+Purpose:
+- Grants canonical staff roles to specific authenticated users.
+
+### Fields
+| Field | Type | Null / Blank | Default / Automatic | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
+| `user` | `ForeignKey(accounts.User)` | not null, `blank=False` | none | Subject account receiving the role |
+| `role` | `ForeignKey(staff_access.StaffRole)` | not null, `blank=False` | none | Assigned canonical role |
+| `is_active` | `BooleanField` | not null | `True` | Inactive assignment is excluded from authorization |
+| `assigned_at` | `DateTimeField` | not null | `timezone.now` | Assignment timestamp |
+| `assigned_by` | `ForeignKey(accounts.User)` | `null=True`, `blank=True` | none | Audit field for actor who assigned; nullable for bootstrap/system |
+| `revoked_at` | `DateTimeField` | `null=True`, `blank=True` | none | Set when assignment is revoked |
+| `revoked_by` | `ForeignKey(accounts.User)` | `null=True`, `blank=True` | none | Audit field for actor who revoked |
+| `created_at` | `DateTimeField` | not null | `auto_now_add=True` | Set automatically on create |
+| `updated_at` | `DateTimeField` | not null | `auto_now=True` | Updated automatically on save |
+
+### Constraints and Behavior
+Current implementation:
+
+- unique constraint on `user` + `role`
+- default ordering is `user_id`, `role__code`, `id`
+- active authorization evaluation requires:
+  - `is_active=True`
+  - `revoked_at IS NULL`
+  - `role.is_active=True`
+
+### Relationships
+| Related Model | Relationship | Direction | on_delete | Notes |
+| --- | --- | --- | --- | --- |
+| `accounts.User` | `ForeignKey` | forward relation `assignment.user` | `PROTECT` | Subject user deletion is blocked while assignments exist |
+| `staff_access.StaffRole` | `ForeignKey` | forward relation `assignment.role` | `PROTECT` | Role deletion is blocked while assignments exist |
+| `accounts.User` | `ForeignKey` | forward relation `assignment.assigned_by` | `SET_NULL` | Audit field may be null for bootstrap/system or if actor user is removed |
+| `accounts.User` | `ForeignKey` | forward relation `assignment.revoked_by` | `SET_NULL` | Audit field may be null if actor user is removed |
+
+### Lifecycle Rules
+Currently implemented rules:
+
+- normal lifecycle uses revocation rather than hard-delete behavior
+- `revoke()` sets `is_active=False`, records `revoked_at`, and optionally records `revoked_by`
+- manager method `assign_role(...)` reuses an existing user-role row when reactivating
+- reactivation clears revocation state and restores `is_active=True`
+- assignments belong to `User`, not `Person`
+- a user may hold multiple different roles
+- duplicate rows for the same `user` + `role` pair are prevented
 
 ## Django-Managed Framework Tables
 Current project features imply framework-managed tables such as:
