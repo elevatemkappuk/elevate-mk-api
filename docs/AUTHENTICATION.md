@@ -124,8 +124,35 @@ Current implementation relies on Django's normal session framework:
 - authenticated state is represented server-side
 - the client sends the session cookie on later requests
 - Django loads the session before view code runs
+- `sessionid` remains HttpOnly and browser-managed
+- the frontend must not read or manually manage `sessionid`
+- the CSRF bootstrap flow relies on `csrftoken` remaining JavaScript-readable so the frontend can send `X-CSRFToken`
 
 This repository does not currently introduce a custom cookie format or token layer on top of Django sessions.
+
+## Local Browser Development
+Current local development assumption:
+
+- Angular Staff CRM origin: `http://localhost:4200`
+- Django API origin: `http://localhost:8000`
+
+Current local browser configuration:
+
+- CORS allows exactly `http://localhost:4200`
+- credentialed cross-origin requests are enabled
+- `CSRF_TRUSTED_ORIGINS` includes `http://localhost:4200`
+- the frontend should call `GET /api/v1/auth/csrf/` first, then send the `csrftoken` value back in `X-CSRFToken`
+- `sessionid` remains HttpOnly/browser-managed and is not exposed to JavaScript
+
+Important development rule:
+
+- do not mix `localhost` and `127.0.0.1` across frontend and backend URLs during a session-authenticated browser flow
+
+Why that matters:
+
+- CORS origin matching is exact
+- CSRF trusted-origin matching is exact
+- cookies and browser-origin behavior become harder to reason about if one side uses `localhost` and the other uses `127.0.0.1`
 
 ## How Authenticated Requests Become `request.user`
 Current request path:

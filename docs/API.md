@@ -17,13 +17,13 @@ Current base path and versioning convention:
 
 Local development URLs when running `manage.py runserver` on the default port:
 
-- Swagger UI: `http://127.0.0.1:8000/api/docs/`
-- ReDoc: `http://127.0.0.1:8000/api/redoc/`
-- OpenAPI schema: `http://127.0.0.1:8000/api/schema/`
-- CSRF bootstrap endpoint: `http://127.0.0.1:8000/api/v1/auth/csrf/`
-- Login endpoint: `http://127.0.0.1:8000/api/v1/auth/login/`
-- Logout endpoint: `http://127.0.0.1:8000/api/v1/auth/logout/`
-- Me endpoint: `http://127.0.0.1:8000/api/v1/auth/me/`
+- Swagger UI: `http://localhost:8000/api/docs/`
+- ReDoc: `http://localhost:8000/api/redoc/`
+- OpenAPI schema: `http://localhost:8000/api/schema/`
+- CSRF bootstrap endpoint: `http://localhost:8000/api/v1/auth/csrf/`
+- Login endpoint: `http://localhost:8000/api/v1/auth/login/`
+- Logout endpoint: `http://localhost:8000/api/v1/auth/logout/`
+- Me endpoint: `http://localhost:8000/api/v1/auth/me/`
 
 Environment-relative URL patterns:
 
@@ -96,6 +96,17 @@ Current bootstrap flow:
 2. Django returns `200 OK` and sets the `csrftoken` cookie
 3. The client reads that cookie value
 4. The client sends `X-CSRFToken: <token>` on unsafe requests such as login and logout
+
+Current local browser-development expectation:
+
+- Angular runs at `http://localhost:4200`
+- Django runs at `http://localhost:8000`
+- Django CORS allows exactly `http://localhost:4200`
+- Django allows credentialed cross-origin requests for that origin
+- Django trusts `http://localhost:4200` as a CSRF origin
+- `sessionid` stays HttpOnly/browser-managed
+- `csrftoken` is readable by JavaScript so the frontend can construct `X-CSRFToken`
+- do not mix `localhost` and `127.0.0.1` in this flow because origin matching is exact
 
 ## Endpoint: `GET /api/v1/auth/csrf/`
 Purpose:

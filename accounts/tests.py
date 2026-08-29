@@ -5,6 +5,7 @@ from unittest import mock
 from django.core.management import call_command, get_commands
 from django.db import IntegrityError
 from django.test import TestCase, override_settings
+from django.conf import settings
 from rest_framework.test import APIClient
 
 from accounts.models import User
@@ -357,3 +358,41 @@ class AuthenticationApiTests(TestCase):
         output = stdout.getvalue()
         self.assertIn("openapi: 3.0.3", output)
         self.assertIn("/api/v1/auth/login/", output)
+
+
+@override_settings(ROOT_URLCONF="config.urls")
+class LocalBrowserDevelopmentConfigurationTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.login_url = "/api/v1/auth/login/"
+
+    def test_angular_localhost_origin_is_permitted_by_cors(self):
+        response = self.client.options(
+            self.login_url,
+            HTTP_ORIGIN="http://localhost:4200",
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST",
+            HTTP_ACCESS_CONTROL_REQUEST_HEADERS="content-type,x-csrftoken",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Access-Control-Allow-Origin"], "http://localhost:4200")
+        self.assertEqual(response["Access-Control-Allow-Credentials"], "true")
+
+    def test_unrelated_origin_is_not_permitted_by_cors(self):
+        response = self.client.options(
+            self.login_url,
+            HTTP_ORIGIN="http://malicious.example",
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST",
+            HTTP_ACCESS_CONTROL_REQUEST_HEADERS="content-type,x-csrftoken",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("Access-Control-Allow-Origin", response)
+        self.assertNotIn("Access-Control-Allow-Credentials", response)
+
+    def test_local_csrf_and_cookie_settings_match_browser_contract(self):
+        self.assertEqual(settings.CORS_ALLOWED_ORIGINS, ["http://localhost:4200"])
+        self.assertTrue(settings.CORS_ALLOW_CREDENTIALS)
+        self.assertEqual(settings.CSRF_TRUSTED_ORIGINS, ["http://localhost:4200"])
+        self.assertTrue(settings.SESSION_COOKIE_HTTPONLY)
+        self.assertFalse(settings.CSRF_COOKIE_HTTPONLY)
