@@ -58,6 +58,7 @@ Currently implemented Elevate endpoints:
 - `GET /api/v1/people/`
 - `GET /api/v1/people/{person_id}/`
 - `GET /api/v1/people/{person_id}/membership/`
+- `POST /api/v1/people/{person_id}/membership/`
 - `GET /api/v1/people/{person_id}/overview/`
 
 No other Elevate API endpoints are currently implemented.
@@ -100,6 +101,7 @@ Current implementation is serializer-based and expects request bodies appropriat
 - `GET /api/v1/people/`: query parameters only
 - `GET /api/v1/people/{person_id}/`: path parameter only
 - `GET /api/v1/people/{person_id}/membership/`: path parameter only
+- `POST /api/v1/people/{person_id}/membership/`: path parameter plus JSON body
 - `GET /api/v1/people/{person_id}/overview/`: path parameter only
 
 The test suite exercises JSON requests for the auth endpoints.
@@ -543,6 +545,88 @@ Example response:
   "updated_at": "2026-08-30T11:00:00Z"
 }
 ```
+
+## Endpoint: `POST /api/v1/people/{person_id}/membership/`
+Purpose:
+- Execute the explicit business action `Make Member` for an existing CRM-visible `BUSINESS` Person.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN` or `CRM_MANAGER` required
+- `CRM_VIEWER` is read-only and receives `403 Forbidden`
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+People visibility and lifecycle rule:
+
+- The command operates only on CRM-visible `BUSINESS` Persons
+- Active `BUSINESS` people are eligible
+- Archived `BUSINESS` people are rejected with `409 Conflict`
+- `TECHNICAL` Person records are never returned and still resolve to `404 Not Found`
+- A missing Person ID also returns `404 Not Found`
+
+Request body:
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `joined_at` | date (`YYYY-MM-DD`) | yes | Historical membership join date; no backend default |
+| `membership_source` | string | yes | One of `WEBSITE_FORM`, `STAFF`, `COMMUNITY_PLATFORM`, `OTHER` |
+
+Backend-controlled fields:
+
+- `status` is always created as `ACTIVE`
+- `ended_at` is always created as `null`
+- `person` is always derived from the route
+
+Client must not supply:
+
+- `status`
+- `ended_at`
+- `person`
+- `id`
+- `created_at`
+- `updated_at`
+
+Successful response:
+
+- Status: `201 Created`
+- Response body uses the standard Membership read representation
+
+Example request:
+```json
+{
+  "joined_at": "2024-04-12",
+  "membership_source": "STAFF"
+}
+```
+
+Example response:
+```json
+{
+  "id": 9,
+  "status": "ACTIVE",
+  "joined_at": "2024-04-12",
+  "ended_at": null,
+  "membership_source": "STAFF",
+  "created_at": "2026-08-30T12:00:00Z",
+  "updated_at": "2026-08-30T12:00:00Z"
+}
+```
+
+Conflict behavior:
+
+- If the person already has an `ACTIVE` Membership, the request returns `409 Conflict`
+- If the person already has a `FORMER` Membership, the request also returns `409 Conflict`
+- The endpoint does not reactivate or overwrite existing memberships
+- Rejoining is deferred because the current V1 model cannot preserve multiple membership periods safely
+
+Validation behavior:
+
+- `joined_at` is required
+- `membership_source` is required
+- invalid dates return `400 Bad Request`
+- invalid source values return `400 Bad Request`
+- client-controlled lifecycle fields are rejected rather than silently accepted
 
 ## Endpoint: `GET /api/v1/people/{person_id}/overview/`
 Purpose:
