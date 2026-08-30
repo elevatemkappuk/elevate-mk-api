@@ -4,6 +4,7 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.test import TestCase, override_settings
 from django.utils import timezone
+from rest_framework import status
 from rest_framework.test import APIClient
 
 from accounts.models import User
@@ -482,6 +483,17 @@ class MakeMembershipApiTests(TestCase):
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(Membership.objects.filter(person=self.business_person).count(), 1)
+
+    def test_successful_post_does_not_raise_transaction_management_error(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_url(self.business_person.id),
+            data={"joined_at": "2024-08-30", "membership_source": "STAFF"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["status"], "ACTIVE")
 
     def test_business_person_without_membership_creates_membership_once(self):
         self.authenticate(self.admin_user)

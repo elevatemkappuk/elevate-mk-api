@@ -1,8 +1,7 @@
 from django.db import IntegrityError, transaction
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
-from rest_framework import generics, serializers, status
+from rest_framework import generics, status
 from rest_framework.exceptions import APIException, NotFound
-from rest_framework.exceptions import NotFound
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -152,16 +151,8 @@ class PersonMembershipView(generics.GenericAPIView):
         ],
     )
     def post(self, request, *args, **kwargs):
-        person = self.get_business_person_or_404(select_for_update=True)
-
-        if person.archived_at is not None:
-            raise MembershipConflict("Archived people cannot receive a new membership.")
-
         input_serializer = MakeMembershipSerializer(data=request.data)
         input_serializer.is_valid(raise_exception=True)
-
-        if Membership.objects.filter(person=person).exists():
-            raise MembershipConflict("This person already has a membership record.")
 
         try:
             with transaction.atomic():
