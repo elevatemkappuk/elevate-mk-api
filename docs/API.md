@@ -825,6 +825,120 @@ Example response:
 }
 ```
 
+## Endpoint: `POST /api/v1/people/{person_id}/professional-profile/`
+Purpose:
+- Create the one editable ProfessionalProfile resource for an active CRM-visible `BUSINESS` Person.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN` or `CRM_MANAGER` required
+- `CRM_VIEWER` is read-only and receives `403 Forbidden`
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+Write rules:
+
+- Only active `BUSINESS` Persons are writable
+- archived `BUSINESS` Persons return `409 Conflict`
+- `TECHNICAL` Person records are outside the CRM People domain and return `404 Not Found`
+- nonexistent Person IDs return `404 Not Found`
+- if a profile already exists for the Person, POST returns `409 Conflict`
+- all fields are optional; an empty body may create an empty current-state profile
+- no DELETE API exists
+
+Writable request fields:
+
+- `job_title`
+- `company`
+- `industry`
+- `career_stage`
+- `linkedin_url`
+
+Client must not supply:
+
+- `id`
+- `person`
+- `created_at`
+- `updated_at`
+
+Industry input:
+
+- use the canonical Industry `id`
+- `null` is allowed
+- explicitly supplied Industries must exist and be active
+- inactive Industries may remain on existing rows, but cannot be newly assigned
+
+Career stage input:
+
+- accepts only the stored codes:
+  - `STUDENT`
+  - `EARLY_CAREER`
+  - `MID_CAREER`
+  - `SENIOR`
+  - `LEADERSHIP`
+  - `FOUNDER_BUSINESS_OWNER`
+  - `OTHER`
+
+Example request:
+```json
+{
+  "job_title": "Software Engineer",
+  "company": "Example Ltd",
+  "industry": 25,
+  "career_stage": "MID_CAREER",
+  "linkedin_url": "https://www.linkedin.com/in/example"
+}
+```
+
+Successful response:
+
+- Status: `201 Created`
+- returns the standard ProfessionalProfile read representation with nested Industry
+
+## Endpoint: `PATCH /api/v1/people/{person_id}/professional-profile/`
+Purpose:
+- Partially update the existing ProfessionalProfile for an active CRM-visible `BUSINESS` Person.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN` or `CRM_MANAGER` required
+- `CRM_VIEWER` is read-only and receives `403 Forbidden`
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+Patch rules:
+
+- updates only the supplied fields
+- does not auto-create on PATCH
+- if no profile exists, PATCH returns `404 Not Found`
+- archived `BUSINESS` Persons return `409 Conflict`
+- `TECHNICAL` Person records return `404 Not Found`
+- nonexistent Person IDs return `404 Not Found`
+
+Clearing optional values:
+
+- `{"industry": null}` clears Industry
+- blank-capable text fields may be cleared with `""`
+- `career_stage` may be cleared with `null` or `""`
+
+Industry activity rule:
+
+- active-status validation is applied only when the request explicitly supplies a non-null Industry
+- an existing unchanged inactive Industry does not block unrelated PATCH updates
+
+Example request:
+```json
+{
+  "industry": null,
+  "career_stage": "LEADERSHIP"
+}
+```
+
+Successful response:
+
+- Status: `200 OK`
+- returns the standard ProfessionalProfile read representation with nested Industry
+
 ## Endpoint: `GET /api/v1/people/{person_id}/overview/`
 Purpose:
 - Return a read-only CRM projection optimized for the Person 360 screen.

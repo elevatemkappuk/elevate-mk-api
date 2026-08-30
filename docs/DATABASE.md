@@ -173,6 +173,8 @@ Current rules:
 - No ProfessionalProfile is auto-created when a `Person`, `User`, `Membership`, or staff assignment is created
 - Industry is controlled canonical data and referenced with `PROTECT`
 - Industry records should be deactivated rather than treated as disposable taxonomy values
+- new or changed Industry assignments must use an active Industry
+- an existing ProfessionalProfile may remain linked to an Industry that later becomes inactive
 
 ## Model: `professional_profiles.Industry`
 Database table: `professional_profiles_industry`
