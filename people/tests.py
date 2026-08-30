@@ -600,13 +600,13 @@ class PersonOverviewApiTests(TestCase):
             last_name="Operator",
             record_type=Person.RecordType.TECHNICAL,
         )
-        self.industry = Industry.objects.create(name="Technology", slug="technology")
+        self.industry = Industry.objects.get(slug="technology")
         self.active_profile = ProfessionalProfile.objects.create(
             person=self.active_member_person,
             job_title="Software Engineer",
             company="Example Ltd",
             industry=self.industry,
-            career_stage="Senior individual contributor",
+            career_stage=ProfessionalProfile.CareerStage.SENIOR,
             linkedin_url="https://www.linkedin.com/in/active-member",
         )
         self.archived_profile = ProfessionalProfile.objects.create(
@@ -710,11 +710,20 @@ class PersonOverviewApiTests(TestCase):
                     "name": "Technology",
                     "slug": "technology",
                 },
-                "career_stage": "Senior individual contributor",
+                "career_stage": ProfessionalProfile.CareerStage.SENIOR,
                 "linkedin_url": "https://www.linkedin.com/in/active-member",
                 "created_at": response.data["professional_profile"]["created_at"],
                 "updated_at": response.data["professional_profile"]["updated_at"],
             },
+        )
+
+    def test_professional_profile_api_contract_uses_stable_career_stage_code(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.active_member_person.id))
+
+        self.assertEqual(
+            response.data["professional_profile"]["career_stage"],
+            ProfessionalProfile.CareerStage.SENIOR,
         )
 
     def test_archived_business_person_still_returns_professional_profile(self):

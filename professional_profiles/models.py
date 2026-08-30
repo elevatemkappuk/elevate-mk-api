@@ -19,6 +19,15 @@ class Industry(models.Model):
 
 
 class ProfessionalProfile(models.Model):
+    class CareerStage(models.TextChoices):
+        STUDENT = "STUDENT", "Student"
+        EARLY_CAREER = "EARLY_CAREER", "Early Career"
+        MID_CAREER = "MID_CAREER", "Mid Career"
+        SENIOR = "SENIOR", "Senior"
+        LEADERSHIP = "LEADERSHIP", "Leadership"
+        FOUNDER_BUSINESS_OWNER = "FOUNDER_BUSINESS_OWNER", "Founder / Business Owner"
+        OTHER = "OTHER", "Other"
+
     person = models.OneToOneField(
         Person,
         on_delete=models.PROTECT,
@@ -33,8 +42,12 @@ class ProfessionalProfile(models.Model):
         blank=True,
         null=True,
     )
-    # Controlled career-stage taxonomy is intentionally deferred until values are confirmed.
-    career_stage = models.CharField(max_length=255, blank=True, null=True)
+    career_stage = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        choices=CareerStage.choices,
+    )
     linkedin_url = models.URLField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

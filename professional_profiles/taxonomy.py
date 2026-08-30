@@ -1,0 +1,43 @@
+CAREER_STAGE_CHOICES = (
+    ("STUDENT", "Student"),
+    ("EARLY_CAREER", "Early Career"),
+    ("MID_CAREER", "Mid Career"),
+    ("SENIOR", "Senior"),
+    ("LEADERSHIP", "Leadership"),
+    ("FOUNDER_BUSINESS_OWNER", "Founder / Business Owner"),
+    ("OTHER", "Other"),
+)
+
+
+CANONICAL_INDUSTRIES = (
+    {"name": "Accounting", "slug": "accounting", "display_order": 10},
+    {"name": "Advertising & Marketing", "slug": "advertising-marketing", "display_order": 20},
+    {"name": "Architecture & Design", "slug": "architecture-design", "display_order": 30},
+    {"name": "Arts & Creative", "slug": "arts-creative", "display_order": 40},
+    {"name": "Automotive", "slug": "automotive", "display_order": 50},
+    {"name": "Banking & Financial Services", "slug": "banking-financial-services", "display_order": 60},
+    {"name": "Construction", "slug": "construction", "display_order": 70},
+    {"name": "Consulting", "slug": "consulting", "display_order": 80},
+    {"name": "Education", "slug": "education", "display_order": 90},
+    {"name": "Energy & Utilities", "slug": "energy-utilities", "display_order": 100},
+    {"name": "Engineering", "slug": "engineering", "display_order": 110},
+    {"name": "Entertainment & Media", "slug": "entertainment-media", "display_order": 120},
+    {"name": "Fashion & Beauty", "slug": "fashion-beauty", "display_order": 130},
+    {"name": "Food & Hospitality", "slug": "food-hospitality", "display_order": 140},
+    {"name": "Government & Public Sector", "slug": "government-public-sector", "display_order": 150},
+    {"name": "Healthcare", "slug": "healthcare", "display_order": 160},
+    {"name": "Insurance", "slug": "insurance", "display_order": 170},
+    {"name": "Legal", "slug": "legal", "display_order": 180},
+    {"name": "Manufacturing", "slug": "manufacturing", "display_order": 190},
+    {"name": "Nonprofit & Charity", "slug": "nonprofit-charity", "display_order": 200},
+    {"name": "Property & Real Estate", "slug": "property-real-estate", "display_order": 210},
+    {"name": "Retail & E-commerce", "slug": "retail-e-commerce", "display_order": 220},
+    {"name": "Science & Research", "slug": "science-research", "display_order": 230},
+    {"name": "Sports & Fitness", "slug": "sports-fitness", "display_order": 240},
+    {"name": "Technology", "slug": "technology", "display_order": 250},
+    {"name": "Telecommunications", "slug": "telecommunications", "display_order": 260},
+    {"name": "Transport & Logistics", "slug": "transport-logistics", "display_order": 270},
+    {"name": "Travel & Tourism", "slug": "travel-tourism", "display_order": 280},
+    {"name": "Other", "slug": "other", "display_order": 290},
+)
+

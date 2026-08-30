@@ -787,6 +787,18 @@ Returned fields:
 - `null`
 - or an object with `id`, `name`, and `slug`
 
+Allowed `career_stage` codes:
+
+- `STUDENT` -> `Student`
+- `EARLY_CAREER` -> `Early Career`
+- `MID_CAREER` -> `Mid Career`
+- `SENIOR` -> `Senior`
+- `LEADERSHIP` -> `Leadership`
+- `FOUNDER_BUSINESS_OWNER` -> `Founder / Business Owner`
+- `OTHER` -> `Other`
+
+The API continues to serialize the stable stored code rather than the display label.
+
 Fields intentionally not exposed:
 
 - `person`
@@ -892,6 +904,7 @@ Professional-profile behavior:
 
 - `professional_profile` is `null` when no ProfessionalProfile exists
 - `industry` is nested when present and `null` when absent
+- `career_stage` is returned as the stable stored code when present
 - ProfessionalProfile is current professional state, not employment history
 - ProfessionalProfile is independent of `User`, `Membership`, and Staff access
 

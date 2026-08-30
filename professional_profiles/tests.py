@@ -1,4 +1,5 @@
 from django.contrib.admin.sites import AdminSite
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.db.models import ProtectedError
 from django.test import RequestFactory, TestCase, override_settings
@@ -9,27 +10,37 @@ from accounts.models import User
 from people.models import Person
 from professional_profiles.admin import IndustryAdmin, ProfessionalProfileAdmin
 from professional_profiles.models import Industry, ProfessionalProfile
+from professional_profiles.taxonomy import CANONICAL_INDUSTRIES
 from staff_access.models import StaffRole, StaffRoleAssignment
 
 
 class IndustryModelTests(TestCase):
+    def test_all_29_canonical_industries_exist_after_migrations(self):
+        seeded = list(Industry.objects.order_by("display_order", "name", "id").values("name", "slug", "display_order", "is_active"))
+        expected = [{**industry, "is_active": True} for industry in CANONICAL_INDUSTRIES]
+
+        self.assertEqual(len(seeded), 29)
+        self.assertEqual(seeded, expected)
+
     def test_slug_must_be_unique(self):
-        Industry.objects.create(name="Technology", slug="technology")
+        Industry.objects.create(name="Custom Technology", slug="custom-technology")
 
         with self.assertRaises(IntegrityError):
-            Industry.objects.create(name="Different Technology", slug="technology")
+            Industry.objects.create(name="Duplicate Custom Technology", slug="custom-technology")
 
-    def test_is_active_defaults_to_true(self):
-        industry = Industry.objects.create(name="Technology", slug="technology")
-
-        self.assertTrue(industry.is_active)
+    def test_seeded_industries_are_active(self):
+        self.assertFalse(Industry.objects.filter(is_active=False).exists())
 
     def test_default_ordering_is_display_order_name_id(self):
-        third = Industry.objects.create(name="Zoology", slug="zoology", display_order=2)
-        second = Industry.objects.create(name="Finance", slug="finance", display_order=1)
-        first = Industry.objects.create(name="Agriculture", slug="agriculture", display_order=1)
+        third = Industry.objects.create(name="Zoology", slug="zoology-extra", display_order=305)
+        second = Industry.objects.create(name="Finance Annex", slug="finance-annex", display_order=300)
+        first = Industry.objects.create(name="Agriculture Annex", slug="agriculture-annex", display_order=300)
 
-        self.assertEqual(list(Industry.objects.values_list("id", flat=True)), [first.id, second.id, third.id])
+        self.assertEqual(list(Industry.objects.order_by("display_order", "name", "id").values_list("id", flat=True))[-3:], [first.id, second.id, third.id])
+
+    def test_other_is_last_in_seeded_order(self):
+        last_industry = Industry.objects.order_by("display_order", "name", "id").last()
+        self.assertEqual(last_industry.slug, "other")
 
 
 class ProfessionalProfileModelTests(TestCase):
@@ -64,7 +75,7 @@ class ProfessionalProfileModelTests(TestCase):
 
     def test_deleting_referenced_industry_is_protected(self):
         person = Person.objects.create(first_name="Amina", last_name="Zulu")
-        industry = Industry.objects.create(name="Technology", slug="technology")
+        industry = Industry.objects.get(slug="technology")
         ProfessionalProfile.objects.create(person=person, industry=industry)
 
         with self.assertRaises(ProtectedError):
@@ -72,21 +83,50 @@ class ProfessionalProfileModelTests(TestCase):
 
     def test_optional_professional_fields_are_accepted(self):
         person = Person.objects.create(first_name="Amina", last_name="Zulu")
-        industry = Industry.objects.create(name="Technology", slug="technology")
+        industry = Industry.objects.get(slug="technology")
         profile = ProfessionalProfile.objects.create(
             person=person,
             job_title="Software Engineer",
             company="Example Ltd",
             industry=industry,
-            career_stage="Senior individual contributor",
+            career_stage=ProfessionalProfile.CareerStage.SENIOR,
             linkedin_url="https://www.linkedin.com/in/example",
         )
 
         self.assertEqual(profile.job_title, "Software Engineer")
         self.assertEqual(profile.company, "Example Ltd")
         self.assertEqual(profile.industry, industry)
-        self.assertEqual(profile.career_stage, "Senior individual contributor")
+        self.assertEqual(profile.career_stage, ProfessionalProfile.CareerStage.SENIOR)
         self.assertEqual(profile.linkedin_url, "https://www.linkedin.com/in/example")
+
+    def test_null_career_stage_remains_valid(self):
+        person = Person.objects.create(first_name="Amina", last_name="Zulu")
+        profile = ProfessionalProfile(person=person, career_stage=None)
+
+        profile.full_clean()
+
+    def test_every_approved_career_stage_code_is_valid(self):
+        for index, career_stage in enumerate(ProfessionalProfile.CareerStage.values, start=1):
+            with self.subTest(career_stage=career_stage):
+                person = Person.objects.create(first_name=f"Amina{index}", last_name="Zulu")
+                profile = ProfessionalProfile(person=person, career_stage=career_stage)
+                profile.full_clean()
+
+    def test_arbitrary_career_stage_value_fails_validation(self):
+        person = Person.objects.create(first_name="Amina", last_name="Zulu")
+        profile = ProfessionalProfile(person=person, career_stage="Experienced")
+
+        with self.assertRaisesMessage(ValidationError, "Value 'Experienced' is not a valid choice."):
+            profile.full_clean()
+
+    def test_founder_business_owner_code_is_stored_exactly(self):
+        person = Person.objects.create(first_name="Amina", last_name="Zulu")
+        profile = ProfessionalProfile.objects.create(
+            person=person,
+            career_stage=ProfessionalProfile.CareerStage.FOUNDER_BUSINESS_OWNER,
+        )
+
+        self.assertEqual(profile.career_stage, "FOUNDER_BUSINESS_OWNER")
 
     def test_timestamps_are_recorded_and_updated_normally(self):
         person = Person.objects.create(first_name="Amina", last_name="Zulu")
@@ -135,6 +175,14 @@ class ProfessionalProfileAdminTests(TestCase):
         self.assertIn("created_at", self.profile_admin.readonly_fields)
         self.assertIn("updated_at", self.profile_admin.readonly_fields)
 
+    def test_professional_profile_admin_uses_career_stage_choices(self):
+        form_class = self.profile_admin.get_form(self.build_request())
+
+        self.assertEqual(
+            list(form_class.base_fields["career_stage"].choices),
+            [("", "- Select an option -"), *list(ProfessionalProfile.CareerStage.choices)],
+        )
+
 
 @override_settings(ROOT_URLCONF="config.urls")
 class IndustryApiTests(TestCase):
@@ -175,10 +223,10 @@ class IndustryApiTests(TestCase):
         StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=manager_role)
         StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=viewer_role)
 
-        self.first_active = Industry.objects.create(name="Agriculture", slug="agriculture", display_order=1)
-        self.second_active = Industry.objects.create(name="Finance", slug="finance", display_order=1)
-        self.third_active = Industry.objects.create(name="Technology", slug="technology", display_order=2)
-        self.inactive = Industry.objects.create(name="Legacy", slug="legacy", display_order=0, is_active=False)
+        self.first_active = Industry.objects.get(slug="accounting")
+        self.second_active = Industry.objects.get(slug="advertising-marketing")
+        self.third_active = Industry.objects.get(slug="architecture-design")
+        self.inactive = Industry.objects.create(name="Legacy", slug="legacy", display_order=5, is_active=False)
 
     def authenticate(self, user):
         self.client.force_authenticate(user=user)
@@ -219,9 +267,13 @@ class IndustryApiTests(TestCase):
         response = self.client.get(self.url)
 
         self.assertEqual(
-            [item["id"] for item in response.data],
-            [self.first_active.id, self.second_active.id, self.third_active.id],
+            len(response.data),
+            29,
         )
+        self.assertEqual(response.data[0], {"id": self.first_active.id, "name": "Accounting", "slug": "accounting"})
+        self.assertEqual(response.data[1], {"id": self.second_active.id, "name": "Advertising & Marketing", "slug": "advertising-marketing"})
+        self.assertEqual(response.data[2], {"id": self.third_active.id, "name": "Architecture & Design", "slug": "architecture-design"})
+        self.assertEqual(response.data[-1]["slug"], "other")
 
     def test_representation_contains_only_intended_fields(self):
         self.authenticate(self.admin_user)
@@ -269,14 +321,14 @@ class ProfessionalProfileApiTests(TestCase):
         StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=manager_role)
         StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=viewer_role)
 
-        self.industry = Industry.objects.create(name="Technology", slug="technology")
+        self.industry = Industry.objects.get(slug="technology")
         self.business_person = Person.objects.create(first_name="Amina", last_name="Zulu")
         self.business_profile = ProfessionalProfile.objects.create(
             person=self.business_person,
             job_title="Software Engineer",
             company="Example Ltd",
             industry=self.industry,
-            career_stage="Senior individual contributor",
+            career_stage=ProfessionalProfile.CareerStage.SENIOR,
             linkedin_url="https://www.linkedin.com/in/example",
         )
         self.archived_business_person = Person.objects.create(
@@ -392,4 +444,4 @@ class ProfessionalProfileApiTests(TestCase):
         self.authenticate(self.admin_user)
         response = self.client.get(self.get_url(self.business_person.id))
 
-        self.assertEqual(response.data["career_stage"], "Senior individual contributor")
+        self.assertEqual(response.data["career_stage"], ProfessionalProfile.CareerStage.SENIOR)

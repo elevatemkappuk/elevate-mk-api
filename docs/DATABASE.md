@@ -167,7 +167,9 @@ Current rules:
 - ProfessionalProfile belongs to `Person`, not `User`
 - ProfessionalProfile is independent of `Membership` and `StaffRoleAssignment`
 - Company remains plain text in V1
-- Career Stage remains unconstrained text temporarily until the business taxonomy is confirmed
+- Career Stage is a small controlled application taxonomy implemented with Django `TextChoices`
+- Career Stage is not a separately managed database entity
+- `FOUNDER_BUSINESS_OWNER` is the stable stored code for the approved label `Founder / Business Owner`
 - No ProfessionalProfile is auto-created when a `Person`, `User`, `Membership`, or staff assignment is created
 - Industry is controlled canonical data and referenced with `PROTECT`
 - Industry records should be deactivated rather than treated as disposable taxonomy values
@@ -194,7 +196,9 @@ Current implementation:
 
 - `slug` is unique
 - default ordering is `display_order`, `name`, `id`
-- no seed data migration invents a production taxonomy
+- the approved initial 29-row taxonomy is seeded by migration
+- canonical rows are updated by slug if they already exist
+- unrelated rows are not deleted by the seed migration
 
 ## Model: `professional_profiles.ProfessionalProfile`
 Database table: `professional_profiles_professionalprofile`
@@ -210,7 +214,7 @@ Purpose:
 | `job_title` | `CharField(max_length=255)` | not null, `blank=True` | empty string | Optional plain-text job title |
 | `company` | `CharField(max_length=255)` | not null, `blank=True` | empty string | Optional plain-text company field in V1 |
 | `industry` | `ForeignKey(Industry)` | `null=True`, `blank=True` | none | Optional canonical industry reference |
-| `career_stage` | `CharField(max_length=255)` | `null=True`, `blank=True` | none | Optional free text; controlled taxonomy is deferred |
+| `career_stage` | `CharField(max_length=255)` | `null=True`, `blank=True` | none | Optional controlled code from a small Django `TextChoices` taxonomy |
 | `linkedin_url` | `URLField` | not null, `blank=True` | empty string | Optional LinkedIn profile URL |
 | `created_at` | `DateTimeField` | not null | `auto_now_add=True` | Set automatically on create |
 | `updated_at` | `DateTimeField` | not null | `auto_now=True` | Updated automatically on save |
@@ -222,6 +226,14 @@ Current implementation:
 - `person` uses `PROTECT`, so deleting a referenced `Person` is blocked
 - `industry` uses `PROTECT`, so deleting a referenced Industry is blocked
 - default ordering is `person_id`
+- `career_stage` accepts only:
+  - `STUDENT`
+  - `EARLY_CAREER`
+  - `MID_CAREER`
+  - `SENIOR`
+  - `LEADERSHIP`
+  - `FOUNDER_BUSINESS_OWNER`
+  - `OTHER`
 
 ## Model: `memberships.Membership`
 Database table: `memberships_membership`
