@@ -10,6 +10,7 @@ The current Elevate-owned models are:
 
 - `people.Person`
 - `accounts.User`
+- `memberships.Membership`
 - `staff_access.StaffRole`
 - `staff_access.StaffRoleAssignment`
 
@@ -55,36 +56,38 @@ Information deliberately stored on `User`:
 | created_at        |                                  +--------------------+
 | updated_at        |                                           |
 +-------------------+                                           | 1
-                                                                |
-                                                                | 0..*
-                                             +----------------------------------+
-                                             | staff_access_staffroleassignment |
-                                             +----------------------------------+
-                                             | id (PK)                          |
-                                             | user_id (FK)                     |
-                                             | role_id (FK)                     |
-                                             | is_active                        |
-                                             | assigned_at                      |
-                                             | assigned_by_id (FK, null)        |
-                                             | revoked_at (null)                |
-                                             | revoked_by_id (FK, null)         |
-                                             | created_at                       |
-                                             | updated_at                       |
-                                             +----------------------------------+
-                                                           |
-                                                           | 0..*
-                                                           |
-                                                           | 1
-                                             +--------------------------+
-                                             | staff_access_staffrole   |
-                                             +--------------------------+
-                                             | id (PK)                  |
-                                             | code (unique)            |
-                                             | name                     |
-                                             | is_active                |
-                                             | created_at               |
-                                             | updated_at               |
-                                             +--------------------------+
+         |                                                      |
+         | 0..1                                                  | 0..*
+         |                                                      |
+         | 1                                                    |
++--------------------------+                  +----------------------------------+
+| memberships_membership   |                  | staff_access_staffroleassignment |
++--------------------------+                  +----------------------------------+
+| id (PK)                  |                  | id (PK)                          |
+| person_id (O2O)          |                  | user_id (FK)                     |
+| status                   |                  | role_id (FK)                     |
+| joined_at                |                  | is_active                        |
+| ended_at                 |                  | assigned_at                      |
+| membership_source        |                  | assigned_by_id (FK, null)        |
+| created_at               |                  | revoked_at (null)                |
+| updated_at               |                  | revoked_by_id (FK, null)         |
++--------------------------+                  | created_at                       |
+                                              | updated_at                       |
+                                              +----------------------------------+
+                                                            |
+                                                            | 0..*
+                                                            |
+                                                            | 1
+                                              +--------------------------+
+                                              | staff_access_staffrole   |
+                                              +--------------------------+
+                                              | id (PK)                  |
+                                              | code (unique)            |
+                                              | name                     |
+                                              | is_active                |
+                                              | created_at               |
+                                              | updated_at               |
+                                              +--------------------------+
 ```
 
 ## Model: `people.Person`
@@ -146,6 +149,71 @@ Future People-view filtering rules:
 - Normal People: `record_type = BUSINESS` and `archived_at IS NULL`
 - Archived People: `record_type = BUSINESS` and `archived_at IS NOT NULL`
 - `TECHNICAL` people are excluded from both normal and archived CRM People views
+
+## Model: `memberships.Membership`
+Database table: `memberships_membership`
+
+Purpose:
+- Stores the first Elevate membership relationship record for a person.
+
+### Fields
+| Field | Type | Null / Blank | Default / Automatic | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
+| `person` | `OneToOneField(Person)` | not null, `blank=False` | none | A person has zero or one Membership in V1 |
+| `status` | `CharField(max_length=20)` | not null, `blank=False` | none | Allowed values: `ACTIVE`, `FORMER` |
+| `joined_at` | `DateField` | not null, `blank=False` | none | Historical business join date |
+| `ended_at` | `DateField` | `null=True`, `blank=True` | none | End-of-membership business date for former members |
+| `membership_source` | `CharField(max_length=30)` | not null, `blank=False` | none | Allowed values: `WEBSITE_FORM`, `STAFF`, `COMMUNITY_PLATFORM`, `OTHER` |
+| `created_at` | `DateTimeField` | not null | `auto_now_add=True` | Set automatically on create |
+| `updated_at` | `DateTimeField` | not null | `auto_now=True` | Updated automatically on each save |
+
+### Constraints and Behavior
+Current implementation:
+
+- One-to-one uniqueness on `person`
+- `person` uses `PROTECT`, so deleting a referenced `Person` is blocked
+- Default ordering is `-joined_at`, `id`
+- `__str__()` returns a person-oriented membership summary
+
+### Relationships
+| Related Model | Relationship | Direction | on_delete | Notes |
+| --- | --- | --- | --- | --- |
+| `people.Person` | `OneToOneField` | forward relation `membership.person` | `PROTECT` | Membership belongs to Person, not User |
+
+### Validation Rules
+Current implementation:
+
+- `status` choices:
+  - `ACTIVE`
+  - `FORMER`
+- `membership_source` choices:
+  - `WEBSITE_FORM`
+  - `STAFF`
+  - `COMMUNITY_PLATFORM`
+  - `OTHER`
+- `ended_at` cannot be before `joined_at`
+- `ACTIVE` membership cannot carry `ended_at`
+- `FORMER` membership requires `ended_at`
+
+### Domain Rules
+Currently implemented rules:
+
+- A `Person` may exist without a Membership and is then still a Contact
+- Membership belongs to `Person`, not `User`
+- A `User` may exist without a Membership
+- Staff access does not imply Membership
+- Membership is independent from Django `is_staff` / `is_superuser`
+- No Membership is auto-created when a `Person`, `User`, or staff assignment is created
+- No rejoin-history model exists yet
+- Relationship labels such as Contact, Active Member, and Former Member are derived later rather than stored
+
+Consciously deferred:
+
+- membership creation workflow
+- ending/reactivating/correcting memberships
+- audit/history beyond the current model timestamps
+- rejoin-history support
 
 ## Model: `accounts.User`
 Database table: `accounts_user`

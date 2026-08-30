@@ -26,6 +26,7 @@ Local development URLs when running `manage.py runserver` on the default port:
 - Me endpoint: `http://localhost:8000/api/v1/auth/me/`
 - People endpoint: `http://localhost:8000/api/v1/people/`
 - Person detail endpoint: `http://localhost:8000/api/v1/people/{person_id}/`
+- Person membership endpoint: `http://localhost:8000/api/v1/people/{person_id}/membership/`
 
 Environment-relative URL patterns:
 
@@ -38,6 +39,7 @@ Environment-relative URL patterns:
 - Me endpoint: `{BASE_URL}/api/v1/auth/me/`
 - People endpoint: `{BASE_URL}/api/v1/people/`
 - Person detail endpoint: `{BASE_URL}/api/v1/people/{person_id}/`
+- Person membership endpoint: `{BASE_URL}/api/v1/people/{person_id}/membership/`
 
 Deployment note:
 
@@ -53,6 +55,7 @@ Currently implemented Elevate endpoints:
 - `GET /api/v1/auth/me/`
 - `GET /api/v1/people/`
 - `GET /api/v1/people/{person_id}/`
+- `GET /api/v1/people/{person_id}/membership/`
 
 No other Elevate API endpoints are currently implemented.
 
@@ -93,6 +96,7 @@ Current implementation is serializer-based and expects request bodies appropriat
 - `GET /api/v1/auth/me/`: no request body
 - `GET /api/v1/people/`: query parameters only
 - `GET /api/v1/people/{person_id}/`: path parameter only
+- `GET /api/v1/people/{person_id}/membership/`: path parameter only
 
 The test suite exercises JSON requests for the auth endpoints.
 
@@ -473,6 +477,66 @@ Example response:
   "archived_at": null,
   "created_at": "2026-08-29T12:00:00Z",
   "updated_at": "2026-08-29T12:00:00Z"
+}
+```
+
+## Endpoint: `GET /api/v1/people/{person_id}/membership/`
+Purpose:
+- Return the Membership subresource for a CRM-visible `BUSINESS` Person.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` required
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+Membership visibility rule:
+
+- The endpoint operates only within the CRM People domain of `BUSINESS` Persons
+- Active and archived `BUSINESS` records are both eligible by direct Person ID
+- `TECHNICAL` Person records are never returned
+- Requesting a `TECHNICAL` Person ID returns `404 Not Found`
+- A missing Person ID also returns `404 Not Found`
+- A `BUSINESS` Person with no Membership also returns `404 Not Found`
+- The `404` response intentionally does not distinguish between:
+  - nonexistent Person
+  - non-CRM-visible Person
+  - Person without a Membership subresource
+
+Path parameter:
+
+| Parameter | Required | Type | Notes |
+| --- | --- | --- | --- |
+| `person_id` | yes | integer | Primary key of a CRM-visible `BUSINESS` Person |
+
+Returned Membership fields:
+
+- `id`
+- `status`
+- `joined_at`
+- `ended_at`
+- `membership_source`
+- `created_at`
+- `updated_at`
+
+Fields intentionally not exposed:
+
+- `person`
+- User authentication internals
+- Django `is_staff`
+- Django `is_superuser`
+- Staff role-assignment internals
+
+Example response:
+```json
+{
+  "id": 5,
+  "status": "ACTIVE",
+  "joined_at": "2024-04-12",
+  "ended_at": null,
+  "membership_source": "WEBSITE_FORM",
+  "created_at": "2026-08-30T11:00:00Z",
+  "updated_at": "2026-08-30T11:00:00Z"
 }
 ```
 
