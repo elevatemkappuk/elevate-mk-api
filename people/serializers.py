@@ -1,5 +1,8 @@
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
+from memberships.models import Membership
+from memberships.serializers import MembershipSerializer
 from people.models import Person
 
 
@@ -66,3 +69,55 @@ class PaginatedPersonListSerializer(serializers.Serializer):
     next = serializers.URLField(allow_null=True)
     previous = serializers.URLField(allow_null=True)
     results = PersonListSerializer(many=True)
+
+
+class PersonRelationshipSerializer(serializers.Serializer):
+    TYPE_CONTACT = "CONTACT"
+    TYPE_ACTIVE_MEMBER = "ACTIVE_MEMBER"
+    TYPE_FORMER_MEMBER = "FORMER_MEMBER"
+
+    TYPE_CHOICES = (
+        (TYPE_CONTACT, "Contact"),
+        (TYPE_ACTIVE_MEMBER, "Active Member"),
+        (TYPE_FORMER_MEMBER, "Former Member"),
+    )
+
+    type = serializers.ChoiceField(choices=TYPE_CHOICES)
+    label = serializers.CharField()
+
+
+class Person360Serializer(serializers.Serializer):
+    person = PersonListSerializer(source="*")
+    relationship = serializers.SerializerMethodField()
+    membership = serializers.SerializerMethodField()
+
+    @extend_schema_field(PersonRelationshipSerializer)
+    def get_relationship(self, instance):
+        membership = self._get_membership(instance)
+        if membership is None:
+            relationship_type = PersonRelationshipSerializer.TYPE_CONTACT
+            label = "Contact"
+        elif membership.status == Membership.Status.ACTIVE:
+            relationship_type = PersonRelationshipSerializer.TYPE_ACTIVE_MEMBER
+            label = "Active Member"
+        else:
+            relationship_type = PersonRelationshipSerializer.TYPE_FORMER_MEMBER
+            label = "Former Member"
+
+        return {
+            "type": relationship_type,
+            "label": label,
+        }
+
+    @extend_schema_field(MembershipSerializer(allow_null=True))
+    def get_membership(self, instance):
+        membership = self._get_membership(instance)
+        if membership is None:
+            return None
+        return MembershipSerializer(membership).data
+
+    def _get_membership(self, instance):
+        try:
+            return instance.membership
+        except Membership.DoesNotExist:
+            return None

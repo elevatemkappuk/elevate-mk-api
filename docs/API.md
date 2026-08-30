@@ -27,6 +27,7 @@ Local development URLs when running `manage.py runserver` on the default port:
 - People endpoint: `http://localhost:8000/api/v1/people/`
 - Person detail endpoint: `http://localhost:8000/api/v1/people/{person_id}/`
 - Person membership endpoint: `http://localhost:8000/api/v1/people/{person_id}/membership/`
+- Person 360 endpoint: `http://localhost:8000/api/v1/people/{person_id}/360/`
 
 Environment-relative URL patterns:
 
@@ -40,6 +41,7 @@ Environment-relative URL patterns:
 - People endpoint: `{BASE_URL}/api/v1/people/`
 - Person detail endpoint: `{BASE_URL}/api/v1/people/{person_id}/`
 - Person membership endpoint: `{BASE_URL}/api/v1/people/{person_id}/membership/`
+- Person 360 endpoint: `{BASE_URL}/api/v1/people/{person_id}/360/`
 
 Deployment note:
 
@@ -56,6 +58,7 @@ Currently implemented Elevate endpoints:
 - `GET /api/v1/people/`
 - `GET /api/v1/people/{person_id}/`
 - `GET /api/v1/people/{person_id}/membership/`
+- `GET /api/v1/people/{person_id}/360/`
 
 No other Elevate API endpoints are currently implemented.
 
@@ -97,6 +100,7 @@ Current implementation is serializer-based and expects request bodies appropriat
 - `GET /api/v1/people/`: query parameters only
 - `GET /api/v1/people/{person_id}/`: path parameter only
 - `GET /api/v1/people/{person_id}/membership/`: path parameter only
+- `GET /api/v1/people/{person_id}/360/`: path parameter only
 
 The test suite exercises JSON requests for the auth endpoints.
 
@@ -537,6 +541,102 @@ Example response:
   "membership_source": "WEBSITE_FORM",
   "created_at": "2026-08-30T11:00:00Z",
   "updated_at": "2026-08-30T11:00:00Z"
+}
+```
+
+## Endpoint: `GET /api/v1/people/{person_id}/360/`
+Purpose:
+- Return a read-only CRM projection optimized for the Person 360 screen.
+
+Architectural distinction:
+
+- `/api/v1/people/{person_id}/360/` is an aggregate CRM read projection
+- `/api/v1/people/{person_id}/` remains the authoritative Person resource
+- `/api/v1/people/{person_id}/membership/` remains the authoritative Membership resource
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` required
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+People visibility rule:
+
+- The endpoint operates only within the CRM `BUSINESS` Person domain
+- Active and archived `BUSINESS` records are both retrievable by direct ID
+- `TECHNICAL` Person records are never returned
+- Requesting a `TECHNICAL` Person ID returns `404 Not Found`
+- A missing Person ID also returns `404 Not Found`
+- Unlike the standalone Membership endpoint, a valid `BUSINESS` Person without Membership still returns `200 OK`
+
+Response structure:
+
+- `person`: the same Person-owned fields returned by `GET /api/v1/people/{person_id}/`
+- `relationship`: derived CRM relationship classification
+- `membership`: Membership projection or `null`
+
+Relationship derivation:
+
+- No Membership -> `CONTACT` / `Contact`
+- `ACTIVE` Membership -> `ACTIVE_MEMBER` / `Active Member`
+- `FORMER` Membership -> `FORMER_MEMBER` / `Former Member`
+
+This relationship state is derived from Membership and is not persisted on `Person` or `Membership`.
+
+Returned `person` fields:
+
+- `id`
+- `first_name`
+- `last_name`
+- `primary_email`
+- `mobile`
+- `location`
+- `age_range`
+- `gender`
+- `archived_at`
+- `created_at`
+- `updated_at`
+
+Returned `membership` fields when present:
+
+- `id`
+- `status`
+- `joined_at`
+- `ended_at`
+- `membership_source`
+- `created_at`
+- `updated_at`
+
+Fields intentionally not exposed:
+
+- `record_type`
+- User/authentication internals
+- Django `is_staff`
+- Django `is_superuser`
+- staff role-assignment internals
+- speculative future Person 360 domain keys
+
+Example response for a contact:
+```json
+{
+  "person": {
+    "id": 14,
+    "first_name": "Amina",
+    "last_name": "Zulu",
+    "primary_email": "amina@example.com",
+    "mobile": "991000001",
+    "location": "Lilongwe",
+    "age_range": "",
+    "gender": "",
+    "archived_at": null,
+    "created_at": "2026-08-29T12:00:00Z",
+    "updated_at": "2026-08-29T12:00:00Z"
+  },
+  "relationship": {
+    "type": "CONTACT",
+    "label": "Contact"
+  },
+  "membership": null
 }
 ```
 

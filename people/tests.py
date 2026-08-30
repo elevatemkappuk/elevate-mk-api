@@ -6,6 +6,7 @@ from django.utils import timezone
 from django.test import TestCase
 
 from accounts.models import User
+from memberships.models import Membership
 from people.admin import PersonAdmin
 from people.models import Person
 from rest_framework.test import APIClient
@@ -507,3 +508,228 @@ class PeopleApiTests(TestCase):
         self.assertNotIn("is_staff", response.data)
         self.assertNotIn("is_superuser", response.data)
         self.assertNotIn("staff_role_assignments", response.data)
+
+
+@override_settings(ROOT_URLCONF="config.urls")
+class Person360ApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.url_template = "/api/v1/people/{person_id}/360/"
+
+        self.non_staff_user = User.objects.create_user(
+            email="nonstaff-360@example.com",
+            password="testpass123",
+            person_first_name="Non",
+            person_last_name="Staff",
+        )
+        self.admin_user = User.objects.create_user(
+            email="admin-360@example.com",
+            password="testpass123",
+            person_first_name="Admin",
+            person_last_name="User",
+        )
+        self.manager_user = User.objects.create_user(
+            email="manager-360@example.com",
+            password="testpass123",
+            person_first_name="Manager",
+            person_last_name="User",
+        )
+        self.viewer_user = User.objects.create_user(
+            email="viewer-360@example.com",
+            password="testpass123",
+            person_first_name="Viewer",
+            person_last_name="User",
+        )
+
+        self.admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
+        self.manager_role = StaffRole.objects.get(code=StaffRole.CRM_MANAGER)
+        self.viewer_role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
+
+        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=self.admin_role)
+        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=self.manager_role)
+        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=self.viewer_role)
+
+        self.contact_person = Person.objects.create(
+            first_name="Contact",
+            last_name="Person",
+            primary_email="contact@example.com",
+            mobile="991000100",
+            location="Lilongwe",
+        )
+        self.active_member_person = Person.objects.create(
+            first_name="Active",
+            last_name="Member",
+            primary_email="active@example.com",
+            mobile="991000101",
+            location="Blantyre",
+        )
+        self.active_membership = Membership.objects.create(
+            person=self.active_member_person,
+            status=Membership.Status.ACTIVE,
+            joined_at=timezone.datetime(2024, 4, 12).date(),
+            membership_source=Membership.Source.WEBSITE_FORM,
+        )
+        self.former_member_person = Person.objects.create(
+            first_name="Former",
+            last_name="Member",
+            primary_email="former@example.com",
+            mobile="991000102",
+            location="Mzuzu",
+        )
+        self.former_membership = Membership.objects.create(
+            person=self.former_member_person,
+            status=Membership.Status.FORMER,
+            joined_at=timezone.datetime(2021, 5, 2).date(),
+            ended_at=timezone.datetime(2024, 7, 15).date(),
+            membership_source=Membership.Source.STAFF,
+        )
+        self.archived_business_person = Person.objects.create(
+            first_name="Archived",
+            last_name="Business",
+            archived_at=timezone.now(),
+        )
+        self.archived_membership = Membership.objects.create(
+            person=self.archived_business_person,
+            status=Membership.Status.ACTIVE,
+            joined_at=timezone.datetime(2022, 6, 1).date(),
+            membership_source=Membership.Source.COMMUNITY_PLATFORM,
+        )
+        self.technical_person = Person.objects.create(
+            first_name="Root",
+            last_name="Operator",
+            record_type=Person.RecordType.TECHNICAL,
+        )
+
+    def authenticate(self, user):
+        self.client.force_authenticate(user=user)
+
+    def get_url(self, person_id):
+        return self.url_template.format(person_id=person_id)
+
+    def test_anonymous_user_receives_401(self):
+        response = self.client.get(self.get_url(self.contact_person.id))
+        self.assertEqual(response.status_code, 401)
+
+    def test_authenticated_non_staff_user_receives_403(self):
+        self.authenticate(self.non_staff_user)
+        response = self.client.get(self.get_url(self.contact_person.id))
+        self.assertEqual(response.status_code, 403)
+
+    def test_crm_admin_receives_200(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.contact_person.id))
+        self.assertEqual(response.status_code, 200)
+
+    def test_crm_manager_receives_200(self):
+        self.authenticate(self.manager_user)
+        response = self.client.get(self.get_url(self.contact_person.id))
+        self.assertEqual(response.status_code, 200)
+
+    def test_crm_viewer_receives_200(self):
+        self.authenticate(self.viewer_user)
+        response = self.client.get(self.get_url(self.contact_person.id))
+        self.assertEqual(response.status_code, 200)
+
+    def test_active_business_person_returns_200(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.contact_person.id))
+        self.assertEqual(response.status_code, 200)
+
+    def test_archived_business_person_returns_200(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.archived_business_person.id))
+        self.assertEqual(response.status_code, 200)
+
+    def test_technical_person_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.technical_person.id))
+        self.assertEqual(response.status_code, 404)
+
+    def test_nonexistent_person_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(999999))
+        self.assertEqual(response.status_code, 404)
+
+    def test_business_person_without_membership_returns_contact_projection(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.contact_person.id))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.data["membership"])
+        self.assertEqual(response.data["relationship"]["type"], "CONTACT")
+        self.assertEqual(response.data["relationship"]["label"], "Contact")
+
+    def test_active_membership_returns_active_member_projection(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.active_member_person.id))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["relationship"]["type"], "ACTIVE_MEMBER")
+        self.assertEqual(response.data["relationship"]["label"], "Active Member")
+        self.assertEqual(
+            response.data["membership"],
+            {
+                "id": self.active_membership.id,
+                "status": "ACTIVE",
+                "joined_at": "2024-04-12",
+                "ended_at": None,
+                "membership_source": "WEBSITE_FORM",
+                "created_at": response.data["membership"]["created_at"],
+                "updated_at": response.data["membership"]["updated_at"],
+            },
+        )
+
+    def test_former_membership_returns_former_member_projection(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.former_member_person.id))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["relationship"]["type"], "FORMER_MEMBER")
+        self.assertEqual(response.data["relationship"]["label"], "Former Member")
+        self.assertEqual(response.data["membership"]["status"], "FORMER")
+        self.assertEqual(response.data["membership"]["ended_at"], "2024-07-15")
+
+    def test_response_person_fields_match_existing_person_read_contract(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.contact_person.id))
+
+        self.assertEqual(
+            set(response.data["person"].keys()),
+            {
+                "id",
+                "first_name",
+                "last_name",
+                "primary_email",
+                "mobile",
+                "location",
+                "age_range",
+                "gender",
+                "archived_at",
+                "created_at",
+                "updated_at",
+            },
+        )
+
+    def test_response_does_not_expose_auth_staff_or_speculative_fields(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.active_member_person.id))
+
+        self.assertNotIn("record_type", response.data["person"])
+        self.assertNotIn("user", response.data["person"])
+        self.assertNotIn("is_staff", response.data["person"])
+        self.assertNotIn("is_superuser", response.data["person"])
+        self.assertNotIn("staff_roles", response.data)
+        self.assertNotIn("person", response.data["membership"])
+        self.assertNotIn("professional_profile", response.data)
+        self.assertNotIn("interests", response.data)
+        self.assertNotIn("skills", response.data)
+        self.assertNotIn("tags", response.data)
+        self.assertNotIn("notes", response.data)
+        self.assertNotIn("engagement", response.data)
+
+    def test_endpoint_uses_compact_query_shape(self):
+        self.authenticate(self.admin_user)
+        with self.assertNumQueries(2):
+            response = self.client.get(self.get_url(self.active_member_person.id))
+
+        self.assertEqual(response.status_code, 200)

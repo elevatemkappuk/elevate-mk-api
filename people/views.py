@@ -1,6 +1,6 @@
 from django.db.models import Q, Value
 from django.db.models.functions import Concat
-from drf_spectacular.utils import OpenApiExample, OpenApiResponse, extend_schema
+from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import generics
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
@@ -8,6 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from people.models import Person
 from people.serializers import (
     PaginatedPersonListSerializer,
+    Person360Serializer,
     PersonListQuerySerializer,
     PersonListSerializer,
 )
@@ -186,3 +187,78 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
 
     def get_queryset(self):
         return self.get_business_people_queryset()
+
+
+class Person360DetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
+    serializer_class = Person360Serializer
+    permission_classes = [IsAuthenticated, HasPeopleAccess]
+    lookup_url_kwarg = "person_id"
+
+    @extend_schema(
+        operation_id="people_360_retrieve",
+        summary="Retrieve CRM Person 360 projection",
+        description=(
+            "Returns a read-only aggregate CRM projection for a single BUSINESS Person. "
+            "The response composes the authoritative Person resource plus optional Membership data. "
+            "Archived BUSINESS records remain retrievable by direct ID. "
+            "TECHNICAL persons are outside the CRM People domain and return 404. "
+            "When no Membership exists, membership is null and relationship is derived as Contact."
+        ),
+        parameters=[
+            OpenApiParameter(
+                name="person_id",
+                type=int,
+                location=OpenApiParameter.PATH,
+                description="Primary key of a CRM-visible BUSINESS Person.",
+                required=True,
+            )
+        ],
+        responses={
+            200: Person360Serializer,
+            401: OpenApiResponse(description="Authentication credentials were not provided."),
+            403: OpenApiResponse(description="You do not have a permitted active staff role."),
+            404: OpenApiResponse(
+                description="No BUSINESS Person matches the supplied ID within the CRM People domain."
+            ),
+        },
+        tags=["People"],
+        examples=[
+            OpenApiExample(
+                "Person 360 active member",
+                value={
+                    "person": {
+                        "id": 14,
+                        "first_name": "Amina",
+                        "last_name": "Zulu",
+                        "primary_email": "amina@example.com",
+                        "mobile": "991000001",
+                        "location": "Lilongwe",
+                        "age_range": "",
+                        "gender": "",
+                        "archived_at": None,
+                        "created_at": "2026-08-29T12:00:00Z",
+                        "updated_at": "2026-08-29T12:00:00Z",
+                    },
+                    "relationship": {
+                        "type": "ACTIVE_MEMBER",
+                        "label": "Active Member",
+                    },
+                    "membership": {
+                        "id": 5,
+                        "status": "ACTIVE",
+                        "joined_at": "2024-04-12",
+                        "ended_at": None,
+                        "membership_source": "WEBSITE_FORM",
+                        "created_at": "2026-08-30T11:00:00Z",
+                        "updated_at": "2026-08-30T11:00:00Z",
+                    },
+                },
+                response_only=True,
+            )
+        ],
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    def get_queryset(self):
+        return self.get_business_people_queryset().select_related("membership")
