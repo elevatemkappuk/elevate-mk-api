@@ -9,6 +9,7 @@ from accounts.models import User
 from memberships.models import Membership
 from people.admin import PersonAdmin
 from people.models import Person
+from professional_profiles.models import Industry, ProfessionalProfile
 from rest_framework.test import APIClient
 from staff_access.models import StaffRole, StaffRoleAssignment
 
@@ -599,6 +600,20 @@ class PersonOverviewApiTests(TestCase):
             last_name="Operator",
             record_type=Person.RecordType.TECHNICAL,
         )
+        self.industry = Industry.objects.create(name="Technology", slug="technology")
+        self.active_profile = ProfessionalProfile.objects.create(
+            person=self.active_member_person,
+            job_title="Software Engineer",
+            company="Example Ltd",
+            industry=self.industry,
+            career_stage="Senior individual contributor",
+            linkedin_url="https://www.linkedin.com/in/active-member",
+        )
+        self.archived_profile = ProfessionalProfile.objects.create(
+            person=self.archived_business_person,
+            job_title="Advisor",
+            company="Archive Ltd",
+        )
 
     def authenticate(self, user):
         self.client.force_authenticate(user=user)
@@ -656,6 +671,7 @@ class PersonOverviewApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.data["membership"])
+        self.assertIsNone(response.data["professional_profile"])
         self.assertEqual(response.data["relationship"]["type"], "CONTACT")
         self.assertEqual(response.data["relationship"]["label"], "Contact")
 
@@ -678,6 +694,57 @@ class PersonOverviewApiTests(TestCase):
                 "updated_at": response.data["membership"]["updated_at"],
             },
         )
+
+    def test_professional_profile_is_included_when_present(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.active_member_person.id))
+
+        self.assertEqual(
+            response.data["professional_profile"],
+            {
+                "id": self.active_profile.id,
+                "job_title": "Software Engineer",
+                "company": "Example Ltd",
+                "industry": {
+                    "id": self.industry.id,
+                    "name": "Technology",
+                    "slug": "technology",
+                },
+                "career_stage": "Senior individual contributor",
+                "linkedin_url": "https://www.linkedin.com/in/active-member",
+                "created_at": response.data["professional_profile"]["created_at"],
+                "updated_at": response.data["professional_profile"]["updated_at"],
+            },
+        )
+
+    def test_archived_business_person_still_returns_professional_profile(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.archived_business_person.id))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["professional_profile"]["id"], self.archived_profile.id)
+        self.assertIsNone(response.data["professional_profile"]["industry"])
+
+    def test_technical_person_still_returns_404_even_with_professional_profile(self):
+        technical_industry = Industry.objects.create(name="Operations", slug="operations")
+        ProfessionalProfile.objects.create(
+            person=self.technical_person,
+            job_title="System Administrator",
+            industry=technical_industry,
+        )
+
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.technical_person.id))
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_membership_and_relationship_contracts_remain_unchanged_with_professional_profile(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.active_member_person.id))
+
+        self.assertEqual(response.data["relationship"]["type"], "ACTIVE_MEMBER")
+        self.assertEqual(response.data["membership"]["status"], "ACTIVE")
+        self.assertEqual(response.data["membership"]["joined_at"], "2024-04-12")
 
     def test_former_membership_returns_former_member_projection(self):
         self.authenticate(self.admin_user)
@@ -720,7 +787,6 @@ class PersonOverviewApiTests(TestCase):
         self.assertNotIn("is_superuser", response.data["person"])
         self.assertNotIn("staff_roles", response.data)
         self.assertNotIn("person", response.data["membership"])
-        self.assertNotIn("professional_profile", response.data)
         self.assertNotIn("interests", response.data)
         self.assertNotIn("skills", response.data)
         self.assertNotIn("tags", response.data)

@@ -1,6 +1,6 @@
 # Elevate MK Database
 Status: Living Documentation
-Last Updated: 2026-08-29
+Last Updated: 2026-08-30
 
 ## Scope
 This document describes the Elevate-owned database/domain structures currently implemented in the Django API codebase.
@@ -11,6 +11,8 @@ The current Elevate-owned models are:
 - `people.Person`
 - `accounts.User`
 - `memberships.Membership`
+- `professional_profiles.Industry`
+- `professional_profiles.ProfessionalProfile`
 - `staff_access.StaffRole`
 - `staff_access.StaffRoleAssignment`
 
@@ -23,6 +25,8 @@ Current rules:
 - A `User` must belong to exactly one `Person`.
 - `Person` is the authoritative record for human/profile identity.
 - `User` is the authentication account.
+- A `Person` may also have zero or one `ProfessionalProfile`.
+- A `ProfessionalProfile` may optionally reference one canonical `Industry`.
 
 Information deliberately stored on `Person` instead of `User`:
 
@@ -149,6 +153,75 @@ Future People-view filtering rules:
 - Normal People: `record_type = BUSINESS` and `archived_at IS NULL`
 - Archived People: `record_type = BUSINESS` and `archived_at IS NOT NULL`
 - `TECHNICAL` people are excluded from both normal and archived CRM People views
+
+## Professional Profile Relationship
+Current relationship:
+
+```text
+Person 0..1 ProfessionalProfile many..1 Industry
+```
+
+Current rules:
+
+- ProfessionalProfile is current professional state, not employment history
+- ProfessionalProfile belongs to `Person`, not `User`
+- ProfessionalProfile is independent of `Membership` and `StaffRoleAssignment`
+- Company remains plain text in V1
+- Career Stage remains unconstrained text temporarily until the business taxonomy is confirmed
+- No ProfessionalProfile is auto-created when a `Person`, `User`, `Membership`, or staff assignment is created
+- Industry is controlled canonical data and referenced with `PROTECT`
+- Industry records should be deactivated rather than treated as disposable taxonomy values
+
+## Model: `professional_profiles.Industry`
+Database table: `professional_profiles_industry`
+
+Purpose:
+- Stores the canonical Industry taxonomy reusable across professional profiles, filtering, onboarding, and analytics.
+
+### Fields
+| Field | Type | Null / Blank | Default / Automatic | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
+| `name` | `CharField(max_length=255)` | not null, `blank=False` | none | Required canonical label |
+| `slug` | `SlugField` | not null, `blank=False` | none | Required unique machine-readable identifier |
+| `is_active` | `BooleanField` | not null | `True` | Inactive values remain stored but are excluded from the read API |
+| `display_order` | `PositiveIntegerField` | not null | `100` | Controls deterministic presentation order |
+| `created_at` | `DateTimeField` | not null | `auto_now_add=True` | Set automatically on create |
+| `updated_at` | `DateTimeField` | not null | `auto_now=True` | Updated automatically on save |
+
+### Constraints and Behavior
+Current implementation:
+
+- `slug` is unique
+- default ordering is `display_order`, `name`, `id`
+- no seed data migration invents a production taxonomy
+
+## Model: `professional_profiles.ProfessionalProfile`
+Database table: `professional_profiles_professionalprofile`
+
+Purpose:
+- Stores a person's current professional state independently from authentication, membership, and staff access.
+
+### Fields
+| Field | Type | Null / Blank | Default / Automatic | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
+| `person` | `OneToOneField(Person)` | not null, `blank=False` | none | Required; a Person may have at most one ProfessionalProfile |
+| `job_title` | `CharField(max_length=255)` | not null, `blank=True` | empty string | Optional plain-text job title |
+| `company` | `CharField(max_length=255)` | not null, `blank=True` | empty string | Optional plain-text company field in V1 |
+| `industry` | `ForeignKey(Industry)` | `null=True`, `blank=True` | none | Optional canonical industry reference |
+| `career_stage` | `CharField(max_length=255)` | `null=True`, `blank=True` | none | Optional free text; controlled taxonomy is deferred |
+| `linkedin_url` | `URLField` | not null, `blank=True` | empty string | Optional LinkedIn profile URL |
+| `created_at` | `DateTimeField` | not null | `auto_now_add=True` | Set automatically on create |
+| `updated_at` | `DateTimeField` | not null | `auto_now=True` | Updated automatically on save |
+
+### Constraints and Behavior
+Current implementation:
+
+- one-to-one uniqueness on `person`
+- `person` uses `PROTECT`, so deleting a referenced `Person` is blocked
+- `industry` uses `PROTECT`, so deleting a referenced Industry is blocked
+- default ordering is `person_id`
 
 ## Model: `memberships.Membership`
 Database table: `memberships_membership`

@@ -4,6 +4,8 @@ from rest_framework import serializers
 from memberships.models import Membership
 from memberships.serializers import MembershipSerializer
 from people.models import Person
+from professional_profiles.models import ProfessionalProfile
+from professional_profiles.serializers import ProfessionalProfileSerializer
 
 
 class PersonListQuerySerializer(serializers.Serializer):
@@ -90,6 +92,7 @@ class PersonOverviewSerializer(serializers.Serializer):
     person = PersonListSerializer(source="*")
     relationship = serializers.SerializerMethodField()
     membership = serializers.SerializerMethodField()
+    professional_profile = serializers.SerializerMethodField()
 
     @extend_schema_field(PersonRelationshipSerializer)
     def get_relationship(self, instance):
@@ -116,8 +119,21 @@ class PersonOverviewSerializer(serializers.Serializer):
             return None
         return MembershipSerializer(membership).data
 
+    @extend_schema_field(ProfessionalProfileSerializer(allow_null=True))
+    def get_professional_profile(self, instance):
+        professional_profile = self._get_professional_profile(instance)
+        if professional_profile is None:
+            return None
+        return ProfessionalProfileSerializer(professional_profile).data
+
     def _get_membership(self, instance):
         try:
             return instance.membership
         except Membership.DoesNotExist:
+            return None
+
+    def _get_professional_profile(self, instance):
+        try:
+            return instance.professional_profile
+        except ProfessionalProfile.DoesNotExist:
             return None

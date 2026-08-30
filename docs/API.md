@@ -1,6 +1,6 @@
 # Elevate MK API
 Status: Living Documentation
-Last Updated: 2026-08-29
+Last Updated: 2026-08-30
 
 ## Scope
 This document describes the HTTP API currently implemented in the Django server repository.
@@ -9,7 +9,7 @@ This document describes the HTTP API currently implemented in the Django server 
 Current base path and versioning convention:
 
 - Base prefix: `/api/v1/`
-- Current Elevate API routes are defined in `accounts.urls` and `people.urls`, both mounted from `config.urls`
+- Current Elevate API routes are defined in `accounts.urls`, `people.urls`, `memberships.urls`, and `professional_profiles.urls`, all mounted from `config.urls`
 - Machine-readable OpenAPI schema: `/api/schema/`
 - Swagger UI: `/api/docs/`
 - ReDoc: `/api/redoc/`
@@ -25,8 +25,10 @@ Local development URLs when running `manage.py runserver` on the default port:
 - Logout endpoint: `http://localhost:8000/api/v1/auth/logout/`
 - Me endpoint: `http://localhost:8000/api/v1/auth/me/`
 - People endpoint: `http://localhost:8000/api/v1/people/`
+- Industries endpoint: `http://localhost:8000/api/v1/industries/`
 - Person detail endpoint: `http://localhost:8000/api/v1/people/{person_id}/`
 - Person membership endpoint: `http://localhost:8000/api/v1/people/{person_id}/membership/`
+- Person professional profile endpoint: `http://localhost:8000/api/v1/people/{person_id}/professional-profile/`
 - Person overview endpoint: `http://localhost:8000/api/v1/people/{person_id}/overview/`
 
 Environment-relative URL patterns:
@@ -39,8 +41,10 @@ Environment-relative URL patterns:
 - Logout endpoint: `{BASE_URL}/api/v1/auth/logout/`
 - Me endpoint: `{BASE_URL}/api/v1/auth/me/`
 - People endpoint: `{BASE_URL}/api/v1/people/`
+- Industries endpoint: `{BASE_URL}/api/v1/industries/`
 - Person detail endpoint: `{BASE_URL}/api/v1/people/{person_id}/`
 - Person membership endpoint: `{BASE_URL}/api/v1/people/{person_id}/membership/`
+- Person professional profile endpoint: `{BASE_URL}/api/v1/people/{person_id}/professional-profile/`
 - Person overview endpoint: `{BASE_URL}/api/v1/people/{person_id}/overview/`
 
 Deployment note:
@@ -56,10 +60,12 @@ Currently implemented Elevate endpoints:
 - `POST /api/v1/auth/logout/`
 - `GET /api/v1/auth/me/`
 - `GET /api/v1/people/`
+- `GET /api/v1/industries/`
 - `GET /api/v1/people/{person_id}/`
 - `GET /api/v1/people/{person_id}/membership/`
 - `POST /api/v1/people/{person_id}/membership/`
 - `POST /api/v1/people/{person_id}/membership/end/`
+- `GET /api/v1/people/{person_id}/professional-profile/`
 - `GET /api/v1/people/{person_id}/overview/`
 
 No other Elevate API endpoints are currently implemented.
@@ -100,10 +106,12 @@ Current implementation is serializer-based and expects request bodies appropriat
 - `POST /api/v1/auth/logout/`: no request fields are required
 - `GET /api/v1/auth/me/`: no request body
 - `GET /api/v1/people/`: query parameters only
+- `GET /api/v1/industries/`: no request body
 - `GET /api/v1/people/{person_id}/`: path parameter only
 - `GET /api/v1/people/{person_id}/membership/`: path parameter only
 - `POST /api/v1/people/{person_id}/membership/`: path parameter plus JSON body
 - `POST /api/v1/people/{person_id}/membership/end/`: path parameter plus JSON body
+- `GET /api/v1/people/{person_id}/professional-profile/`: path parameter only
 - `GET /api/v1/people/{person_id}/overview/`: path parameter only
 
 The test suite exercises JSON requests for the auth endpoints.
@@ -548,6 +556,46 @@ Example response:
 }
 ```
 
+## Endpoint: `GET /api/v1/industries/`
+Purpose:
+- Return the active canonical Industry taxonomy for CRM forms and future filters.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` required
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+Behavior:
+
+- Only active Industries are returned
+- Results are ordered deterministically by `display_order`, `name`, then `id`
+- The endpoint is intentionally unpaginated because it is a small controlled lookup collection
+
+Returned fields:
+
+- `id`
+- `name`
+- `slug`
+
+Fields intentionally not exposed:
+
+- `is_active`
+- `display_order`
+- `created_at`
+- `updated_at`
+
+Example response:
+```json
+[
+  {
+    "id": 1,
+    "name": "Technology",
+    "slug": "technology"
+  }
+]
+```
+
 ## Endpoint: `POST /api/v1/people/{person_id}/membership/`
 Purpose:
 - Execute the explicit business action `Make Member` for an existing CRM-visible `BUSINESS` Person.
@@ -705,6 +753,66 @@ Independence:
 - does not create or modify `User`
 - does not create or modify `StaffRoleAssignment`
 
+## Endpoint: `GET /api/v1/people/{person_id}/professional-profile/`
+Purpose:
+- Return the ProfessionalProfile subresource for a CRM-visible `BUSINESS` Person.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` required
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+Visibility rule:
+
+- The endpoint operates only within the CRM People domain of `BUSINESS` Persons
+- Active and archived `BUSINESS` records are both eligible by direct Person ID
+- `TECHNICAL` Person records are never returned and resolve to `404 Not Found`
+- A missing Person ID also returns `404 Not Found`
+- A `BUSINESS` Person without a ProfessionalProfile also returns `404 Not Found`
+
+Returned fields:
+
+- `id`
+- `job_title`
+- `company`
+- `industry`
+- `career_stage`
+- `linkedin_url`
+- `created_at`
+- `updated_at`
+
+`industry` is either:
+
+- `null`
+- or an object with `id`, `name`, and `slug`
+
+Fields intentionally not exposed:
+
+- `person`
+- User/authentication internals
+- Django `is_staff`
+- Django `is_superuser`
+- staff role-assignment internals
+
+Example response:
+```json
+{
+  "id": 12,
+  "job_title": "Software Engineer",
+  "company": "Example Ltd",
+  "industry": {
+    "id": 3,
+    "name": "Technology",
+    "slug": "technology"
+  },
+  "career_stage": "Senior individual contributor",
+  "linkedin_url": "https://www.linkedin.com/in/example",
+  "created_at": "2026-08-30T12:00:00Z",
+  "updated_at": "2026-08-30T12:00:00Z"
+}
+```
+
 ## Endpoint: `GET /api/v1/people/{person_id}/overview/`
 Purpose:
 - Return a read-only CRM projection optimized for the Person 360 screen.
@@ -735,6 +843,7 @@ Response structure:
 - `person`: the same Person-owned fields returned by `GET /api/v1/people/{person_id}/`
 - `relationship`: derived CRM relationship classification
 - `membership`: Membership projection or `null`
+- `professional_profile`: ProfessionalProfile projection or `null`
 
 Relationship derivation:
 
@@ -768,6 +877,24 @@ Returned `membership` fields when present:
 - `created_at`
 - `updated_at`
 
+Returned `professional_profile` fields when present:
+
+- `id`
+- `job_title`
+- `company`
+- `industry`
+- `career_stage`
+- `linkedin_url`
+- `created_at`
+- `updated_at`
+
+Professional-profile behavior:
+
+- `professional_profile` is `null` when no ProfessionalProfile exists
+- `industry` is nested when present and `null` when absent
+- ProfessionalProfile is current professional state, not employment history
+- ProfessionalProfile is independent of `User`, `Membership`, and Staff access
+
 Fields intentionally not exposed:
 
 - `record_type`
@@ -797,7 +924,8 @@ Example response for a contact:
     "type": "CONTACT",
     "label": "Contact"
   },
-  "membership": null
+  "membership": null,
+  "professional_profile": null
 }
 ```
 

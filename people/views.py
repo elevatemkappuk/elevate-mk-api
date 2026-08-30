@@ -199,10 +199,11 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
         summary="Retrieve CRM Person overview projection",
         description=(
             "Returns a read-only aggregate CRM projection for a single BUSINESS Person. "
-            "The response composes the authoritative Person resource plus optional Membership data. "
+            "The response composes the authoritative Person resource plus optional Membership and ProfessionalProfile data. "
             "Archived BUSINESS records remain retrievable by direct ID. "
             "TECHNICAL persons are outside the CRM People domain and return 404. "
-            "When no Membership exists, membership is null and relationship is derived as Contact."
+            "When no Membership exists, membership is null and relationship is derived as Contact. "
+            "When no ProfessionalProfile exists, professional_profile is null."
         ),
         parameters=[
             OpenApiParameter(
@@ -252,6 +253,20 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
                         "created_at": "2026-08-30T11:00:00Z",
                         "updated_at": "2026-08-30T11:00:00Z",
                     },
+                    "professional_profile": {
+                        "id": 9,
+                        "job_title": "Software Engineer",
+                        "company": "Example Ltd",
+                        "industry": {
+                            "id": 3,
+                            "name": "Technology",
+                            "slug": "technology",
+                        },
+                        "career_stage": None,
+                        "linkedin_url": "https://www.linkedin.com/in/example",
+                        "created_at": "2026-08-30T11:30:00Z",
+                        "updated_at": "2026-08-30T11:30:00Z",
+                    },
                 },
                 response_only=True,
             )
@@ -261,4 +276,8 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
         return super().get(request, *args, **kwargs)
 
     def get_queryset(self):
-        return self.get_business_people_queryset().select_related("membership")
+        return self.get_business_people_queryset().select_related(
+            "membership",
+            "professional_profile",
+            "professional_profile__industry",
+        )
