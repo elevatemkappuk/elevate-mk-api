@@ -714,3 +714,340 @@ class MakeMembershipApiTests(TestCase):
         self.assertEqual(overview_response.data["relationship"]["type"], "ACTIVE_MEMBER")
         self.assertEqual(overview_response.data["relationship"]["label"], "Active Member")
         self.assertIsNotNone(overview_response.data["membership"])
+
+
+@override_settings(ROOT_URLCONF="config.urls")
+class EndMembershipApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.url_template = "/api/v1/people/{person_id}/membership/end/"
+
+        self.non_staff_user = User.objects.create_user(
+            email="nonstaff-end-member@example.com",
+            password="testpass123",
+            person_first_name="Non",
+            person_last_name="Staff",
+        )
+        self.admin_user = User.objects.create_user(
+            email="admin-end-member@example.com",
+            password="testpass123",
+            person_first_name="Admin",
+            person_last_name="User",
+        )
+        self.manager_user = User.objects.create_user(
+            email="manager-end-member@example.com",
+            password="testpass123",
+            person_first_name="Manager",
+            person_last_name="User",
+        )
+        self.viewer_user = User.objects.create_user(
+            email="viewer-end-member@example.com",
+            password="testpass123",
+            person_first_name="Viewer",
+            person_last_name="User",
+        )
+        self.linked_user = User.objects.create_user(
+            email="linked-member@example.com",
+            password="testpass123",
+            person_first_name="Linked",
+            person_last_name="Member",
+        )
+
+        admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
+        manager_role = StaffRole.objects.get(code=StaffRole.CRM_MANAGER)
+        viewer_role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
+        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=admin_role)
+        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=manager_role)
+        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=viewer_role)
+
+        self.business_person = Person.objects.create(
+            first_name="Amina",
+            last_name="Zulu",
+            primary_email="amina@example.com",
+        )
+        self.active_membership = Membership.objects.create(
+            person=self.business_person,
+            status=Membership.Status.ACTIVE,
+            joined_at=date(2024, 4, 12),
+            membership_source=Membership.Source.STAFF,
+        )
+        self.archived_business_person = Person.objects.create(
+            first_name="Archived",
+            last_name="Business",
+            archived_at=timezone.now(),
+        )
+        self.archived_active_membership = Membership.objects.create(
+            person=self.archived_business_person,
+            status=Membership.Status.ACTIVE,
+            joined_at=date(2024, 4, 12),
+            membership_source=Membership.Source.STAFF,
+        )
+        self.business_without_membership = Person.objects.create(
+            first_name="Contact",
+            last_name="Only",
+        )
+        self.former_person = Person.objects.create(
+            first_name="Former",
+            last_name="Member",
+        )
+        self.former_membership = Membership.objects.create(
+            person=self.former_person,
+            status=Membership.Status.FORMER,
+            joined_at=date(2020, 1, 15),
+            ended_at=date(2024, 7, 15),
+            membership_source=Membership.Source.OTHER,
+        )
+        self.technical_person = Person.objects.create(
+            first_name="Root",
+            last_name="Operator",
+            record_type=Person.RecordType.TECHNICAL,
+        )
+        Membership.objects.create(
+            person=self.technical_person,
+            status=Membership.Status.ACTIVE,
+            joined_at=date(2024, 1, 1),
+            membership_source=Membership.Source.STAFF,
+        )
+        self.linked_membership = Membership.objects.create(
+            person=self.linked_user.person,
+            status=Membership.Status.ACTIVE,
+            joined_at=date(2024, 5, 1),
+            membership_source=Membership.Source.WEBSITE_FORM,
+        )
+
+    def authenticate(self, user):
+        self.client.force_authenticate(user=user)
+
+    def get_url(self, person_id):
+        return self.url_template.format(person_id=person_id)
+
+    def test_anonymous_user_receives_401(self):
+        response = self.client.post(self.get_url(self.business_person.id), data={}, format="json")
+        self.assertEqual(response.status_code, 401)
+
+    def test_authenticated_non_staff_user_receives_403(self):
+        self.authenticate(self.non_staff_user)
+        response = self.client.post(self.get_url(self.business_person.id), data={}, format="json")
+        self.assertEqual(response.status_code, 403)
+
+    def test_crm_viewer_receives_403(self):
+        self.authenticate(self.viewer_user)
+        response = self.client.post(self.get_url(self.business_person.id), data={}, format="json")
+        self.assertEqual(response.status_code, 403)
+
+    def test_crm_manager_can_end_membership(self):
+        self.authenticate(self.manager_user)
+        response = self.client.post(
+            self.get_url(self.business_person.id),
+            data={"ended_at": "2026-08-30"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_crm_admin_can_end_membership(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_url(self.business_person.id),
+            data={"ended_at": "2026-08-30"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_active_membership_transitions_to_former(self):
+        self.authenticate(self.admin_user)
+        original_id = self.active_membership.id
+        original_joined_at = self.active_membership.joined_at
+        original_source = self.active_membership.membership_source
+        original_person_name = (self.business_person.first_name, self.business_person.last_name)
+        original_user_count = User.objects.count()
+        original_assignment_count = StaffRoleAssignment.objects.count()
+
+        response = self.client.post(
+            self.get_url(self.business_person.id),
+            data={"ended_at": "2026-08-30"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.active_membership.refresh_from_db()
+        self.business_person.refresh_from_db()
+        self.assertEqual(self.active_membership.id, original_id)
+        self.assertEqual(self.active_membership.status, Membership.Status.FORMER)
+        self.assertEqual(self.active_membership.ended_at.isoformat(), "2026-08-30")
+        self.assertEqual(self.active_membership.joined_at, original_joined_at)
+        self.assertEqual(self.active_membership.membership_source, original_source)
+        self.assertEqual((self.business_person.first_name, self.business_person.last_name), original_person_name)
+        self.assertEqual(User.objects.count(), original_user_count)
+        self.assertEqual(StaffRoleAssignment.objects.count(), original_assignment_count)
+        self.assertEqual(
+            set(response.data.keys()),
+            {"id", "status", "joined_at", "ended_at", "membership_source", "created_at", "updated_at"},
+        )
+
+    def test_missing_ended_at_returns_400(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(self.get_url(self.business_person.id), data={}, format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("ended_at", response.data)
+
+    def test_invalid_ended_at_returns_400(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_url(self.business_person.id),
+            data={"ended_at": "not-a-date"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("ended_at", response.data)
+
+    def test_ended_at_before_joined_at_returns_400(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_url(self.business_person.id),
+            data={"ended_at": "2024-04-11"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("ended_at", response.data)
+
+    def test_client_cannot_control_status(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_url(self.business_person.id),
+            data={"ended_at": "2026-08-30", "status": "ACTIVE"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("status", response.data)
+
+    def test_client_cannot_change_joined_at(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_url(self.business_person.id),
+            data={"ended_at": "2026-08-30", "joined_at": "2020-01-01"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("joined_at", response.data)
+
+    def test_client_cannot_change_membership_source(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_url(self.business_person.id),
+            data={"ended_at": "2026-08-30", "membership_source": "OTHER"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("membership_source", response.data)
+
+    def test_client_cannot_assign_person(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_url(self.business_person.id),
+            data={"ended_at": "2026-08-30", "person": self.former_person.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("person", response.data)
+
+    def test_unknown_fields_are_rejected(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_url(self.business_person.id),
+            data={"ended_at": "2026-08-30", "unexpected": "value"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("unexpected", response.data)
+
+    def test_no_membership_returns_409(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_url(self.business_without_membership.id),
+            data={"ended_at": "2026-08-30"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 409)
+
+    def test_already_former_returns_409_and_preserves_ended_at(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_url(self.former_person.id),
+            data={"ended_at": "2026-08-30"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 409)
+        self.former_membership.refresh_from_db()
+        self.assertEqual(self.former_membership.ended_at.isoformat(), "2024-07-15")
+
+    def test_archived_business_person_returns_409(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_url(self.archived_business_person.id),
+            data={"ended_at": "2026-08-30"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 409)
+        self.archived_active_membership.refresh_from_db()
+        self.assertEqual(self.archived_active_membership.status, Membership.Status.ACTIVE)
+
+    def test_technical_person_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_url(self.technical_person.id),
+            data={"ended_at": "2026-08-30"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_nonexistent_person_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_url(999999),
+            data={"ended_at": "2026-08-30"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_end_membership_uses_select_for_update_inside_transaction(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_url(self.business_person.id),
+            data={"ended_at": "2026-08-30"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], "FORMER")
+
+    def test_repeated_end_returns_controlled_conflict(self):
+        self.authenticate(self.admin_user)
+        first_response = self.client.post(
+            self.get_url(self.business_person.id),
+            data={"ended_at": "2026-08-30"},
+            format="json",
+        )
+        second_response = self.client.post(
+            self.get_url(self.business_person.id),
+            data={"ended_at": "2026-08-31"},
+            format="json",
+        )
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(second_response.status_code, 409)
+        self.active_membership.refresh_from_db()
+        self.assertEqual(self.active_membership.ended_at.isoformat(), "2026-08-30")
+
+    def test_overview_reflects_former_member_after_end_membership(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_url(self.business_person.id),
+            data={"ended_at": "2026-08-30"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        overview_response = self.client.get(f"/api/v1/people/{self.business_person.id}/overview/")
+        self.assertEqual(overview_response.status_code, 200)
+        self.assertEqual(overview_response.data["relationship"]["type"], "FORMER_MEMBER")
+        self.assertEqual(overview_response.data["relationship"]["label"], "Former Member")
+        self.assertEqual(overview_response.data["membership"]["status"], "FORMER")
+        self.assertEqual(overview_response.data["membership"]["ended_at"], "2026-08-30")

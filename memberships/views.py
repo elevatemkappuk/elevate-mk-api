@@ -1,12 +1,13 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
-from rest_framework import generics, status
+from rest_framework import generics, serializers, status
 from rest_framework.exceptions import APIException, NotFound
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from memberships.models import Membership
-from memberships.serializers import MakeMembershipSerializer, MembershipSerializer
+from memberships.serializers import EndMembershipSerializer, MakeMembershipSerializer, MembershipSerializer
 from people.models import Person
 from staff_access.models import StaffRole
 from staff_access.permissions import HasActiveStaffRoleCodes
@@ -182,6 +183,108 @@ class PersonMembershipView(generics.GenericAPIView):
         if membership is None:
             raise NotFound("Not found.")
         return membership
+
+    def get_business_person_or_404(self, *, select_for_update=False):
+        queryset = Person.objects.business()
+        if select_for_update:
+            queryset = queryset.select_for_update()
+        person = queryset.filter(pk=self.kwargs["person_id"]).first()
+        if person is None:
+            raise NotFound("Not found.")
+        return person
+
+
+class EndMembershipConflict(APIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "Membership cannot be ended for this person."
+    default_code = "membership_end_conflict"
+
+
+class PersonMembershipEndView(generics.GenericAPIView):
+    serializer_class = MembershipSerializer
+    permission_classes = [IsAuthenticated, HasMembershipWriteAccess]
+
+    @extend_schema(
+        operation_id="people_membership_end",
+        summary="End Membership for CRM Person",
+        description=(
+            "Transitions an existing ACTIVE Membership for a CRM-visible BUSINESS Person to FORMER. "
+            "The existing Membership row is reused. Joined date and membership source are preserved. "
+            "Archived BUSINESS people are rejected for lifecycle changes. "
+            "People without Membership and already-FORMER memberships return 409."
+        ),
+        request=EndMembershipSerializer,
+        parameters=[
+            OpenApiParameter(
+                name="person_id",
+                type=int,
+                location=OpenApiParameter.PATH,
+                description="Primary key of a CRM-visible BUSINESS Person.",
+                required=True,
+            )
+        ],
+        responses={
+            200: MembershipSerializer,
+            400: OpenApiResponse(description="Invalid request body or end date."),
+            401: OpenApiResponse(description="Authentication credentials were not provided."),
+            403: OpenApiResponse(description="You do not have a permitted active staff role."),
+            404: OpenApiResponse(description="No CRM-visible BUSINESS Person matches the supplied ID."),
+            409: OpenApiResponse(
+                description="There is no eligible active membership to end, or the person is archived."
+            ),
+        },
+        tags=["People", "Membership"],
+        examples=[
+            OpenApiExample(
+                "End membership request",
+                value={"ended_at": "2026-08-30"},
+                request_only=True,
+            ),
+            OpenApiExample(
+                "End membership response",
+                value={
+                    "id": 9,
+                    "status": "FORMER",
+                    "joined_at": "2024-04-12",
+                    "ended_at": "2026-08-30",
+                    "membership_source": "STAFF",
+                    "created_at": "2026-08-30T12:00:00Z",
+                    "updated_at": "2026-08-30T13:00:00Z",
+                },
+                response_only=True,
+            ),
+        ],
+    )
+    def post(self, request, *args, **kwargs):
+        input_serializer = EndMembershipSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+
+        try:
+            with transaction.atomic():
+                person = self.get_business_person_or_404(select_for_update=True)
+
+                if person.archived_at is not None:
+                    raise EndMembershipConflict("Archived people cannot receive membership lifecycle changes.")
+
+                membership = Membership.objects.select_for_update().filter(person=person).first()
+                if membership is None:
+                    raise EndMembershipConflict("There is no active membership to end for this person.")
+
+                if membership.status == Membership.Status.FORMER:
+                    raise EndMembershipConflict("This membership is already former.")
+
+                membership.status = Membership.Status.FORMER
+                membership.ended_at = input_serializer.validated_data["ended_at"]
+                try:
+                    membership.full_clean()
+                except DjangoValidationError as error:
+                    raise serializers.ValidationError(error.message_dict)
+                membership.save(update_fields=["status", "ended_at", "updated_at"])
+        except IntegrityError:
+            raise EndMembershipConflict("This membership could not be ended because its state changed.")
+
+        serializer = self.get_serializer(membership)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
     def get_business_person_or_404(self, *, select_for_update=False):
         queryset = Person.objects.business()

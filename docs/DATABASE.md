@@ -206,6 +206,7 @@ Currently implemented rules:
 - Membership is independent from Django `is_staff` / `is_superuser`
 - No Membership is auto-created when a `Person`, `User`, or staff assignment is created
 - Creating a Membership does not create a `User` or alter `StaffRoleAssignment`
+- Ending a Membership reuses the same Membership row and does not modify `Person`, `User`, or `StaffRoleAssignment`
 - No rejoin-history model exists yet
 - Relationship labels such as Contact, Active Member, and Former Member are derived later rather than stored
 - The CRM Person Overview projection derives relationship classification from Membership and does not persist `relationship_type`, `relationship_status`, or `is_member`

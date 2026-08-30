@@ -59,6 +59,7 @@ Currently implemented Elevate endpoints:
 - `GET /api/v1/people/{person_id}/`
 - `GET /api/v1/people/{person_id}/membership/`
 - `POST /api/v1/people/{person_id}/membership/`
+- `POST /api/v1/people/{person_id}/membership/end/`
 - `GET /api/v1/people/{person_id}/overview/`
 
 No other Elevate API endpoints are currently implemented.
@@ -102,6 +103,7 @@ Current implementation is serializer-based and expects request bodies appropriat
 - `GET /api/v1/people/{person_id}/`: path parameter only
 - `GET /api/v1/people/{person_id}/membership/`: path parameter only
 - `POST /api/v1/people/{person_id}/membership/`: path parameter plus JSON body
+- `POST /api/v1/people/{person_id}/membership/end/`: path parameter plus JSON body
 - `GET /api/v1/people/{person_id}/overview/`: path parameter only
 
 The test suite exercises JSON requests for the auth endpoints.
@@ -627,6 +629,81 @@ Validation behavior:
 - invalid dates return `400 Bad Request`
 - invalid source values return `400 Bad Request`
 - client-controlled lifecycle fields are rejected rather than silently accepted
+
+## Endpoint: `POST /api/v1/people/{person_id}/membership/end/`
+Purpose:
+- Execute the explicit business action `End Membership` for an existing CRM-visible `BUSINESS` Person.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN` or `CRM_MANAGER` required
+- `CRM_VIEWER` is read-only and receives `403 Forbidden`
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+Request body:
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `ended_at` | date (`YYYY-MM-DD`) | yes | Business end date; must not be earlier than `joined_at` |
+
+Client must not supply:
+
+- `status`
+- `joined_at`
+- `membership_source`
+- `person`
+- `id`
+- `created_at`
+- `updated_at`
+
+Lifecycle behavior:
+
+- valid transition is `ACTIVE -> FORMER`
+- the existing Membership row is preserved
+- `joined_at` is preserved
+- `membership_source` is preserved
+- `status` is changed to `FORMER`
+- `ended_at` is set from the request
+
+Successful response:
+
+- Status: `200 OK`
+- Response body uses the standard Membership read representation
+
+Example request:
+```json
+{
+  "ended_at": "2026-08-30"
+}
+```
+
+Example response:
+```json
+{
+  "id": 9,
+  "status": "FORMER",
+  "joined_at": "2024-04-12",
+  "ended_at": "2026-08-30",
+  "membership_source": "STAFF",
+  "created_at": "2026-08-30T12:00:00Z",
+  "updated_at": "2026-08-30T13:00:00Z"
+}
+```
+
+Conflict behavior:
+
+- BUSINESS person with no Membership -> `409 Conflict`
+- Membership already `FORMER` -> `409 Conflict`
+- archived BUSINESS person -> `409 Conflict`
+- `TECHNICAL` Person -> `404 Not Found`
+- nonexistent Person -> `404 Not Found`
+
+Independence:
+
+- does not create or modify `Person`
+- does not create or modify `User`
+- does not create or modify `StaffRoleAssignment`
 
 ## Endpoint: `GET /api/v1/people/{person_id}/overview/`
 Purpose:
