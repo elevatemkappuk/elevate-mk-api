@@ -27,7 +27,7 @@ Local development URLs when running `manage.py runserver` on the default port:
 - People endpoint: `http://localhost:8000/api/v1/people/`
 - Person detail endpoint: `http://localhost:8000/api/v1/people/{person_id}/`
 - Person membership endpoint: `http://localhost:8000/api/v1/people/{person_id}/membership/`
-- Person 360 endpoint: `http://localhost:8000/api/v1/people/{person_id}/360/`
+- Person overview endpoint: `http://localhost:8000/api/v1/people/{person_id}/overview/`
 
 Environment-relative URL patterns:
 
@@ -41,7 +41,7 @@ Environment-relative URL patterns:
 - People endpoint: `{BASE_URL}/api/v1/people/`
 - Person detail endpoint: `{BASE_URL}/api/v1/people/{person_id}/`
 - Person membership endpoint: `{BASE_URL}/api/v1/people/{person_id}/membership/`
-- Person 360 endpoint: `{BASE_URL}/api/v1/people/{person_id}/360/`
+- Person overview endpoint: `{BASE_URL}/api/v1/people/{person_id}/overview/`
 
 Deployment note:
 
@@ -58,7 +58,7 @@ Currently implemented Elevate endpoints:
 - `GET /api/v1/people/`
 - `GET /api/v1/people/{person_id}/`
 - `GET /api/v1/people/{person_id}/membership/`
-- `GET /api/v1/people/{person_id}/360/`
+- `GET /api/v1/people/{person_id}/overview/`
 
 No other Elevate API endpoints are currently implemented.
 
@@ -100,7 +100,7 @@ Current implementation is serializer-based and expects request bodies appropriat
 - `GET /api/v1/people/`: query parameters only
 - `GET /api/v1/people/{person_id}/`: path parameter only
 - `GET /api/v1/people/{person_id}/membership/`: path parameter only
-- `GET /api/v1/people/{person_id}/360/`: path parameter only
+- `GET /api/v1/people/{person_id}/overview/`: path parameter only
 
 The test suite exercises JSON requests for the auth endpoints.
 
@@ -544,13 +544,13 @@ Example response:
 }
 ```
 
-## Endpoint: `GET /api/v1/people/{person_id}/360/`
+## Endpoint: `GET /api/v1/people/{person_id}/overview/`
 Purpose:
 - Return a read-only CRM projection optimized for the Person 360 screen.
 
 Architectural distinction:
 
-- `/api/v1/people/{person_id}/360/` is an aggregate CRM read projection
+- `/api/v1/people/{person_id}/overview/` is an aggregate CRM read projection
 - `/api/v1/people/{person_id}/` remains the authoritative Person resource
 - `/api/v1/people/{person_id}/membership/` remains the authoritative Membership resource
 
@@ -614,7 +614,7 @@ Fields intentionally not exposed:
 - Django `is_staff`
 - Django `is_superuser`
 - staff role-assignment internals
-- speculative future Person 360 domain keys
+- speculative future Person Overview domain keys
 
 Example response for a contact:
 ```json

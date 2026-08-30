@@ -8,9 +8,9 @@ from rest_framework.permissions import IsAuthenticated
 from people.models import Person
 from people.serializers import (
     PaginatedPersonListSerializer,
-    Person360Serializer,
     PersonListQuerySerializer,
     PersonListSerializer,
+    PersonOverviewSerializer,
 )
 from staff_access.models import StaffRole
 from staff_access.permissions import HasActiveStaffRoleCodes
@@ -189,14 +189,14 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
         return self.get_business_people_queryset()
 
 
-class Person360DetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
-    serializer_class = Person360Serializer
+class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
+    serializer_class = PersonOverviewSerializer
     permission_classes = [IsAuthenticated, HasPeopleAccess]
     lookup_url_kwarg = "person_id"
 
     @extend_schema(
-        operation_id="people_360_retrieve",
-        summary="Retrieve CRM Person 360 projection",
+        operation_id="people_overview_retrieve",
+        summary="Retrieve CRM Person overview projection",
         description=(
             "Returns a read-only aggregate CRM projection for a single BUSINESS Person. "
             "The response composes the authoritative Person resource plus optional Membership data. "
@@ -214,7 +214,7 @@ class Person360DetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView)
             )
         ],
         responses={
-            200: Person360Serializer,
+            200: PersonOverviewSerializer,
             401: OpenApiResponse(description="Authentication credentials were not provided."),
             403: OpenApiResponse(description="You do not have a permitted active staff role."),
             404: OpenApiResponse(
@@ -224,7 +224,7 @@ class Person360DetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView)
         tags=["People"],
         examples=[
             OpenApiExample(
-                "Person 360 active member",
+                "Person overview active member",
                 value={
                     "person": {
                         "id": 14,

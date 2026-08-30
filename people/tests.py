@@ -511,31 +511,31 @@ class PeopleApiTests(TestCase):
 
 
 @override_settings(ROOT_URLCONF="config.urls")
-class Person360ApiTests(TestCase):
+class PersonOverviewApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
-        self.url_template = "/api/v1/people/{person_id}/360/"
+        self.url_template = "/api/v1/people/{person_id}/overview/"
 
         self.non_staff_user = User.objects.create_user(
-            email="nonstaff-360@example.com",
+            email="nonstaff-overview@example.com",
             password="testpass123",
             person_first_name="Non",
             person_last_name="Staff",
         )
         self.admin_user = User.objects.create_user(
-            email="admin-360@example.com",
+            email="admin-overview@example.com",
             password="testpass123",
             person_first_name="Admin",
             person_last_name="User",
         )
         self.manager_user = User.objects.create_user(
-            email="manager-360@example.com",
+            email="manager-overview@example.com",
             password="testpass123",
             person_first_name="Manager",
             person_last_name="User",
         )
         self.viewer_user = User.objects.create_user(
-            email="viewer-360@example.com",
+            email="viewer-overview@example.com",
             password="testpass123",
             person_first_name="Viewer",
             person_last_name="User",

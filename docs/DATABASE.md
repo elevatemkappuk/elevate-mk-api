@@ -207,7 +207,7 @@ Currently implemented rules:
 - No Membership is auto-created when a `Person`, `User`, or staff assignment is created
 - No rejoin-history model exists yet
 - Relationship labels such as Contact, Active Member, and Former Member are derived later rather than stored
-- The CRM Person 360 projection derives relationship classification from Membership and does not persist `relationship_type`, `relationship_status`, or `is_member`
+- The CRM Person Overview projection derives relationship classification from Membership and does not persist `relationship_type`, `relationship_status`, or `is_member`
 
 Consciously deferred:
 

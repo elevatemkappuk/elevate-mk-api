@@ -86,7 +86,7 @@ class PersonRelationshipSerializer(serializers.Serializer):
     label = serializers.CharField()
 
 
-class Person360Serializer(serializers.Serializer):
+class PersonOverviewSerializer(serializers.Serializer):
     person = PersonListSerializer(source="*")
     relationship = serializers.SerializerMethodField()
     membership = serializers.SerializerMethodField()
