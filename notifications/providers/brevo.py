@@ -1,4 +1,5 @@
 import logging
+import json
 from dataclasses import dataclass
 
 from brevo import Brevo
@@ -55,6 +56,7 @@ class BrevoTransactionalEmailProvider:
         html_content=None,
     ):
         self._validate_configuration()
+        template_id = self._normalize_template_id(template_id)
         if template_id is None and not (subject and html_content):
             raise TransactionalEmailConfigurationError(
                 "A template ID or a subject with HTML content is required for transactional email delivery."
@@ -88,11 +90,14 @@ class BrevoTransactionalEmailProvider:
         try:
             result = Brevo(api_key=self.api_key).transactional_emails.send_transac_email(**request)
         except Exception as error:
+            error_code, error_message = self._safe_error_details(error)
             logger.error(
-                "Brevo transactional email delivery failed. template_id=%s error_type=%s status_code=%s",
-                template_id,
-                type(error).__name__,
+                "Brevo transactional email delivery failed. status=%s code=%s message=%s template_id=%s payload_fields=%s",
                 getattr(error, "status_code", None),
+                error_code,
+                error_message,
+                template_id,
+                ",".join(sorted(request.keys())),
             )
             raise TransactionalEmailError("Transactional email delivery failed.") from error
 
@@ -121,3 +126,31 @@ class BrevoTransactionalEmailProvider:
             raise TransactionalEmailConfigurationError(
                 "Transactional email delivery is not configured: " + ", ".join(missing)
             )
+
+    @staticmethod
+    def _normalize_template_id(template_id):
+        if template_id in (None, ""):
+            return None
+        try:
+            template_id = int(template_id)
+        except (TypeError, ValueError) as error:
+            raise TransactionalEmailConfigurationError(
+                "Transactional email template ID must be a positive integer."
+            ) from error
+        if template_id <= 0:
+            raise TransactionalEmailConfigurationError(
+                "Transactional email template ID must be a positive integer."
+            )
+        return template_id
+
+    @staticmethod
+    def _safe_error_details(error):
+        body = getattr(error, "body", None)
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError:
+                body = None
+        if not isinstance(body, dict):
+            return None, None
+        return body.get("code"), body.get("message")
