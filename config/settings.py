@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     'staff_access',
     'memberships',
     'professional_profiles',
+    'skills',
     'corsheaders',
     'rest_framework',
     'drf_spectacular',

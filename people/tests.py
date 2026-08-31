@@ -12,6 +12,7 @@ from people.models import Person
 from professional_profiles.models import Industry, ProfessionalProfile
 from rest_framework.test import APIClient
 from staff_access.models import StaffRole, StaffRoleAssignment
+from skills.models import PersonSkill, Skill
 
 
 class PersonModelTests(TestCase):
@@ -614,6 +615,14 @@ class PersonOverviewApiTests(TestCase):
             job_title="Advisor",
             company="Archive Ltd",
         )
+        self.accounting_skill = Skill.objects.get(slug="accounting")
+        self.software_development_skill = Skill.objects.get(slug="software-development")
+        self.inactive_skill = Skill.objects.create(
+            name="Legacy Skill",
+            slug="legacy-overview-skill",
+            display_order=5,
+            is_active=False,
+        )
 
     def authenticate(self, user):
         self.client.force_authenticate(user=user)
@@ -672,8 +681,50 @@ class PersonOverviewApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.data["membership"])
         self.assertIsNone(response.data["professional_profile"])
+        self.assertEqual(response.data["skills"], [])
         self.assertEqual(response.data["relationship"]["type"], "CONTACT")
         self.assertEqual(response.data["relationship"]["label"], "Contact")
+
+    def test_skills_are_included_in_deterministic_order_when_present(self):
+        PersonSkill.objects.create(person=self.active_member_person, skill=self.software_development_skill)
+        PersonSkill.objects.create(person=self.active_member_person, skill=self.accounting_skill)
+
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.active_member_person.id))
+
+        self.assertEqual(
+            response.data["skills"],
+            [
+                {
+                    "id": self.accounting_skill.id,
+                    "name": "Accounting",
+                    "slug": "accounting",
+                },
+                {
+                    "id": self.software_development_skill.id,
+                    "name": "Software Development",
+                    "slug": "software-development",
+                },
+            ],
+        )
+
+    def test_inactive_assigned_skills_are_omitted_from_overview(self):
+        PersonSkill.objects.create(person=self.active_member_person, skill=self.accounting_skill)
+        PersonSkill.objects.create(person=self.active_member_person, skill=self.inactive_skill)
+
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.active_member_person.id))
+
+        self.assertEqual(
+            response.data["skills"],
+            [
+                {
+                    "id": self.accounting_skill.id,
+                    "name": "Accounting",
+                    "slug": "accounting",
+                }
+            ],
+        )
 
     def test_active_membership_returns_active_member_projection(self):
         self.authenticate(self.admin_user)
@@ -727,12 +778,24 @@ class PersonOverviewApiTests(TestCase):
         )
 
     def test_archived_business_person_still_returns_professional_profile(self):
+        PersonSkill.objects.create(person=self.archived_business_person, skill=self.accounting_skill)
+
         self.authenticate(self.admin_user)
         response = self.client.get(self.get_url(self.archived_business_person.id))
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["professional_profile"]["id"], self.archived_profile.id)
         self.assertIsNone(response.data["professional_profile"]["industry"])
+        self.assertEqual(
+            response.data["skills"],
+            [
+                {
+                    "id": self.accounting_skill.id,
+                    "name": "Accounting",
+                    "slug": "accounting",
+                }
+            ],
+        )
 
     def test_technical_person_still_returns_404_even_with_professional_profile(self):
         technical_industry = Industry.objects.create(name="Operations", slug="operations")
@@ -787,6 +850,8 @@ class PersonOverviewApiTests(TestCase):
         )
 
     def test_response_does_not_expose_auth_staff_or_speculative_fields(self):
+        PersonSkill.objects.create(person=self.active_member_person, skill=self.accounting_skill)
+
         self.authenticate(self.admin_user)
         response = self.client.get(self.get_url(self.active_member_person.id))
 
@@ -795,16 +860,18 @@ class PersonOverviewApiTests(TestCase):
         self.assertNotIn("is_staff", response.data["person"])
         self.assertNotIn("is_superuser", response.data["person"])
         self.assertNotIn("staff_roles", response.data)
+        self.assertEqual(list(response.data["skills"][0].keys()), ["id", "name", "slug"])
         self.assertNotIn("person", response.data["membership"])
         self.assertNotIn("interests", response.data)
-        self.assertNotIn("skills", response.data)
         self.assertNotIn("tags", response.data)
         self.assertNotIn("notes", response.data)
         self.assertNotIn("engagement", response.data)
 
     def test_endpoint_uses_compact_query_shape(self):
+        PersonSkill.objects.create(person=self.active_member_person, skill=self.accounting_skill)
+
         self.authenticate(self.admin_user)
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             response = self.client.get(self.get_url(self.active_member_person.id))
 
         self.assertEqual(response.status_code, 200)

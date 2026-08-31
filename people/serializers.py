@@ -6,6 +6,8 @@ from memberships.serializers import MembershipSerializer
 from people.models import Person
 from professional_profiles.models import ProfessionalProfile
 from professional_profiles.serializers import ProfessionalProfileSerializer
+from skills.models import Skill
+from skills.serializers import SkillSummarySerializer
 
 
 class PersonListQuerySerializer(serializers.Serializer):
@@ -93,6 +95,7 @@ class PersonOverviewSerializer(serializers.Serializer):
     relationship = serializers.SerializerMethodField()
     membership = serializers.SerializerMethodField()
     professional_profile = serializers.SerializerMethodField()
+    skills = serializers.SerializerMethodField()
 
     @extend_schema_field(PersonRelationshipSerializer)
     def get_relationship(self, instance):
@@ -126,6 +129,10 @@ class PersonOverviewSerializer(serializers.Serializer):
             return None
         return ProfessionalProfileSerializer(professional_profile).data
 
+    @extend_schema_field(SkillSummarySerializer(many=True))
+    def get_skills(self, instance):
+        return SkillSummarySerializer(self._get_active_skills(instance), many=True).data
+
     def _get_membership(self, instance):
         try:
             return instance.membership
@@ -137,3 +144,15 @@ class PersonOverviewSerializer(serializers.Serializer):
             return instance.professional_profile
         except ProfessionalProfile.DoesNotExist:
             return None
+
+    def _get_active_skills(self, instance):
+        prefetched_person_skills = getattr(instance, "active_person_skills", None)
+        if prefetched_person_skills is not None:
+            return [person_skill.skill for person_skill in prefetched_person_skills]
+
+        return list(
+            Skill.objects.filter(
+                person_skills__person=instance,
+                is_active=True,
+            ).order_by("display_order", "name", "id")
+        )

@@ -1,6 +1,6 @@
 # Elevate MK API
 Status: Living Documentation
-Last Updated: 2026-08-30
+Last Updated: 2026-08-31
 
 ## Scope
 This document describes the HTTP API currently implemented in the Django server repository.
@@ -9,7 +9,7 @@ This document describes the HTTP API currently implemented in the Django server 
 Current base path and versioning convention:
 
 - Base prefix: `/api/v1/`
-- Current Elevate API routes are defined in `accounts.urls`, `people.urls`, `memberships.urls`, and `professional_profiles.urls`, all mounted from `config.urls`
+- Current Elevate API routes are defined in `accounts.urls`, `people.urls`, `memberships.urls`, `professional_profiles.urls`, and `skills.urls`, all mounted from `config.urls`
 - Machine-readable OpenAPI schema: `/api/schema/`
 - Swagger UI: `/api/docs/`
 - ReDoc: `/api/redoc/`
@@ -25,8 +25,10 @@ Local development URLs when running `manage.py runserver` on the default port:
 - Logout endpoint: `http://localhost:8000/api/v1/auth/logout/`
 - Me endpoint: `http://localhost:8000/api/v1/auth/me/`
 - People endpoint: `http://localhost:8000/api/v1/people/`
+- Skills endpoint: `http://localhost:8000/api/v1/skills/`
 - Industries endpoint: `http://localhost:8000/api/v1/industries/`
 - Person detail endpoint: `http://localhost:8000/api/v1/people/{person_id}/`
+- Person skills endpoint: `http://localhost:8000/api/v1/people/{person_id}/skills/`
 - Person membership endpoint: `http://localhost:8000/api/v1/people/{person_id}/membership/`
 - Person professional profile endpoint: `http://localhost:8000/api/v1/people/{person_id}/professional-profile/`
 - Person overview endpoint: `http://localhost:8000/api/v1/people/{person_id}/overview/`
@@ -41,8 +43,10 @@ Environment-relative URL patterns:
 - Logout endpoint: `{BASE_URL}/api/v1/auth/logout/`
 - Me endpoint: `{BASE_URL}/api/v1/auth/me/`
 - People endpoint: `{BASE_URL}/api/v1/people/`
+- Skills endpoint: `{BASE_URL}/api/v1/skills/`
 - Industries endpoint: `{BASE_URL}/api/v1/industries/`
 - Person detail endpoint: `{BASE_URL}/api/v1/people/{person_id}/`
+- Person skills endpoint: `{BASE_URL}/api/v1/people/{person_id}/skills/`
 - Person membership endpoint: `{BASE_URL}/api/v1/people/{person_id}/membership/`
 - Person professional profile endpoint: `{BASE_URL}/api/v1/people/{person_id}/professional-profile/`
 - Person overview endpoint: `{BASE_URL}/api/v1/people/{person_id}/overview/`
@@ -60,8 +64,10 @@ Currently implemented Elevate endpoints:
 - `POST /api/v1/auth/logout/`
 - `GET /api/v1/auth/me/`
 - `GET /api/v1/people/`
+- `GET /api/v1/skills/`
 - `GET /api/v1/industries/`
 - `GET /api/v1/people/{person_id}/`
+- `GET /api/v1/people/{person_id}/skills/`
 - `GET /api/v1/people/{person_id}/membership/`
 - `POST /api/v1/people/{person_id}/membership/`
 - `POST /api/v1/people/{person_id}/membership/end/`
@@ -106,8 +112,10 @@ Current implementation is serializer-based and expects request bodies appropriat
 - `POST /api/v1/auth/logout/`: no request fields are required
 - `GET /api/v1/auth/me/`: no request body
 - `GET /api/v1/people/`: query parameters only
+- `GET /api/v1/skills/`: no request body
 - `GET /api/v1/industries/`: no request body
 - `GET /api/v1/people/{person_id}/`: path parameter only
+- `GET /api/v1/people/{person_id}/skills/`: path parameter only
 - `GET /api/v1/people/{person_id}/membership/`: path parameter only
 - `POST /api/v1/people/{person_id}/membership/`: path parameter plus JSON body
 - `POST /api/v1/people/{person_id}/membership/end/`: path parameter plus JSON body
@@ -596,6 +604,96 @@ Example response:
 ]
 ```
 
+## Endpoint: `GET /api/v1/skills/`
+Purpose:
+- Return the active canonical Skill taxonomy for future CRM assignment UI and filtering.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` required
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+Behavior:
+
+- Only active Skills are returned
+- Results are ordered deterministically by `display_order`, `name`, then `id`
+- The endpoint is intentionally unpaginated because it is a small controlled lookup collection
+- Skill definitions are canonical taxonomy values and should be deactivated rather than treated as disposable
+
+Returned fields:
+
+- `id`
+- `name`
+- `slug`
+
+Fields intentionally not exposed:
+
+- `description`
+- `is_active`
+- `display_order`
+- `created_at`
+- `updated_at`
+
+Example response:
+```json
+[
+  {
+    "id": 1,
+    "name": "Accounting",
+    "slug": "accounting"
+  }
+]
+```
+
+## Endpoint: `GET /api/v1/people/{person_id}/skills/`
+Purpose:
+- Return the active assigned Skills for a single CRM-visible `BUSINESS` Person.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` required
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+People visibility rule:
+
+- The endpoint operates only within the CRM `BUSINESS` Person domain
+- Active and archived `BUSINESS` records are both retrievable by direct ID
+- `TECHNICAL` Person records are never returned
+- Requesting a `TECHNICAL` Person ID returns `404 Not Found`
+- A missing Person ID also returns `404 Not Found`
+- A `BUSINESS` Person with no Skills returns `200 OK` with `[]`
+
+Skill activity rule:
+
+- Only active Skill definitions appear in the response
+- If a `PersonSkill` references a Skill that is later deactivated, the relationship remains stored but is omitted from this normal CRM read
+
+Returned fields:
+
+- `id`
+- `name`
+- `slug`
+
+Fields intentionally not exposed:
+
+- `PersonSkill` internal IDs
+- assignment timestamps
+- `description`
+- proficiency, years, endorsement, or willingness metadata
+
+Example response:
+```json
+[
+  {
+    "id": 16,
+    "name": "Project Management",
+    "slug": "project-management"
+  }
+]
+```
+
 ## Endpoint: `POST /api/v1/people/{person_id}/membership/`
 Purpose:
 - Execute the explicit business action `Make Member` for an existing CRM-visible `BUSINESS` Person.
@@ -970,6 +1068,7 @@ Response structure:
 - `relationship`: derived CRM relationship classification
 - `membership`: Membership projection or `null`
 - `professional_profile`: ProfessionalProfile projection or `null`
+- `skills`: active Skill summary collection
 
 Relationship derivation:
 
@@ -1014,6 +1113,12 @@ Returned `professional_profile` fields when present:
 - `created_at`
 - `updated_at`
 
+Returned `skills` items when present:
+
+- `id`
+- `name`
+- `slug`
+
 Professional-profile behavior:
 
 - `professional_profile` is `null` when no ProfessionalProfile exists
@@ -1021,6 +1126,13 @@ Professional-profile behavior:
 - `career_stage` is returned as the stable stored code when present
 - ProfessionalProfile is current professional state, not employment history
 - ProfessionalProfile is independent of `User`, `Membership`, and Staff access
+
+Skills behavior:
+
+- `skills` is `[]` when the person has no active assigned Skills
+- only active Skill definitions appear in the overview projection
+- `PersonSkill` assignment internals are intentionally omitted
+- V1 Skills mean what a person can do; they do not imply interest, proficiency, years of experience, or willingness to participate
 
 Fields intentionally not exposed:
 
@@ -1052,7 +1164,8 @@ Example response for a contact:
     "label": "Contact"
   },
   "membership": null,
-  "professional_profile": null
+  "professional_profile": null,
+  "skills": []
 }
 ```
 

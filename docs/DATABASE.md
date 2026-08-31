@@ -1,6 +1,6 @@
 # Elevate MK Database
 Status: Living Documentation
-Last Updated: 2026-08-30
+Last Updated: 2026-08-31
 
 ## Scope
 This document describes the Elevate-owned database/domain structures currently implemented in the Django API codebase.
@@ -13,6 +13,8 @@ The current Elevate-owned models are:
 - `memberships.Membership`
 - `professional_profiles.Industry`
 - `professional_profiles.ProfessionalProfile`
+- `skills.Skill`
+- `skills.PersonSkill`
 - `staff_access.StaffRole`
 - `staff_access.StaffRoleAssignment`
 
@@ -27,6 +29,7 @@ Current rules:
 - `User` is the authentication account.
 - A `Person` may also have zero or one `ProfessionalProfile`.
 - A `ProfessionalProfile` may optionally reference one canonical `Industry`.
+- A `Person` may also have zero or many assigned `Skill` definitions through `PersonSkill`.
 
 Information deliberately stored on `Person` instead of `User`:
 
@@ -146,7 +149,7 @@ Currently implemented rules:
 
 Planned, not yet implemented:
 
-- Richer profile, membership, staff-role, interests, skills, tagging, notes, event, and engagement structures
+- Richer profile, membership, staff-role, interest, tagging, note, event, and engagement structures
 
 Future People-view filtering rules:
 
@@ -175,6 +178,25 @@ Current rules:
 - Industry records should be deactivated rather than treated as disposable taxonomy values
 - new or changed Industry assignments must use an active Industry
 - an existing ProfessionalProfile may remain linked to an Industry that later becomes inactive
+
+## Skill Relationship
+Current relationship:
+
+```text
+Person 0..* PersonSkill *..1 Skill
+```
+
+Current rules:
+
+- Skill is a canonical taxonomy
+- PersonSkill is the assignment relationship
+- `unique(person, skill)` prevents duplicate assignment rows
+- Skills mean what a Person can do
+- Skills do not imply interest or willingness to participate
+- V1 Skills carry no proficiency, years-of-experience, ranking, verification, or endorsement metadata
+- inactive Skill definitions remain referentially valid through existing `PersonSkill` rows
+- inactive Skill definitions are excluded from normal active CRM reads
+- Skill definitions should be deactivated rather than treated as disposable taxonomy rows
 
 ## Model: `professional_profiles.Industry`
 Database table: `professional_profiles_industry`
@@ -236,6 +258,64 @@ Current implementation:
   - `LEADERSHIP`
   - `FOUNDER_BUSINESS_OWNER`
   - `OTHER`
+
+## Model: `skills.Skill`
+Database table: `skills_skill`
+
+Purpose:
+- Stores the canonical Skill taxonomy reusable across person assignment, filtering, onboarding, and analytics.
+
+### Fields
+| Field | Type | Null / Blank | Default / Automatic | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
+| `name` | `CharField(max_length=255)` | not null, `blank=False` | none | Required canonical label |
+| `slug` | `SlugField` | not null, `blank=False` | none | Required unique machine-readable identifier |
+| `description` | `TextField` | not null, `blank=True` | empty string | Optional description |
+| `is_active` | `BooleanField` | not null | `True` | Inactive values remain stored but are excluded from normal active CRM reads |
+| `display_order` | `PositiveIntegerField` | not null | `100` | Controls deterministic presentation order |
+| `created_at` | `DateTimeField` | not null | `auto_now_add=True` | Set automatically on create |
+| `updated_at` | `DateTimeField` | not null | `auto_now=True` | Updated automatically on save |
+
+### Constraints and Behavior
+Current implementation:
+
+- `slug` is unique
+- default ordering is `display_order`, `name`, `id`
+- the approved initial 27-row taxonomy is seeded by migration
+- canonical rows are updated by slug if they already exist
+- unrelated rows are not deleted by the seed migration
+- existing descriptions are preserved during canonical reseeding because no approved descriptions are seeded in V1
+
+## Model: `skills.PersonSkill`
+Database table: `skills_personskill`
+
+Purpose:
+- Stores the narrow Skill assignment relationship between a `Person` and a canonical `Skill`.
+
+### Fields
+| Field | Type | Null / Blank | Default / Automatic | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
+| `person` | `ForeignKey(people.Person)` | not null, `blank=False` | none | Required Person target |
+| `skill` | `ForeignKey(skills.Skill)` | not null, `blank=False` | none | Required canonical Skill target |
+| `created_at` | `DateTimeField` | not null | `auto_now_add=True` | Set automatically on create |
+
+### Constraints and Behavior
+Current implementation:
+
+- unique constraint on `person` + `skill`
+- `person` uses `PROTECT`, so deleting a referenced Person is blocked
+- `skill` uses `PROTECT`, so deleting a referenced Skill is blocked
+- default ordering is `person_id`, `skill_id`, `id`
+
+### Domain Rules
+Currently implemented rules:
+
+- a Person may have zero or many Skill assignments
+- the same Skill may belong to many different People
+- a Person must not receive the same Skill twice
+- the join intentionally carries no proficiency, years, source, notes, or endorsement metadata
 
 ## Model: `memberships.Membership`
 Database table: `memberships_membership`

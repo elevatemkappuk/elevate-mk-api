@@ -1,4 +1,4 @@
-from django.db.models import Q, Value
+from django.db.models import Prefetch, Q, Value
 from django.db.models.functions import Concat
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import generics
@@ -14,6 +14,7 @@ from people.serializers import (
 )
 from staff_access.models import StaffRole
 from staff_access.permissions import HasActiveStaffRoleCodes
+from skills.models import PersonSkill
 
 
 class PeoplePagination(PageNumberPagination):
@@ -199,11 +200,12 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
         summary="Retrieve CRM Person overview projection",
         description=(
             "Returns a read-only aggregate CRM projection for a single BUSINESS Person. "
-            "The response composes the authoritative Person resource plus optional Membership and ProfessionalProfile data. "
+            "The response composes the authoritative Person resource plus optional Membership, ProfessionalProfile, and Skill data. "
             "Archived BUSINESS records remain retrievable by direct ID. "
             "TECHNICAL persons are outside the CRM People domain and return 404. "
             "When no Membership exists, membership is null and relationship is derived as Contact. "
-            "When no ProfessionalProfile exists, professional_profile is null."
+            "When no ProfessionalProfile exists, professional_profile is null. "
+            "Only active Skill definitions appear in the overview skills collection."
         ),
         parameters=[
             OpenApiParameter(
@@ -267,6 +269,13 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
                         "created_at": "2026-08-30T11:30:00Z",
                         "updated_at": "2026-08-30T11:30:00Z",
                     },
+                    "skills": [
+                        {
+                            "id": 21,
+                            "name": "Software Development",
+                            "slug": "software-development",
+                        }
+                    ],
                 },
                 response_only=True,
             )
@@ -276,8 +285,13 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
         return super().get(request, *args, **kwargs)
 
     def get_queryset(self):
+        active_person_skills = PersonSkill.objects.select_related("skill").filter(
+            skill__is_active=True,
+        ).order_by("skill__display_order", "skill__name", "skill__id")
         return self.get_business_people_queryset().select_related(
             "membership",
             "professional_profile",
             "professional_profile__industry",
+        ).prefetch_related(
+            Prefetch("person_skills", queryset=active_person_skills, to_attr="active_person_skills")
         )
