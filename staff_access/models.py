@@ -30,6 +30,18 @@ class StaffRole(models.Model):
     def __str__(self):
         return f"{self.code} ({self.name})"
 
+    def save(self, *args, **kwargs):
+        if self.pk and self.code == self.CRM_ADMIN and not self.is_active:
+            from staff_access.services import ensure_staff_role_can_be_deactivated
+
+            ensure_staff_role_can_be_deactivated(self)
+        super().save(*args, **kwargs)
+
+    def deactivate(self):
+        from staff_access.services import deactivate_staff_role
+
+        return deactivate_staff_role(self)
+
 
 class StaffRoleAssignmentQuerySet(models.QuerySet):
     def active(self):
@@ -100,6 +112,18 @@ class StaffRoleAssignment(models.Model):
         return f"{self.user.email} -> {self.role.code}"
 
     def revoke(self, *, revoked_by=None, revoked_at=None):
+        from staff_access.services import revoke_staff_role_assignments
+
+        revoked_assignments = revoke_staff_role_assignments(
+            assignments=[self],
+            revoked_by=revoked_by,
+            revoked_at=revoked_at,
+        )
+        if revoked_assignments:
+            self.refresh_from_db()
+        return self
+
+    def _revoke_unchecked(self, *, revoked_by=None, revoked_at=None):
         self.is_active = False
         self.revoked_at = revoked_at or timezone.now()
         self.revoked_by = revoked_by

@@ -45,6 +45,17 @@ Current lifecycle behavior:
 - reactivation reuses the same assignment row
 - reactivation clears revocation fields and restores `is_active=True`
 - successful Django Admin grant, reactivation, and revocation also append immutable `AuditEvent` history rows
+
+### CRM Administrator Continuity
+
+At least one active operational `CRM_ADMIN` assignment must remain at all times.
+
+- an operational CRM administrator has an active, unrevoked `StaffRoleAssignment` linked to the active `CRM_ADMIN` `StaffRole`
+- Django `is_staff` and `is_superuser` do not satisfy this requirement
+- revoking the final active `CRM_ADMIN` assignment is rejected
+- self-revocation is permitted only when another active operational `CRM_ADMIN` assignment remains
+- the canonical `CRM_ADMIN` role definition cannot be deactivated
+- supported Staff Access revoke operations are serialized so concurrent revocations cannot remove every operational administrator
 - `actor_user` in those audit rows is the administrator performing the mutation, not the target user receiving or losing access
 
 No hard-delete lifecycle is implemented as the normal authorization path.

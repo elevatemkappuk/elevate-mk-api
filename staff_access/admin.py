@@ -5,7 +5,12 @@ from django.utils.translation import ngettext
 
 from audit.models import AuditEvent
 from audit.services import record_audit_event
+from staff_access.exceptions import FinalCrmAdminProtectionError
 from staff_access.models import StaffRole, StaffRoleAssignment
+from staff_access.services import (
+    ensure_staff_role_can_be_deactivated,
+    revoke_staff_role_assignments,
+)
 
 
 def record_staff_role_audit_event(*, action, actor_user, assignment):
@@ -34,6 +39,25 @@ class StaffRoleAdmin(admin.ModelAdmin):
     search_fields = ("code", "name")
     list_filter = ("is_active",)
     readonly_fields = ("created_at", "updated_at")
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        base_form = super().get_form(request, obj, change, **kwargs)
+
+        class StaffRoleAdminForm(base_form):
+            def clean(self):
+                cleaned_data = super().clean()
+                if (
+                    self.instance.pk
+                    and self.instance.code == StaffRole.CRM_ADMIN
+                    and cleaned_data.get("is_active") is False
+                ):
+                    try:
+                        ensure_staff_role_can_be_deactivated(self.instance)
+                    except FinalCrmAdminProtectionError as error:
+                        self.add_error("is_active", error)
+                return cleaned_data
+
+        return StaffRoleAdminForm
 
     def get_fields(self, request, obj=None):
         return ("code", "name", "is_active", "created_at", "updated_at")
@@ -140,21 +164,23 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
 
     @admin.action(description="Revoke selected staff role assignments")
     def revoke_selected_assignments(self, request, queryset):
-        updated = 0
-        with transaction.atomic():
-            assignments = list(
-                queryset.select_for_update()
-                .select_related("role")
-                .filter(is_active=True)
-            )
-            for assignment in assignments:
-                assignment.revoke(revoked_by=request.user)
-                record_staff_role_audit_event(
-                    action=AuditEvent.Action.STAFF_ROLE_REVOKED,
-                    actor_user=request.user,
-                    assignment=assignment,
+        try:
+            with transaction.atomic():
+                assignments = revoke_staff_role_assignments(
+                    assignments=queryset,
+                    revoked_by=request.user,
                 )
-                updated += 1
+                for assignment in assignments:
+                    record_staff_role_audit_event(
+                        action=AuditEvent.Action.STAFF_ROLE_REVOKED,
+                        actor_user=request.user,
+                        assignment=assignment,
+                    )
+        except FinalCrmAdminProtectionError as error:
+            self.message_user(request, error.messages[0], level=messages.ERROR)
+            return
+
+        updated = len(assignments)
         self.message_user(
             request,
             ngettext(

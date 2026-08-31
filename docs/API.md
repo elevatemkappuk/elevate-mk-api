@@ -412,6 +412,9 @@ Staff access lifecycle note:
 - successful reactivation of an existing revoked assignment row writes immutable `AuditEvent` action `STAFF_ROLE_REACTIVATED`
 - successful revocation writes immutable `AuditEvent` action `STAFF_ROLE_REVOKED`
 - rejected or no-op lifecycle attempts do not emit successful Staff Access audit events
+- at least one active operational `CRM_ADMIN` assignment must remain; Django `is_staff` and `is_superuser` do not count toward this requirement
+- revoking the final active `CRM_ADMIN` assignment, including through a Django Admin bulk action, is rejected atomically with no successful revocation audit event
+- the canonical `CRM_ADMIN` StaffRole cannot be deactivated
 - `/api/v1/auth/me/` response shape is unchanged
 
 ## Endpoint: `GET /api/v1/people/`
