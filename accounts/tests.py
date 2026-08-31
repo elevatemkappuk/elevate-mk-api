@@ -6,10 +6,14 @@ from django.core.management import call_command, get_commands
 from django.db import IntegrityError
 from django.test import TestCase, override_settings
 from django.conf import settings
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_encode
 from rest_framework.test import APIClient
 
 from accounts.models import User
 from people.models import Person
+from notifications.exceptions import TransactionalEmailError
 from staff_access.models import StaffRole, StaffRoleAssignment
 
 
@@ -437,3 +441,90 @@ class LocalBrowserDevelopmentConfigurationTests(TestCase):
         self.assertEqual(settings.CSRF_TRUSTED_ORIGINS, ["http://localhost:4200"])
         self.assertTrue(settings.SESSION_COOKIE_HTTPONLY)
         self.assertFalse(settings.CSRF_COOKIE_HTTPONLY)
+
+
+@override_settings(
+    ROOT_URLCONF="config.urls",
+    CRM_FRONTEND_URL="http://localhost:4200/",
+    BREVO_PASSWORD_RESET_TEMPLATE_ID="42",
+)
+class PasswordResetApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email="reset@example.com",
+            password="Old-password-123!",
+            person_first_name="Reset",
+            person_last_name="User",
+        )
+        self.request_url = "/api/v1/auth/password-reset/"
+        self.confirm_url = "/api/v1/auth/password-reset/confirm/"
+
+    @mock.patch("accounts.views.send_transactional_email")
+    def test_eligible_user_receives_generic_response_and_template_notification(self, send_email):
+        response = self.client.post(self.request_url, {"email": " RESET@EXAMPLE.COM "}, format="json")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["detail"], "If an account exists for that email address, password reset instructions have been sent.")
+        kwargs = send_email.call_args.kwargs
+        self.assertEqual(kwargs["recipient_email"], self.user.email)
+        self.assertEqual(kwargs["template_id"], "42")
+        self.assertTrue(kwargs["template_params"]["reset_url"].startswith("http://localhost:4200/reset-password/"))
+        self.assertNotIn("reset_url", response.data)
+
+    @mock.patch("accounts.views.send_transactional_email")
+    def test_ineligible_or_missing_users_have_the_same_response_without_delivery(self, send_email):
+        self.user.is_active = False
+        self.user.save(update_fields=["is_active"])
+        inactive = self.client.post(self.request_url, {"email": self.user.email}, format="json")
+        missing = self.client.post(self.request_url, {"email": "missing@example.com"}, format="json")
+
+        self.assertEqual(inactive.data, missing.data)
+        send_email.assert_not_called()
+
+    @mock.patch("accounts.views.send_transactional_email", side_effect=TransactionalEmailError("delivery failed"))
+    def test_delivery_failure_is_not_exposed(self, _send_email):
+        response = self.client.post(self.request_url, {"email": self.user.email}, format="json")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("delivery", str(response.data).lower())
+
+    def test_valid_token_resets_password_once_and_writes_safe_audit_event(self):
+        uid = urlsafe_base64_encode(force_bytes(self.user.pk))
+        token = default_token_generator.make_token(self.user)
+        response = self.client.post(self.confirm_url, {
+            "uid": uid, "token": token, "new_password": "New-password-123!", "confirm_password": "New-password-123!",
+        }, format="json")
+
+        self.assertEqual(response.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.check_password("Old-password-123!"))
+        self.assertTrue(self.user.check_password("New-password-123!"))
+        event = AuditEvent.objects.get(action=AuditEvent.Action.PASSWORD_RESET)
+        self.assertIsNone(event.actor_user)
+        self.assertNotIn("password", str(event.metadata).lower())
+        self.assertNotIn(token, str(event.metadata))
+        repeated = self.client.post(self.confirm_url, {
+            "uid": uid, "token": token, "new_password": "Another-password-123!", "confirm_password": "Another-password-123!",
+        }, format="json")
+        self.assertEqual(repeated.data["code"], "invalid_password_reset_token")
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.PASSWORD_RESET).count(), 1)
+
+    def test_invalid_token_and_inactive_account_use_controlled_response(self):
+        uid = urlsafe_base64_encode(force_bytes(self.user.pk))
+        invalid = self.client.post(self.confirm_url, {"uid": uid, "token": "invalid", "new_password": "New-password-123!", "confirm_password": "New-password-123!"}, format="json")
+        self.user.is_active = False
+        self.user.save(update_fields=["is_active"])
+        inactive = self.client.post(self.confirm_url, {"uid": uid, "token": default_token_generator.make_token(self.user), "new_password": "New-password-123!", "confirm_password": "New-password-123!"}, format="json")
+
+        self.assertEqual(invalid.data, inactive.data)
+        self.assertEqual(invalid.data["code"], "invalid_password_reset_token")
+
+    def test_password_mismatch_and_validators_are_enforced(self):
+        uid = urlsafe_base64_encode(force_bytes(self.user.pk))
+        token = default_token_generator.make_token(self.user)
+        mismatch = self.client.post(self.confirm_url, {"uid": uid, "token": token, "new_password": "New-password-123!", "confirm_password": "different"}, format="json")
+        weak = self.client.post(self.confirm_url, {"uid": uid, "token": token, "new_password": "123", "confirm_password": "123"}, format="json")
+
+        self.assertIn("confirm_password", mismatch.data)
+        self.assertIn("new_password", weak.data)

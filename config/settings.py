@@ -158,6 +158,10 @@ REST_FRAMEWORK = {
         "accounts.authentication.SessionAuthentication",
     ],
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_THROTTLE_RATES": {
+        "password_reset": "5/hour",
+        "password_reset_confirm": "10/hour",
+    },
 }
 
 SPECTACULAR_SETTINGS = {
@@ -175,3 +179,4 @@ BREVO_SENDER_NAME = env("BREVO_SENDER_NAME", default="")
 BREVO_REPLY_TO_EMAIL = env("BREVO_REPLY_TO_EMAIL", default="")
 BREVO_REPLY_TO_NAME = env("BREVO_REPLY_TO_NAME", default="")
 BREVO_PASSWORD_RESET_TEMPLATE_ID = env("BREVO_PASSWORD_RESET_TEMPLATE_ID", default="")
+CRM_FRONTEND_URL = env("CRM_FRONTEND_URL", default="http://localhost:4200")

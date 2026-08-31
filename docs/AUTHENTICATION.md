@@ -44,6 +44,19 @@ Current behavior:
 - The `createsuperuser` workflow uses Django's secure password prompt and password validation flow.
 - The auth API never returns password fields.
 
+## Password Recovery
+
+Password recovery uses Django's standard stateless password-reset token generator and the Brevo transactional-email service.
+
+- `POST /api/v1/auth/password-reset/` accepts an email address and always returns the same generic response for well-formed input
+- reset delivery is limited to active accounts with usable passwords; inactive and unknown accounts are not disclosed
+- the reset URL is generated from backend-only `CRM_FRONTEND_URL` and has the form `/reset-password/<uid>/<token>`
+- `POST /api/v1/auth/password-reset/confirm/` validates the token, account status, and Django password validators before changing the password
+- invalid, expired, consumed, malformed, and inactive-account links return the same controlled response
+- a successful recovery writes `PASSWORD_RESET` audit history without passwords, tokens, URLs, email payloads, or provider responses
+- recovery does not log the user in; existing sessions naturally fail Django's password session-hash validation after the password changes
+- token expiry uses Django's `PASSWORD_RESET_TIMEOUT` setting and its framework default when not configured here
+
 ## Transactional Email Infrastructure
 
 The backend uses the Brevo Transactional Email API for server-to-server transactional delivery. It does not use SMTP.

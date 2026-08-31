@@ -2030,6 +2030,24 @@ Example response for a contact:
 }
 ```
 
+## Endpoint: `POST /api/v1/auth/password-reset/`
+Purpose: request password-reset instructions for an eligible account.
+
+- Public and CSRF-protected; rate limited to five requests per hour per client.
+- Accepts `{ "email": "person@example.com" }` and normalizes email before lookup.
+- Every well-formed request returns `200 OK` with `If an account exists for that email address, password reset instructions have been sent.`
+- Only active Users with usable passwords receive a Brevo template email. Unknown, inactive, and unusable-password accounts receive the same response without delivery.
+- The reset URL is generated from backend-only `CRM_FRONTEND_URL`; no URL, token, or provider data appears in the response.
+
+## Endpoint: `POST /api/v1/auth/password-reset/confirm/`
+Purpose: set a new password from a valid reset URL.
+
+- Public and CSRF-protected; rate limited to ten requests per hour per client.
+- Accepts `uid`, `token`, `new_password`, and `confirm_password`.
+- Django password validators remain authoritative. A mismatch and validator failures return structured `400` validation errors.
+- Invalid, expired, consumed, malformed, missing-user, and inactive-account links return `400` with `code: invalid_password_reset_token` and a controlled detail message.
+- Successful reset returns `200 OK`, writes `PASSWORD_RESET` audit history, invalidates existing authenticated sessions through Django's password session-hash mechanism, and does not log the user in.
+
 ## Planned API Areas
 Planned, not yet implemented:
 
