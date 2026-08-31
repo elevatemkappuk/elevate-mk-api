@@ -10,6 +10,8 @@ from professional_profiles.models import ProfessionalProfile
 from professional_profiles.serializers import ProfessionalProfileSerializer
 from skills.models import Skill
 from skills.serializers import SkillSummarySerializer
+from tags.models import Tag
+from tags.serializers import TagSummarySerializer
 
 
 class PersonListQuerySerializer(serializers.Serializer):
@@ -99,6 +101,7 @@ class PersonOverviewSerializer(serializers.Serializer):
     professional_profile = serializers.SerializerMethodField()
     skills = serializers.SerializerMethodField()
     interests = serializers.SerializerMethodField()
+    tags = serializers.SerializerMethodField()
 
     @extend_schema_field(PersonRelationshipSerializer)
     def get_relationship(self, instance):
@@ -140,6 +143,10 @@ class PersonOverviewSerializer(serializers.Serializer):
     def get_interests(self, instance):
         return InterestSummarySerializer(self._get_active_interests(instance), many=True).data
 
+    @extend_schema_field(TagSummarySerializer(many=True))
+    def get_tags(self, instance):
+        return TagSummarySerializer(self._get_active_tags(instance), many=True).data
+
     def _get_membership(self, instance):
         try:
             return instance.membership
@@ -172,6 +179,19 @@ class PersonOverviewSerializer(serializers.Serializer):
         return list(
             Interest.objects.filter(
                 person_interests__person=instance,
+                is_active=True,
+            ).order_by("display_order", "name", "id")
+        )
+
+    def _get_active_tags(self, instance):
+        prefetched_person_tags = getattr(instance, "active_person_tags", None)
+        if prefetched_person_tags is not None:
+            return [person_tag.tag for person_tag in prefetched_person_tags]
+
+        return list(
+            Tag.objects.filter(
+                person_tags__person=instance,
+                person_tags__is_active=True,
                 is_active=True,
             ).order_by("display_order", "name", "id")
         )

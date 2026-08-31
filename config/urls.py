@@ -29,4 +29,5 @@ urlpatterns = [
     path('api/v1/', include('professional_profiles.urls')),
     path('api/v1/', include('skills.urls')),
     path('api/v1/', include('interests.urls')),
+    path('api/v1/', include('tags.urls')),
 ]

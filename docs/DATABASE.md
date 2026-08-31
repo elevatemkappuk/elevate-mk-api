@@ -17,6 +17,8 @@ The current Elevate-owned models are:
 - `skills.PersonSkill`
 - `interests.Interest`
 - `interests.PersonInterest`
+- `tags.Tag`
+- `tags.PersonTag`
 - `staff_access.StaffRole`
 - `staff_access.StaffRoleAssignment`
 
@@ -32,6 +34,8 @@ Current rules:
 - A `Person` may also have zero or one `ProfessionalProfile`.
 - A `ProfessionalProfile` may optionally reference one canonical `Industry`.
 - A `Person` may also have zero or many assigned `Skill` definitions through `PersonSkill`.
+- A `Person` may also have zero or many assigned `Interest` definitions through `PersonInterest`.
+- A `Person` may also have zero or many internal CRM `Tag` classifications through `PersonTag`.
 - A `Person` may also have zero or many assigned `Interest` definitions through `PersonInterest`.
 
 Information deliberately stored on `Person` instead of `User`:
@@ -187,7 +191,6 @@ Current relationship:
 
 ```text
 Person 0..* PersonSkill *..1 Skill
-Person 0..* PersonInterest *..1 Interest
 ```
 
 Current rules:
@@ -222,6 +225,28 @@ Current rules:
 - inactive Interest definitions are excluded from normal active CRM reads
 - Interest definitions should be deactivated rather than treated as disposable taxonomy rows
 - removing a `PersonInterest` deletes only the relationship row, not the canonical `Interest`
+
+## Tag Relationship
+Current relationship:
+
+```text
+Person 0..* PersonTag *..1 Tag
+```
+
+Current rules:
+
+- Tag is an internal CRM classification taxonomy
+- PersonTag is the lifecycle-preserving assignment relationship
+- `unique(person, tag)` prevents duplicate rows and future re-assignment should reactivate the same row
+- active assignments have `removed_by = null` and `removed_at = null`
+- inactive assignments retain the row plus removal attribution
+- Tags are distinct from Skills and Interests
+- Tags do not imply completed workflows, tasks, reminders, availability, or commitment
+- inactive Tag definitions and inactive assignments are excluded from normal CRM reads
+- Tag definitions should be deactivated rather than treated as disposable taxonomy rows
+- future removal/reassignment workflows should preserve the PersonTag row rather than creating a second row
+- Tags must not be exposed on public or member-facing surfaces
+- explicit AuditEvent integration is deferred
 
 ## Model: `professional_profiles.Industry`
 Database table: `professional_profiles_industry`
@@ -403,6 +428,76 @@ Currently implemented rules:
 - the join intentionally carries no direction, ranking, source, notes, willingness, availability, or commitment metadata
 - inactive `Interest` rows may continue to have stored `PersonInterest` references until explicitly removed
 - deleting a `PersonInterest` does not delete the canonical `Interest`
+
+## Model: `tags.Tag`
+Database table: `tags_tag`
+
+Purpose:
+- Stores the canonical internal CRM Tag taxonomy used for staff classification and relationship management.
+
+### Fields
+| Field | Type | Null / Blank | Default / Automatic | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
+| `name` | `CharField(max_length=255)` | not null, `blank=False` | none | Required canonical label |
+| `slug` | `SlugField` | not null, `blank=False` | none | Required unique stable identifier |
+| `description` | `TextField` | not null, `blank=True` | empty string | Optional description |
+| `is_active` | `BooleanField` | not null | `True` | Inactive values remain stored but are excluded from normal active CRM reads |
+| `display_order` | `PositiveIntegerField` | not null | `100` | Controls deterministic presentation order |
+| `created_at` | `DateTimeField` | not null | `auto_now_add=True` | Set automatically on create |
+| `updated_at` | `DateTimeField` | not null | `auto_now=True` | Updated automatically on save |
+
+### Constraints and Behavior
+Current implementation:
+
+- `slug` is unique
+- default ordering is `display_order`, `name`, `id`
+- the approved initial 9-row taxonomy is seeded by migration
+- canonical rows are updated by slug if they already exist
+- unrelated rows are not deleted by the seed migration
+- existing descriptions are preserved during canonical reseeding because no approved descriptions are seeded in V1
+
+## Model: `tags.PersonTag`
+Database table: `tags_persontag`
+
+Purpose:
+- Stores the lifecycle-preserving internal CRM Tag assignment relationship between a `Person` and a canonical `Tag`.
+
+### Fields
+| Field | Type | Null / Blank | Default / Automatic | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
+| `person` | `ForeignKey(people.Person)` | not null, `blank=False` | none | Required Person target |
+| `tag` | `ForeignKey(tags.Tag)` | not null, `blank=False` | none | Required canonical Tag target |
+| `is_active` | `BooleanField` | not null | `True` | Active lifecycle flag |
+| `assigned_by` | `ForeignKey(accounts.User)` | not null, `blank=False` | none | Required assigning actor |
+| `assigned_at` | `DateTimeField` | not null | `timezone.now` | Assignment timestamp |
+| `removed_by` | `ForeignKey(accounts.User)` | `null=True`, `blank=True` | none | Required when inactive |
+| `removed_at` | `DateTimeField` | `null=True`, `blank=True` | none | Required when inactive |
+
+### Constraints and Behavior
+Current implementation:
+
+- unique constraint on `person` + `tag`
+- `person` uses `PROTECT`, so deleting a referenced Person is blocked
+- `tag` uses `PROTECT`, so deleting a referenced Tag is blocked
+- `assigned_by` uses `PROTECT`, so deleting the assigning actor is blocked while referenced
+- `removed_by` uses `PROTECT`, so deleting the removing actor is blocked while referenced
+- default ordering is `person_id`, `tag_id`, `id`
+- model validation enforces:
+  - active assignments must have `removed_by` and `removed_at` unset
+  - inactive assignments must have both `removed_by` and `removed_at` populated
+
+### Domain Rules
+Currently implemented rules:
+
+- a Person may have zero or many Tag assignments
+- the same Tag may belong to many different People
+- a Person must not receive the same Tag twice
+- PersonTag preserves assignment/removal lifecycle state rather than behaving like a disposable join row
+- future removal of a Tag assignment should not delete historical lifecycle state
+- future re-assignment should reactivate the same row instead of creating a new row
+- normal CRM reads expose only active PersonTag assignments whose Tag definition is active
 
 ## Model: `memberships.Membership`
 Database table: `memberships_membership`

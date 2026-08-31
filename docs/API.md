@@ -9,7 +9,7 @@ This document describes the HTTP API currently implemented in the Django server 
 Current base path and versioning convention:
 
 - Base prefix: `/api/v1/`
-- Current Elevate API routes are defined in `accounts.urls`, `people.urls`, `memberships.urls`, `professional_profiles.urls`, `skills.urls`, and `interests.urls`, all mounted from `config.urls`
+- Current Elevate API routes are defined in `accounts.urls`, `people.urls`, `memberships.urls`, `professional_profiles.urls`, `skills.urls`, `interests.urls`, and `tags.urls`, all mounted from `config.urls`
 - Machine-readable OpenAPI schema: `/api/schema/`
 - Swagger UI: `/api/docs/`
 - ReDoc: `/api/redoc/`
@@ -27,10 +27,12 @@ Local development URLs when running `manage.py runserver` on the default port:
 - People endpoint: `http://localhost:8000/api/v1/people/`
 - Skills endpoint: `http://localhost:8000/api/v1/skills/`
 - Interests endpoint: `http://localhost:8000/api/v1/interests/`
+- Tags endpoint: `http://localhost:8000/api/v1/tags/`
 - Industries endpoint: `http://localhost:8000/api/v1/industries/`
 - Person detail endpoint: `http://localhost:8000/api/v1/people/{person_id}/`
 - Person skills endpoint: `http://localhost:8000/api/v1/people/{person_id}/skills/`
 - Person interests endpoint: `http://localhost:8000/api/v1/people/{person_id}/interests/`
+- Person tags endpoint: `http://localhost:8000/api/v1/people/{person_id}/tags/`
 - Person skill removal endpoint: `http://localhost:8000/api/v1/people/{person_id}/skills/{skill_id}/`
 - Person membership endpoint: `http://localhost:8000/api/v1/people/{person_id}/membership/`
 - Person professional profile endpoint: `http://localhost:8000/api/v1/people/{person_id}/professional-profile/`
@@ -48,10 +50,12 @@ Environment-relative URL patterns:
 - People endpoint: `{BASE_URL}/api/v1/people/`
 - Skills endpoint: `{BASE_URL}/api/v1/skills/`
 - Interests endpoint: `{BASE_URL}/api/v1/interests/`
+- Tags endpoint: `{BASE_URL}/api/v1/tags/`
 - Industries endpoint: `{BASE_URL}/api/v1/industries/`
 - Person detail endpoint: `{BASE_URL}/api/v1/people/{person_id}/`
 - Person skills endpoint: `{BASE_URL}/api/v1/people/{person_id}/skills/`
 - Person interests endpoint: `{BASE_URL}/api/v1/people/{person_id}/interests/`
+- Person tags endpoint: `{BASE_URL}/api/v1/people/{person_id}/tags/`
 - Person skill removal endpoint: `{BASE_URL}/api/v1/people/{person_id}/skills/{skill_id}/`
 - Person membership endpoint: `{BASE_URL}/api/v1/people/{person_id}/membership/`
 - Person professional profile endpoint: `{BASE_URL}/api/v1/people/{person_id}/professional-profile/`
@@ -72,10 +76,12 @@ Currently implemented Elevate endpoints:
 - `GET /api/v1/people/`
 - `GET /api/v1/skills/`
 - `GET /api/v1/interests/`
+- `GET /api/v1/tags/`
 - `GET /api/v1/industries/`
 - `GET /api/v1/people/{person_id}/`
 - `GET /api/v1/people/{person_id}/skills/`
 - `GET /api/v1/people/{person_id}/interests/`
+- `GET /api/v1/people/{person_id}/tags/`
 - `POST /api/v1/people/{person_id}/interests/`
 - `DELETE /api/v1/people/{person_id}/interests/{interest_id}/`
 - `POST /api/v1/people/{person_id}/skills/`
@@ -126,10 +132,12 @@ Current implementation is serializer-based and expects request bodies appropriat
 - `GET /api/v1/people/`: query parameters only
 - `GET /api/v1/skills/`: no request body
 - `GET /api/v1/interests/`: no request body
+- `GET /api/v1/tags/`: no request body
 - `GET /api/v1/industries/`: no request body
 - `GET /api/v1/people/{person_id}/`: path parameter only
 - `GET /api/v1/people/{person_id}/skills/`: path parameter only
 - `GET /api/v1/people/{person_id}/interests/`: path parameter only
+- `GET /api/v1/people/{person_id}/tags/`: path parameter only
 - `POST /api/v1/people/{person_id}/interests/`: path parameter plus JSON body
 - `DELETE /api/v1/people/{person_id}/interests/{interest_id}/`: path parameters only
 - `POST /api/v1/people/{person_id}/skills/`: path parameter plus JSON body
@@ -666,6 +674,50 @@ Example response:
 ]
 ```
 
+## Endpoint: `GET /api/v1/tags/`
+Purpose:
+- Return the active canonical Tag taxonomy for internal CRM classification.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` required
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+Behavior:
+
+- Only active Tags are returned
+- Results are ordered deterministically by `display_order`, `name`, then `id`
+- The endpoint is intentionally unpaginated because it is a small controlled lookup collection
+- Tag definitions are canonical taxonomy values and should be deactivated rather than treated as disposable
+- Tags are internal CRM classification data, not member-facing profile fields
+- Tags do not imply a completed workflow, task, reminder, availability, or commitment
+
+Returned fields:
+
+- `id`
+- `name`
+- `slug`
+
+Fields intentionally not exposed:
+
+- `description`
+- `is_active`
+- `display_order`
+- `created_at`
+- `updated_at`
+
+Example response:
+```json
+[
+  {
+    "id": 1,
+    "name": "Potential Speaker",
+    "slug": "potential-speaker"
+  }
+]
+```
+
 ## Endpoint: `GET /api/v1/skills/`
 Purpose:
 - Return the active canonical Skill taxonomy for future CRM assignment UI and filtering.
@@ -801,6 +853,60 @@ Example response:
     "id": 5,
     "name": "Technology",
     "slug": "technology"
+  }
+]
+```
+
+## Endpoint: `GET /api/v1/people/{person_id}/tags/`
+Purpose:
+- Return the active internal CRM Tags for a single CRM-visible `BUSINESS` Person.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` required
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+People visibility rule:
+
+- The endpoint operates only within the CRM `BUSINESS` Person domain
+- Active and archived `BUSINESS` records are both retrievable by direct ID
+- `TECHNICAL` Person records are never returned
+- Requesting a `TECHNICAL` Person ID returns `404 Not Found`
+- A missing Person ID also returns `404 Not Found`
+- A `BUSINESS` Person with no active Tags returns `200 OK` with `[]`
+
+Tag-read behavior:
+
+- only active `PersonTag` assignments whose canonical `Tag` definition is also active appear in the response
+- inactive `PersonTag` rows remain stored for lifecycle/audit purposes but are omitted from this normal CRM read
+- inactive `Tag` definitions remain stored and may still be referenced historically, but are omitted from this normal CRM read
+- response order is deterministic by `display_order`, `name`, then `id`
+- Tags are internal CRM classification data and are not member-facing profile fields
+
+Returned fields:
+
+- `id`
+- `name`
+- `slug`
+
+Fields intentionally not exposed:
+
+- `PersonTag` internal IDs
+- `is_active`
+- `assigned_by`
+- `assigned_at`
+- `removed_by`
+- `removed_at`
+- `description`
+
+Example response:
+```json
+[
+  {
+    "id": 8,
+    "name": "VIP",
+    "slug": "vip"
   }
 ]
 ```
@@ -1357,6 +1463,7 @@ Response structure:
 - `professional_profile`: ProfessionalProfile projection or `null`
 - `skills`: active Skill summary collection
 - `interests`: active Interest summary collection
+- `tags`: active Tag summary collection
 
 Relationship derivation:
 
@@ -1413,6 +1520,12 @@ Returned `interests` items when present:
 - `name`
 - `slug`
 
+Returned `tags` items when present:
+
+- `id`
+- `name`
+- `slug`
+
 Professional-profile behavior:
 
 - `professional_profile` is `null` when no ProfessionalProfile exists
@@ -1436,6 +1549,14 @@ Interests behavior:
 - only active Interest definitions appear in the overview projection
 - `PersonInterest` assignment internals are intentionally omitted
 - V1 Interests mean what a person is interested in; they do not imply willingness, availability, mentoring direction, or commitment
+
+Tags behavior:
+
+- `tags` is `[]` when the person has no active Tag classifications
+- only active `PersonTag` assignments whose `Tag` definition is active appear in the overview projection
+- `PersonTag` lifecycle metadata is intentionally omitted from the compact overview projection
+- Tags are internal CRM classification data, not member-facing profile attributes
+- V1 Tags do not imply tasks, reminders, workflow completion, availability, or commitment
 
 Fields intentionally not exposed:
 
@@ -1469,7 +1590,8 @@ Example response for a contact:
   "membership": null,
   "professional_profile": null,
   "skills": [],
-  "interests": []
+  "interests": [],
+  "tags": []
 }
 ```
 

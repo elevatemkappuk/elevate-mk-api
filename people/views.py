@@ -16,6 +16,7 @@ from people.serializers import (
 from staff_access.models import StaffRole
 from staff_access.permissions import HasActiveStaffRoleCodes
 from skills.models import PersonSkill
+from tags.models import PersonTag
 
 
 class PeoplePagination(PageNumberPagination):
@@ -201,12 +202,13 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
         summary="Retrieve CRM Person overview projection",
         description=(
             "Returns a read-only aggregate CRM projection for a single BUSINESS Person. "
-            "The response composes the authoritative Person resource plus optional Membership, ProfessionalProfile, Skill, and Interest data. "
+            "The response composes the authoritative Person resource plus optional Membership, ProfessionalProfile, Skill, Interest, and Tag data. "
             "Archived BUSINESS records remain retrievable by direct ID. "
             "TECHNICAL persons are outside the CRM People domain and return 404. "
             "When no Membership exists, membership is null and relationship is derived as Contact. "
             "When no ProfessionalProfile exists, professional_profile is null. "
-            "Only active Skill and Interest definitions appear in the overview collections."
+            "Only active Skill, Interest, and Tag definitions appear in the overview collections. "
+            "Tags are internal CRM classification data and do not expose lifecycle metadata in this projection."
         ),
         parameters=[
             OpenApiParameter(
@@ -284,6 +286,13 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
                             "slug": "technology",
                         }
                     ],
+                    "tags": [
+                        {
+                            "id": 8,
+                            "name": "VIP",
+                            "slug": "vip",
+                        }
+                    ],
                 },
                 response_only=True,
             )
@@ -299,6 +308,10 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
         active_person_interests = PersonInterest.objects.select_related("interest").filter(
             interest__is_active=True,
         ).order_by("interest__display_order", "interest__name", "interest__id")
+        active_person_tags = PersonTag.objects.select_related("tag").filter(
+            is_active=True,
+            tag__is_active=True,
+        ).order_by("tag__display_order", "tag__name", "tag__id")
         return self.get_business_people_queryset().select_related(
             "membership",
             "professional_profile",
@@ -306,4 +319,5 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
         ).prefetch_related(
             Prefetch("person_skills", queryset=active_person_skills, to_attr="active_person_skills"),
             Prefetch("person_interests", queryset=active_person_interests, to_attr="active_person_interests"),
+            Prefetch("person_tags", queryset=active_person_tags, to_attr="active_person_tags"),
         )

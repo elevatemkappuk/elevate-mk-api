@@ -14,6 +14,7 @@ from professional_profiles.models import Industry, ProfessionalProfile
 from rest_framework.test import APIClient
 from staff_access.models import StaffRole, StaffRoleAssignment
 from skills.models import PersonSkill, Skill
+from tags.models import PersonTag, Tag
 
 
 class PersonModelTests(TestCase):
@@ -633,6 +634,14 @@ class PersonOverviewApiTests(TestCase):
             display_order=5,
             is_active=False,
         )
+        self.potential_mentor_tag = Tag.objects.get(slug="potential-mentor")
+        self.vip_tag = Tag.objects.get(slug="vip")
+        self.inactive_tag = Tag.objects.create(
+            name="Legacy Tag",
+            slug="legacy-overview-tag",
+            display_order=5,
+            is_active=False,
+        )
 
     def authenticate(self, user):
         self.client.force_authenticate(user=user)
@@ -693,6 +702,7 @@ class PersonOverviewApiTests(TestCase):
         self.assertIsNone(response.data["professional_profile"])
         self.assertEqual(response.data["skills"], [])
         self.assertEqual(response.data["interests"], [])
+        self.assertEqual(response.data["tags"], [])
         self.assertEqual(response.data["relationship"]["type"], "CONTACT")
         self.assertEqual(response.data["relationship"]["label"], "Contact")
 
@@ -778,6 +788,55 @@ class PersonOverviewApiTests(TestCase):
             ],
         )
 
+    def test_tags_are_included_in_deterministic_order_when_present(self):
+        PersonTag.objects.create(person=self.active_member_person, tag=self.vip_tag, assigned_by=self.admin_user)
+        PersonTag.objects.create(person=self.active_member_person, tag=self.potential_mentor_tag, assigned_by=self.admin_user)
+
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.active_member_person.id))
+
+        self.assertEqual(
+            response.data["tags"],
+            [
+                {
+                    "id": self.potential_mentor_tag.id,
+                    "name": "Potential Mentor",
+                    "slug": "potential-mentor",
+                },
+                {
+                    "id": self.vip_tag.id,
+                    "name": "VIP",
+                    "slug": "vip",
+                },
+            ],
+        )
+
+    def test_inactive_assigned_tags_are_omitted_from_overview(self):
+        PersonTag.objects.create(person=self.active_member_person, tag=self.vip_tag, assigned_by=self.admin_user)
+        PersonTag.objects.create(
+            person=self.active_member_person,
+            tag=self.potential_mentor_tag,
+            assigned_by=self.admin_user,
+            is_active=False,
+            removed_by=self.manager_user,
+            removed_at=timezone.now(),
+        )
+        PersonTag.objects.create(person=self.active_member_person, tag=self.inactive_tag, assigned_by=self.admin_user)
+
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.active_member_person.id))
+
+        self.assertEqual(
+            response.data["tags"],
+            [
+                {
+                    "id": self.vip_tag.id,
+                    "name": "VIP",
+                    "slug": "vip",
+                }
+            ],
+        )
+
     def test_active_membership_returns_active_member_projection(self):
         self.authenticate(self.admin_user)
         response = self.client.get(self.get_url(self.active_member_person.id))
@@ -832,6 +891,7 @@ class PersonOverviewApiTests(TestCase):
     def test_archived_business_person_still_returns_professional_profile(self):
         PersonSkill.objects.create(person=self.archived_business_person, skill=self.accounting_skill)
         PersonInterest.objects.create(person=self.archived_business_person, interest=self.networking_interest)
+        PersonTag.objects.create(person=self.archived_business_person, tag=self.vip_tag, assigned_by=self.admin_user)
 
         self.authenticate(self.admin_user)
         response = self.client.get(self.get_url(self.archived_business_person.id))
@@ -856,6 +916,16 @@ class PersonOverviewApiTests(TestCase):
                     "id": self.networking_interest.id,
                     "name": "Networking",
                     "slug": "networking",
+                }
+            ],
+        )
+        self.assertEqual(
+            response.data["tags"],
+            [
+                {
+                    "id": self.vip_tag.id,
+                    "name": "VIP",
+                    "slug": "vip",
                 }
             ],
         )
@@ -915,6 +985,7 @@ class PersonOverviewApiTests(TestCase):
     def test_response_does_not_expose_auth_staff_or_speculative_fields(self):
         PersonSkill.objects.create(person=self.active_member_person, skill=self.accounting_skill)
         PersonInterest.objects.create(person=self.active_member_person, interest=self.networking_interest)
+        PersonTag.objects.create(person=self.active_member_person, tag=self.vip_tag, assigned_by=self.admin_user)
 
         self.authenticate(self.admin_user)
         response = self.client.get(self.get_url(self.active_member_person.id))
@@ -926,17 +997,18 @@ class PersonOverviewApiTests(TestCase):
         self.assertNotIn("staff_roles", response.data)
         self.assertEqual(list(response.data["skills"][0].keys()), ["id", "name", "slug"])
         self.assertEqual(list(response.data["interests"][0].keys()), ["id", "name", "slug"])
+        self.assertEqual(list(response.data["tags"][0].keys()), ["id", "name", "slug"])
         self.assertNotIn("person", response.data["membership"])
-        self.assertNotIn("tags", response.data)
         self.assertNotIn("notes", response.data)
         self.assertNotIn("engagement", response.data)
 
     def test_endpoint_uses_compact_query_shape(self):
         PersonSkill.objects.create(person=self.active_member_person, skill=self.accounting_skill)
         PersonInterest.objects.create(person=self.active_member_person, interest=self.networking_interest)
+        PersonTag.objects.create(person=self.active_member_person, tag=self.vip_tag, assigned_by=self.admin_user)
 
         self.authenticate(self.admin_user)
-        with self.assertNumQueries(4):
+        with self.assertNumQueries(5):
             response = self.client.get(self.get_url(self.active_member_person.id))
 
         self.assertEqual(response.status_code, 200)
