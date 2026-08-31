@@ -6,6 +6,7 @@ from django.utils import timezone
 from unittest.mock import patch
 
 from accounts.models import User
+from audit.models import AuditEvent
 from memberships.models import Membership
 from people.models import Person
 from professional_profiles.models import ProfessionalProfile
@@ -395,6 +396,7 @@ class SkillApiTests(TestCase):
         self.authenticate(self.viewer_user)
         response = self.client.post(self.get_person_skills_url(self.active_business_person.id), {"skill": self.accounting.id}, format="json")
         self.assertEqual(response.status_code, 403)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.SKILL_ASSIGNED).count(), 0)
 
     def test_assign_skill_manager_receives_201(self):
         self.authenticate(self.manager_user)
@@ -417,6 +419,26 @@ class SkillApiTests(TestCase):
             {"id": self.project_management.id, "name": "Project Management", "slug": "project-management"},
         )
 
+    def test_successful_skill_assignment_writes_skill_assigned_audit_event(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_skills_url(self.active_business_person.id),
+            {"skill": self.project_management.id},
+            format="json",
+        )
+
+        person_skill = PersonSkill.objects.get(person=self.active_business_person, skill=self.project_management)
+        event = AuditEvent.objects.get(action=AuditEvent.Action.SKILL_ASSIGNED)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(event.actor_user, self.admin_user)
+        self.assertEqual(event.entity_type, "PersonSkill")
+        self.assertEqual(event.entity_id, str(person_skill.id))
+        self.assertEqual(
+            event.metadata,
+            {"person_id": str(self.active_business_person.id), "skill_id": str(self.project_management.id)},
+        )
+        self.assertEqual(event.changes, {"assigned": {"from": False, "to": True}})
+
     def test_assign_skill_duplicate_returns_409_and_does_not_create_second_row(self):
         PersonSkill.objects.create(person=self.active_business_person, skill=self.accounting)
 
@@ -425,6 +447,7 @@ class SkillApiTests(TestCase):
 
         self.assertEqual(response.status_code, 409)
         self.assertEqual(PersonSkill.objects.filter(person=self.active_business_person, skill=self.accounting).count(), 1)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.SKILL_ASSIGNED).count(), 0)
 
     def test_assign_skill_inactive_skill_returns_400(self):
         self.authenticate(self.admin_user)
@@ -432,6 +455,7 @@ class SkillApiTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("skill", response.data)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.SKILL_ASSIGNED).count(), 0)
 
     def test_assign_skill_nonexistent_skill_returns_400(self):
         self.authenticate(self.admin_user)
@@ -444,6 +468,7 @@ class SkillApiTests(TestCase):
         self.authenticate(self.admin_user)
         response = self.client.post(self.get_person_skills_url(self.archived_business_person.id), {"skill": self.accounting.id}, format="json")
         self.assertEqual(response.status_code, 409)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.SKILL_ASSIGNED).count(), 0)
 
     def test_assign_skill_technical_person_returns_404(self):
         self.authenticate(self.admin_user)
@@ -497,6 +522,22 @@ class SkillApiTests(TestCase):
             )
 
         self.assertEqual(response.status_code, 409)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.SKILL_ASSIGNED).count(), 0)
+
+    def test_skill_assignment_rolls_back_when_audit_write_fails(self):
+        self.authenticate(self.admin_user)
+        with patch("skills.views.record_audit_event", side_effect=RuntimeError("audit down")):
+            response = self.client.post(
+                self.get_person_skills_url(self.active_business_person.id),
+                {"skill": self.project_management.id},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertFalse(
+            PersonSkill.objects.filter(person=self.active_business_person, skill=self.project_management).exists()
+        )
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.SKILL_ASSIGNED).count(), 0)
 
     def test_remove_skill_anonymous_receives_401(self):
         PersonSkill.objects.create(person=self.active_business_person, skill=self.accounting)
@@ -514,6 +555,7 @@ class SkillApiTests(TestCase):
         self.authenticate(self.viewer_user)
         response = self.client.delete(self.get_person_skill_detail_url(self.active_business_person.id, self.accounting.id))
         self.assertEqual(response.status_code, 403)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.SKILL_REMOVED).count(), 0)
 
     def test_remove_skill_manager_receives_204(self):
         PersonSkill.objects.create(person=self.active_business_person, skill=self.accounting)
@@ -528,7 +570,7 @@ class SkillApiTests(TestCase):
         self.assertEqual(response.status_code, 204)
 
     def test_remove_skill_existing_assignment_returns_204_and_deletes_person_skill_only(self):
-        PersonSkill.objects.create(person=self.active_business_person, skill=self.accounting)
+        person_skill = PersonSkill.objects.create(person=self.active_business_person, skill=self.accounting)
         other_person = Person.objects.create(first_name="Other", last_name="Worker")
         PersonSkill.objects.create(person=other_person, skill=self.accounting)
 
@@ -539,6 +581,15 @@ class SkillApiTests(TestCase):
         self.assertFalse(PersonSkill.objects.filter(person=self.active_business_person, skill=self.accounting).exists())
         self.assertTrue(Skill.objects.filter(pk=self.accounting.id).exists())
         self.assertTrue(PersonSkill.objects.filter(person=other_person, skill=self.accounting).exists())
+        event = AuditEvent.objects.get(action=AuditEvent.Action.SKILL_REMOVED)
+        self.assertEqual(event.actor_user, self.admin_user)
+        self.assertEqual(event.entity_type, "PersonSkill")
+        self.assertEqual(event.entity_id, str(person_skill.id))
+        self.assertEqual(
+            event.metadata,
+            {"person_id": str(self.active_business_person.id), "skill_id": str(self.accounting.id)},
+        )
+        self.assertEqual(event.changes, {"assigned": {"from": True, "to": False}})
 
     def test_remove_skill_inactive_skill_assignment_can_be_removed(self):
         PersonSkill.objects.create(person=self.active_business_person, skill=self.inactive_skill)
@@ -548,11 +599,17 @@ class SkillApiTests(TestCase):
 
         self.assertEqual(response.status_code, 204)
         self.assertFalse(PersonSkill.objects.filter(person=self.active_business_person, skill=self.inactive_skill).exists())
+        event = AuditEvent.objects.get(action=AuditEvent.Action.SKILL_REMOVED)
+        self.assertEqual(
+            event.metadata,
+            {"person_id": str(self.active_business_person.id), "skill_id": str(self.inactive_skill.id)},
+        )
 
     def test_remove_skill_missing_assignment_returns_404(self):
         self.authenticate(self.admin_user)
         response = self.client.delete(self.get_person_skill_detail_url(self.active_business_person.id, self.accounting.id))
         self.assertEqual(response.status_code, 404)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.SKILL_REMOVED).count(), 0)
 
     def test_remove_skill_nonexistent_skill_returns_404(self):
         self.authenticate(self.admin_user)
@@ -565,6 +622,7 @@ class SkillApiTests(TestCase):
         self.authenticate(self.admin_user)
         response = self.client.delete(self.get_person_skill_detail_url(self.archived_business_person.id, self.accounting.id))
         self.assertEqual(response.status_code, 409)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.SKILL_REMOVED).count(), 0)
 
     def test_remove_skill_technical_person_returns_404(self):
         self.authenticate(self.admin_user)
@@ -575,6 +633,19 @@ class SkillApiTests(TestCase):
         self.authenticate(self.admin_user)
         response = self.client.delete(self.get_person_skill_detail_url(999999, self.accounting.id))
         self.assertEqual(response.status_code, 404)
+
+    def test_skill_removal_rolls_back_when_audit_write_fails(self):
+        PersonSkill.objects.create(person=self.active_business_person, skill=self.accounting)
+
+        self.authenticate(self.admin_user)
+        with patch("skills.views.record_audit_event", side_effect=RuntimeError("audit down")):
+            response = self.client.delete(
+                self.get_person_skill_detail_url(self.active_business_person.id, self.accounting.id)
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertTrue(PersonSkill.objects.filter(person=self.active_business_person, skill=self.accounting).exists())
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.SKILL_REMOVED).count(), 0)
 
     def test_assignment_appears_in_overview_without_changing_membership_or_professional_profile(self):
         self.authenticate(self.admin_user)

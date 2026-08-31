@@ -1078,6 +1078,8 @@ Validation and conflict behavior:
 - duplicate assignments return `409 Conflict`
 - the endpoint creates only the relationship row; it does not edit canonical Interest taxonomy data
 - Interest assignment means interest only and does not imply willingness, availability, mentoring direction, or commitment
+- successful assignment writes an immutable `AuditEvent` with action `INTEREST_ASSIGNED`
+- rejected operations do not emit a successful mutation audit event
 
 Example request:
 ```json
@@ -1111,6 +1113,8 @@ Delete rules:
 - missing assignments return `404 Not Found`
 - inactive Interest assignments may still be removed by known `interest_id`
 - the endpoint deletes only the `PersonInterest` relationship; it does not delete or deactivate the canonical Interest
+- successful removal writes an immutable `AuditEvent` with action `INTEREST_REMOVED`
+- rejected operations do not emit a successful mutation audit event
 
 Successful response:
 
@@ -1158,6 +1162,8 @@ Validation and conflict behavior:
 - the route Person remains authoritative and cannot be overridden from the body
 - existing `unique(person, skill)` remains authoritative for duplicate prevention
 - duplicate races are converted from `IntegrityError` into controlled `409 Conflict`
+- successful assignment writes an immutable `AuditEvent` with action `SKILL_ASSIGNED`
+- rejected operations do not emit a successful mutation audit event
 
 Successful response:
 
@@ -1205,6 +1211,8 @@ Removal semantics:
 - does not delete or deactivate the canonical Skill definition
 - does not modify `Person`, `Membership`, `ProfessionalProfile`, `User`, or Staff Access
 - inactive Skill assignments may still be removed by known `skill_id`
+- successful removal writes an immutable `AuditEvent` with action `SKILL_REMOVED`
+- rejected operations do not emit a successful mutation audit event
 
 Successful response:
 
@@ -1464,6 +1472,8 @@ Write rules:
 - if a profile already exists for the Person, POST returns `409 Conflict`
 - all fields are optional; an empty body may create an empty current-state profile
 - no DELETE API exists
+- successful creation writes an immutable `AuditEvent` with action `PROFESSIONAL_PROFILE_CREATED`
+- rejected operations do not emit a successful mutation audit event
 
 Writable request fields:
 
@@ -1533,6 +1543,9 @@ Patch rules:
 - archived `BUSINESS` Persons return `409 Conflict`
 - `TECHNICAL` Person records return `404 Not Found`
 - nonexistent Person IDs return `404 Not Found`
+- successful PATCH writes `PROFESSIONAL_PROFILE_UPDATED` only when at least one writable business field actually changes after persistence
+- no-op PATCH remains successful under the current API behavior but does not emit `PROFESSIONAL_PROFILE_UPDATED`
+- rejected operations do not emit a successful mutation audit event
 
 Clearing optional values:
 

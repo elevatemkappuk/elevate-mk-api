@@ -6,6 +6,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.serializers import ValidationError
 
+from audit.models import AuditEvent
+from audit.services import record_audit_event
 from interests.models import Interest, PersonInterest
 from interests.serializers import AssignInterestInputSerializer, InterestSummarySerializer
 from people.models import Person
@@ -170,22 +172,31 @@ class PersonInterestListView(generics.GenericAPIView):
         input_serializer.is_valid(raise_exception=True)
 
         interest = input_serializer.validated_data["interest"]
-        try:
-            with transaction.atomic():
-                person = self.get_business_person_or_404(select_for_update=True)
+        with transaction.atomic():
+            person = self.get_business_person_or_404(select_for_update=True)
 
-                if person.archived_at is not None:
-                    raise InterestAssignmentConflict("Archived people cannot receive interest changes.")
+            if person.archived_at is not None:
+                raise InterestAssignmentConflict("Archived people cannot receive interest changes.")
 
-                if PersonInterest.objects.filter(person=person, interest=interest).exists():
-                    raise InterestAssignmentConflict("This interest is already assigned to the person.")
+            if PersonInterest.objects.filter(person=person, interest=interest).exists():
+                raise InterestAssignmentConflict("This interest is already assigned to the person.")
 
-                if not interest.is_active:
-                    raise ValidationError({"interest": ["Only active interests may be assigned."]})
+            if not interest.is_active:
+                raise ValidationError({"interest": ["Only active interests may be assigned."]})
 
-                PersonInterest.objects.create(person=person, interest=interest)
-        except IntegrityError:
-            raise InterestAssignmentConflict("This interest is already assigned to the person.")
+            try:
+                person_interest = PersonInterest.objects.create(person=person, interest=interest)
+            except IntegrityError:
+                raise InterestAssignmentConflict("This interest is already assigned to the person.")
+
+            record_audit_event(
+                action=AuditEvent.Action.INTEREST_ASSIGNED,
+                actor_user=request.user,
+                entity_type="PersonInterest",
+                entity_id=person_interest.id,
+                changes={"assigned": {"from": False, "to": True}},
+                metadata={"person_id": str(person.id), "interest_id": str(interest.id)},
+            )
 
         serializer = InterestSummarySerializer(interest)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -259,7 +270,18 @@ class PersonInterestDetailView(generics.GenericAPIView):
             if person_interest is None:
                 raise NotFound("Not found.")
 
+            person_interest_id = person_interest.id
+            interest_id = person_interest.interest_id
             person_interest.delete()
+
+            record_audit_event(
+                action=AuditEvent.Action.INTEREST_REMOVED,
+                actor_user=request.user,
+                entity_type="PersonInterest",
+                entity_id=person_interest_id,
+                changes={"assigned": {"from": True, "to": False}},
+                metadata={"person_id": str(person.id), "interest_id": str(interest_id)},
+            )
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 

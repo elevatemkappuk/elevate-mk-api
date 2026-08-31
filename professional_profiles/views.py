@@ -6,6 +6,8 @@ from rest_framework.exceptions import APIException, NotFound
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from audit.models import AuditEvent
+from audit.services import record_audit_event
 from people.models import Person
 from professional_profiles.models import Industry, ProfessionalProfile
 from professional_profiles.serializers import (
@@ -36,6 +38,36 @@ class ProfessionalProfileConflict(APIException):
     status_code = status.HTTP_409_CONFLICT
     default_detail = "Professional profile cannot be written for this person."
     default_code = "professional_profile_conflict"
+
+
+PROFILE_AUDIT_FIELDS = (
+    "job_title",
+    "company",
+    "industry_id",
+    "career_stage",
+    "linkedin_url",
+)
+
+
+def get_profile_audit_state(profile):
+    return {
+        "job_title": profile.job_title,
+        "company": profile.company,
+        "industry_id": str(profile.industry_id) if profile.industry_id is not None else None,
+        "career_stage": profile.career_stage,
+        "linkedin_url": profile.linkedin_url,
+    }
+
+
+def get_profile_audit_changes(before_state, after_state):
+    changes = {}
+    for field in PROFILE_AUDIT_FIELDS:
+        if before_state[field] != after_state[field]:
+            changes[field] = {
+                "from": before_state[field],
+                "to": after_state[field],
+            }
+    return changes
 
 
 class IndustryListView(generics.ListAPIView):
@@ -199,27 +231,40 @@ class ProfessionalProfileDetailView(generics.RetrieveAPIView):
         input_serializer = ProfessionalProfileWriteSerializer(data=request.data)
         input_serializer.is_valid(raise_exception=True)
 
-        try:
-            with transaction.atomic():
-                person = self.get_business_person_or_404(select_for_update=True)
+        with transaction.atomic():
+            person = self.get_business_person_or_404(select_for_update=True)
 
-                if person.archived_at is not None:
-                    raise ProfessionalProfileConflict("Archived people cannot receive professional profile changes.")
+            if person.archived_at is not None:
+                raise ProfessionalProfileConflict("Archived people cannot receive professional profile changes.")
 
-                if ProfessionalProfile.objects.filter(person=person).exists():
-                    raise ProfessionalProfileConflict("This person already has a professional profile.")
+            if ProfessionalProfile.objects.filter(person=person).exists():
+                raise ProfessionalProfileConflict("This person already has a professional profile.")
 
-                professional_profile = ProfessionalProfile(
-                    person=person,
-                    **input_serializer.validated_data,
-                )
-                try:
-                    professional_profile.full_clean()
-                except DjangoValidationError as error:
-                    raise serializers.ValidationError(error.message_dict)
+            professional_profile = ProfessionalProfile(
+                person=person,
+                **input_serializer.validated_data,
+            )
+            try:
+                professional_profile.full_clean()
+            except DjangoValidationError as error:
+                raise serializers.ValidationError(error.message_dict)
+
+            try:
                 professional_profile.save()
-        except IntegrityError:
-            raise ProfessionalProfileConflict("This person already has a professional profile.")
+            except IntegrityError:
+                raise ProfessionalProfileConflict("This person already has a professional profile.")
+
+            record_audit_event(
+                action=AuditEvent.Action.PROFESSIONAL_PROFILE_CREATED,
+                actor_user=request.user,
+                entity_type="ProfessionalProfile",
+                entity_id=professional_profile.id,
+                changes=get_profile_audit_changes(
+                    {field: None for field in PROFILE_AUDIT_FIELDS},
+                    get_profile_audit_state(professional_profile),
+                ),
+                metadata={"person_id": str(person.id)},
+            )
 
         serializer = self.get_serializer(professional_profile)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -294,6 +339,7 @@ class ProfessionalProfileDetailView(generics.RetrieveAPIView):
             if professional_profile is None:
                 raise NotFound("Not found.")
 
+            before_state = get_profile_audit_state(professional_profile)
             for field, value in input_serializer.validated_data.items():
                 setattr(professional_profile, field, value)
 
@@ -302,6 +348,18 @@ class ProfessionalProfileDetailView(generics.RetrieveAPIView):
             except DjangoValidationError as error:
                 raise serializers.ValidationError(error.message_dict)
             professional_profile.save()
+
+            after_state = get_profile_audit_state(professional_profile)
+            changes = get_profile_audit_changes(before_state, after_state)
+            if changes:
+                record_audit_event(
+                    action=AuditEvent.Action.PROFESSIONAL_PROFILE_UPDATED,
+                    actor_user=request.user,
+                    entity_type="ProfessionalProfile",
+                    entity_id=professional_profile.id,
+                    changes=changes,
+                    metadata={"person_id": str(person.id)},
+                )
 
         serializer = self.get_serializer(professional_profile)
         return Response(serializer.data, status=status.HTTP_200_OK)

@@ -5,6 +5,8 @@ from rest_framework.exceptions import APIException, NotFound
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from audit.models import AuditEvent
+from audit.services import record_audit_event
 from people.models import Person
 from staff_access.models import StaffRole
 from staff_access.permissions import HasActiveStaffRoleCodes
@@ -169,19 +171,28 @@ class PersonSkillListView(generics.GenericAPIView):
         input_serializer.is_valid(raise_exception=True)
 
         skill = input_serializer.validated_data["skill"]
-        try:
-            with transaction.atomic():
-                person = self.get_business_person_or_404(select_for_update=True)
+        with transaction.atomic():
+            person = self.get_business_person_or_404(select_for_update=True)
 
-                if person.archived_at is not None:
-                    raise SkillAssignmentConflict("Archived people cannot receive skill changes.")
+            if person.archived_at is not None:
+                raise SkillAssignmentConflict("Archived people cannot receive skill changes.")
 
-                if PersonSkill.objects.filter(person=person, skill=skill).exists():
-                    raise SkillAssignmentConflict("This skill is already assigned to the person.")
+            if PersonSkill.objects.filter(person=person, skill=skill).exists():
+                raise SkillAssignmentConflict("This skill is already assigned to the person.")
 
-                PersonSkill.objects.create(person=person, skill=skill)
-        except IntegrityError:
-            raise SkillAssignmentConflict("This skill is already assigned to the person.")
+            try:
+                person_skill = PersonSkill.objects.create(person=person, skill=skill)
+            except IntegrityError:
+                raise SkillAssignmentConflict("This skill is already assigned to the person.")
+
+            record_audit_event(
+                action=AuditEvent.Action.SKILL_ASSIGNED,
+                actor_user=request.user,
+                entity_type="PersonSkill",
+                entity_id=person_skill.id,
+                changes={"assigned": {"from": False, "to": True}},
+                metadata={"person_id": str(person.id), "skill_id": str(skill.id)},
+            )
 
         serializer = SkillSummarySerializer(skill)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -255,7 +266,18 @@ class PersonSkillDetailView(generics.GenericAPIView):
             if person_skill is None:
                 raise NotFound("Not found.")
 
+            person_skill_id = person_skill.id
+            skill_id = person_skill.skill_id
             person_skill.delete()
+
+            record_audit_event(
+                action=AuditEvent.Action.SKILL_REMOVED,
+                actor_user=request.user,
+                entity_type="PersonSkill",
+                entity_id=person_skill_id,
+                changes={"assigned": {"from": True, "to": False}},
+                metadata={"person_id": str(person.id), "skill_id": str(skill_id)},
+            )
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 

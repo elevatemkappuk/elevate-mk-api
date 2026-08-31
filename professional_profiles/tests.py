@@ -5,8 +5,10 @@ from django.db.models import ProtectedError
 from django.test import RequestFactory, TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
+from unittest.mock import patch
 
 from accounts.models import User
+from audit.models import AuditEvent
 from memberships.models import Membership
 from people.models import Person
 from professional_profiles.admin import IndustryAdmin, ProfessionalProfileAdmin
@@ -529,6 +531,10 @@ class ProfessionalProfileCreateApiTests(TestCase):
         self.authenticate(self.viewer_user)
         response = self.client.post(self.get_url(self.active_business_person.id), {}, format="json")
         self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            AuditEvent.objects.filter(action=AuditEvent.Action.PROFESSIONAL_PROFILE_CREATED).count(),
+            0,
+        )
 
     def test_crm_manager_can_create_profile(self):
         self.authenticate(self.manager_user)
@@ -566,6 +572,46 @@ class ProfessionalProfileCreateApiTests(TestCase):
             {"id": self.industry.id, "name": "Technology", "slug": "technology"},
         )
 
+    def test_successful_create_writes_professional_profile_created_audit_event(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_url(self.active_business_person.id),
+            {
+                "job_title": "Software Engineer",
+                "company": "Example Ltd",
+                "industry": self.industry.id,
+                "career_stage": ProfessionalProfile.CareerStage.MID_CAREER,
+                "linkedin_url": "https://www.linkedin.com/in/example",
+            },
+            format="json",
+        )
+
+        profile = ProfessionalProfile.objects.get(person=self.active_business_person)
+        event = AuditEvent.objects.get(action=AuditEvent.Action.PROFESSIONAL_PROFILE_CREATED)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(event.actor_user, self.admin_user)
+        self.assertEqual(event.entity_type, "ProfessionalProfile")
+        self.assertEqual(event.entity_id, str(profile.id))
+        self.assertEqual(event.metadata, {"person_id": str(self.active_business_person.id)})
+        self.assertEqual(
+            event.changes,
+            {
+                "job_title": {"from": None, "to": "Software Engineer"},
+                "company": {"from": None, "to": "Example Ltd"},
+                "industry_id": {"from": None, "to": str(self.industry.id)},
+                "career_stage": {
+                    "from": None,
+                    "to": ProfessionalProfile.CareerStage.MID_CAREER,
+                },
+                "linkedin_url": {
+                    "from": None,
+                    "to": "https://www.linkedin.com/in/example",
+                },
+            },
+        )
+        self.assertNotIn("primary_email", event.metadata)
+        self.assertNotIn("mobile", event.metadata)
+
     def test_archived_business_person_returns_409(self):
         self.authenticate(self.admin_user)
         response = self.client.post(self.get_url(self.archived_business_person.id), {}, format="json")
@@ -589,6 +635,28 @@ class ProfessionalProfileCreateApiTests(TestCase):
 
         self.assertEqual(response.status_code, 409)
         self.assertEqual(ProfessionalProfile.objects.filter(person=self.active_business_person).count(), 1)
+
+    def test_create_failures_do_not_write_success_audit_events(self):
+        ProfessionalProfile.objects.create(person=self.active_business_person)
+
+        self.authenticate(self.admin_user)
+        duplicate_response = self.client.post(self.get_url(self.active_business_person.id), {}, format="json")
+        archived_response = self.client.post(self.get_url(self.archived_business_person.id), {}, format="json")
+        technical_response = self.client.post(self.get_url(self.technical_person.id), {}, format="json")
+        invalid_industry_response = self.client.post(
+            self.get_url(self.active_business_person.id),
+            {"industry": self.inactive_industry.id},
+            format="json",
+        )
+
+        self.assertEqual(duplicate_response.status_code, 409)
+        self.assertEqual(archived_response.status_code, 409)
+        self.assertEqual(technical_response.status_code, 404)
+        self.assertEqual(invalid_industry_response.status_code, 400)
+        self.assertEqual(
+            AuditEvent.objects.filter(action=AuditEvent.Action.PROFESSIONAL_PROFILE_CREATED).count(),
+            0,
+        )
 
     def test_empty_body_can_create_empty_profile(self):
         self.authenticate(self.admin_user)
@@ -720,6 +788,23 @@ class ProfessionalProfileCreateApiTests(TestCase):
 
         self.assertEqual(response.status_code, 201)
 
+    def test_create_rolls_back_when_audit_write_fails(self):
+        self.authenticate(self.admin_user)
+
+        with patch("professional_profiles.views.record_audit_event", side_effect=RuntimeError("audit down")):
+            response = self.client.post(
+                self.get_url(self.active_business_person.id),
+                {"job_title": "Engineer"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertFalse(ProfessionalProfile.objects.filter(person=self.active_business_person).exists())
+        self.assertEqual(
+            AuditEvent.objects.filter(action=AuditEvent.Action.PROFESSIONAL_PROFILE_CREATED).count(),
+            0,
+        )
+
     def test_successful_post_appears_in_overview_without_changing_membership_or_relationship(self):
         membership = Membership.objects.create(
             person=self.active_business_person,
@@ -845,6 +930,10 @@ class ProfessionalProfileUpdateApiTests(TestCase):
         self.authenticate(self.viewer_user)
         response = self.client.patch(self.get_url(self.active_business_person.id), {}, format="json")
         self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            AuditEvent.objects.filter(action=AuditEvent.Action.PROFESSIONAL_PROFILE_UPDATED).count(),
+            0,
+        )
 
     def test_crm_manager_can_patch(self):
         self.authenticate(self.manager_user)
@@ -869,6 +958,25 @@ class ProfessionalProfileUpdateApiTests(TestCase):
         self.assertEqual(self.profile.job_title, "Senior Engineer")
         self.assertEqual(self.profile.company, "Example Ltd")
 
+    def test_single_field_patch_writes_professional_profile_updated_audit_event(self):
+        self.authenticate(self.admin_user)
+        response = self.client.patch(
+            self.get_url(self.active_business_person.id),
+            {"job_title": "Senior Engineer"},
+            format="json",
+        )
+
+        event = AuditEvent.objects.get(action=AuditEvent.Action.PROFESSIONAL_PROFILE_UPDATED)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(event.actor_user, self.admin_user)
+        self.assertEqual(event.entity_type, "ProfessionalProfile")
+        self.assertEqual(event.entity_id, str(self.profile.id))
+        self.assertEqual(event.metadata, {"person_id": str(self.active_business_person.id)})
+        self.assertEqual(
+            event.changes,
+            {"job_title": {"from": "Engineer", "to": "Senior Engineer"}},
+        )
+
     def test_updates_multiple_supplied_fields(self):
         self.authenticate(self.admin_user)
         response = self.client.patch(
@@ -886,6 +994,33 @@ class ProfessionalProfileUpdateApiTests(TestCase):
         self.assertEqual(self.profile.company, "Example Group")
         self.assertEqual(self.profile.industry, self.alternate_industry)
         self.assertEqual(self.profile.career_stage, ProfessionalProfile.CareerStage.LEADERSHIP)
+
+    def test_multi_field_patch_audits_only_actual_changed_fields(self):
+        self.authenticate(self.admin_user)
+        response = self.client.patch(
+            self.get_url(self.active_business_person.id),
+            {
+                "company": "Example Group",
+                "industry": self.alternate_industry.id,
+                "job_title": "Engineer",
+            },
+            format="json",
+        )
+
+        event = AuditEvent.objects.get(action=AuditEvent.Action.PROFESSIONAL_PROFILE_UPDATED)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            event.changes,
+            {
+                "company": {"from": "Example Ltd", "to": "Example Group"},
+                "industry_id": {
+                    "from": str(self.active_industry.id),
+                    "to": str(self.alternate_industry.id),
+                },
+            },
+        )
+        self.assertNotIn("job_title", event.changes)
+        self.assertNotIn("linkedin_url", event.changes)
 
     def test_unspecified_values_are_preserved(self):
         self.authenticate(self.admin_user)
@@ -928,6 +1063,31 @@ class ProfessionalProfileUpdateApiTests(TestCase):
         self.assertEqual(self.profile.company, "")
         self.assertEqual(self.profile.linkedin_url, "")
         self.assertEqual(self.profile.career_stage, "")
+
+    def test_patch_clearing_fields_audits_canonical_persisted_values(self):
+        self.authenticate(self.admin_user)
+        response = self.client.patch(
+            self.get_url(self.active_business_person.id),
+            {"industry": None, "career_stage": "", "linkedin_url": ""},
+            format="json",
+        )
+
+        event = AuditEvent.objects.get(action=AuditEvent.Action.PROFESSIONAL_PROFILE_UPDATED)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            event.changes,
+            {
+                "industry_id": {"from": str(self.active_industry.id), "to": None},
+                "career_stage": {
+                    "from": ProfessionalProfile.CareerStage.EARLY_CAREER,
+                    "to": "",
+                },
+                "linkedin_url": {
+                    "from": "https://www.linkedin.com/in/example",
+                    "to": "",
+                },
+            },
+        )
 
     def test_valid_career_stage_update_works(self):
         self.authenticate(self.admin_user)
@@ -979,6 +1139,20 @@ class ProfessionalProfileUpdateApiTests(TestCase):
         self.assertEqual(self.profile.job_title, "Principal Engineer")
         self.assertEqual(self.profile.industry, self.inactive_industry)
 
+    def test_no_op_patch_preserves_success_and_writes_no_audit_event(self):
+        self.authenticate(self.admin_user)
+        response = self.client.patch(
+            self.get_url(self.active_business_person.id),
+            {"job_title": "Engineer"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            AuditEvent.objects.filter(action=AuditEvent.Action.PROFESSIONAL_PROFILE_UPDATED).count(),
+            0,
+        )
+
     def test_no_profile_returns_404(self):
         no_profile_person = Person.objects.create(first_name="No", last_name="Profile")
 
@@ -996,6 +1170,38 @@ class ProfessionalProfileUpdateApiTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 409)
+
+    def test_update_failures_do_not_write_success_audit_events(self):
+        self.authenticate(self.admin_user)
+        archived_response = self.client.patch(
+            self.get_url(self.archived_business_person.id),
+            {"job_title": "Updated"},
+            format="json",
+        )
+        technical_response = self.client.patch(
+            self.get_url(self.technical_person.id),
+            {"job_title": "Updated"},
+            format="json",
+        )
+        invalid_industry_response = self.client.patch(
+            self.get_url(self.active_business_person.id),
+            {"industry": self.inactive_industry.id},
+            format="json",
+        )
+        invalid_url_response = self.client.patch(
+            self.get_url(self.active_business_person.id),
+            {"linkedin_url": "not-a-url"},
+            format="json",
+        )
+
+        self.assertEqual(archived_response.status_code, 409)
+        self.assertEqual(technical_response.status_code, 404)
+        self.assertEqual(invalid_industry_response.status_code, 400)
+        self.assertEqual(invalid_url_response.status_code, 400)
+        self.assertEqual(
+            AuditEvent.objects.filter(action=AuditEvent.Action.PROFESSIONAL_PROFILE_UPDATED).count(),
+            0,
+        )
 
     def test_technical_returns_404(self):
         self.authenticate(self.admin_user)
@@ -1063,3 +1269,21 @@ class ProfessionalProfileUpdateApiTests(TestCase):
         )
         self.assertEqual(overview_response.data["relationship"]["type"], "ACTIVE_MEMBER")
         self.assertEqual(overview_response.data["membership"]["id"], membership.id)
+
+    def test_update_rolls_back_when_audit_write_fails(self):
+        self.authenticate(self.admin_user)
+
+        with patch("professional_profiles.views.record_audit_event", side_effect=RuntimeError("audit down")):
+            response = self.client.patch(
+                self.get_url(self.active_business_person.id),
+                {"company": "Example Group"},
+                format="json",
+            )
+
+        self.profile.refresh_from_db()
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(self.profile.company, "Example Ltd")
+        self.assertEqual(
+            AuditEvent.objects.filter(action=AuditEvent.Action.PROFESSIONAL_PROFILE_UPDATED).count(),
+            0,
+        )

@@ -6,6 +6,7 @@ from django.utils import timezone
 from unittest.mock import patch
 
 from accounts.models import User
+from audit.models import AuditEvent
 from interests.admin import InterestAdmin, PersonInterestAdmin
 from interests.models import Interest, PersonInterest
 from memberships.models import Membership
@@ -409,6 +410,7 @@ class InterestApiTests(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 403)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.INTEREST_ASSIGNED).count(), 0)
 
     def test_assign_interest_manager_receives_201(self):
         self.authenticate(self.manager_user)
@@ -443,6 +445,26 @@ class InterestApiTests(TestCase):
             {"id": self.technology.id, "name": "Technology", "slug": "technology"},
         )
 
+    def test_successful_interest_assignment_writes_interest_assigned_audit_event(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_interests_url(self.active_business_person.id),
+            {"interest": self.technology.id},
+            format="json",
+        )
+
+        person_interest = PersonInterest.objects.get(person=self.active_business_person, interest=self.technology)
+        event = AuditEvent.objects.get(action=AuditEvent.Action.INTEREST_ASSIGNED)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(event.actor_user, self.admin_user)
+        self.assertEqual(event.entity_type, "PersonInterest")
+        self.assertEqual(event.entity_id, str(person_interest.id))
+        self.assertEqual(
+            event.metadata,
+            {"person_id": str(self.active_business_person.id), "interest_id": str(self.technology.id)},
+        )
+        self.assertEqual(event.changes, {"assigned": {"from": False, "to": True}})
+
     def test_assign_interest_duplicate_returns_409_and_does_not_create_second_row(self):
         PersonInterest.objects.create(person=self.active_business_person, interest=self.networking)
 
@@ -455,6 +477,7 @@ class InterestApiTests(TestCase):
 
         self.assertEqual(response.status_code, 409)
         self.assertEqual(PersonInterest.objects.filter(person=self.active_business_person, interest=self.networking).count(), 1)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.INTEREST_ASSIGNED).count(), 0)
 
     def test_assign_interest_duplicate_inactive_assignment_returns_409(self):
         PersonInterest.objects.create(person=self.active_business_person, interest=self.inactive_interest)
@@ -478,6 +501,7 @@ class InterestApiTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("interest", response.data)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.INTEREST_ASSIGNED).count(), 0)
 
     def test_assign_interest_nonexistent_interest_returns_400(self):
         self.authenticate(self.admin_user)
@@ -498,6 +522,7 @@ class InterestApiTests(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 409)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.INTEREST_ASSIGNED).count(), 0)
 
     def test_assign_interest_technical_person_returns_404(self):
         self.authenticate(self.admin_user)
@@ -563,6 +588,22 @@ class InterestApiTests(TestCase):
             )
 
         self.assertEqual(response.status_code, 409)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.INTEREST_ASSIGNED).count(), 0)
+
+    def test_interest_assignment_rolls_back_when_audit_write_fails(self):
+        self.authenticate(self.admin_user)
+        with patch("interests.views.record_audit_event", side_effect=RuntimeError("audit down")):
+            response = self.client.post(
+                self.get_person_interests_url(self.active_business_person.id),
+                {"interest": self.technology.id},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertFalse(
+            PersonInterest.objects.filter(person=self.active_business_person, interest=self.technology).exists()
+        )
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.INTEREST_ASSIGNED).count(), 0)
 
     def test_remove_interest_anonymous_receives_401(self):
         PersonInterest.objects.create(person=self.active_business_person, interest=self.networking)
@@ -586,6 +627,7 @@ class InterestApiTests(TestCase):
             self.get_person_interest_detail_url(self.active_business_person.id, self.networking.id)
         )
         self.assertEqual(response.status_code, 403)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.INTEREST_REMOVED).count(), 0)
 
     def test_remove_interest_manager_receives_204(self):
         PersonInterest.objects.create(person=self.active_business_person, interest=self.networking)
@@ -604,7 +646,7 @@ class InterestApiTests(TestCase):
         self.assertEqual(response.status_code, 204)
 
     def test_remove_interest_existing_assignment_returns_204_and_deletes_person_interest_only(self):
-        PersonInterest.objects.create(person=self.active_business_person, interest=self.networking)
+        person_interest = PersonInterest.objects.create(person=self.active_business_person, interest=self.networking)
         other_person = Person.objects.create(first_name="Other", last_name="Worker")
         PersonInterest.objects.create(person=other_person, interest=self.networking)
 
@@ -617,6 +659,15 @@ class InterestApiTests(TestCase):
         self.assertFalse(PersonInterest.objects.filter(person=self.active_business_person, interest=self.networking).exists())
         self.assertTrue(Interest.objects.filter(pk=self.networking.id).exists())
         self.assertTrue(PersonInterest.objects.filter(person=other_person, interest=self.networking).exists())
+        event = AuditEvent.objects.get(action=AuditEvent.Action.INTEREST_REMOVED)
+        self.assertEqual(event.actor_user, self.admin_user)
+        self.assertEqual(event.entity_type, "PersonInterest")
+        self.assertEqual(event.entity_id, str(person_interest.id))
+        self.assertEqual(
+            event.metadata,
+            {"person_id": str(self.active_business_person.id), "interest_id": str(self.networking.id)},
+        )
+        self.assertEqual(event.changes, {"assigned": {"from": True, "to": False}})
 
     def test_remove_inactive_interest_assignment_can_be_removed(self):
         PersonInterest.objects.create(person=self.active_business_person, interest=self.inactive_interest)
@@ -628,6 +679,11 @@ class InterestApiTests(TestCase):
 
         self.assertEqual(response.status_code, 204)
         self.assertFalse(PersonInterest.objects.filter(person=self.active_business_person, interest=self.inactive_interest).exists())
+        event = AuditEvent.objects.get(action=AuditEvent.Action.INTEREST_REMOVED)
+        self.assertEqual(
+            event.metadata,
+            {"person_id": str(self.active_business_person.id), "interest_id": str(self.inactive_interest.id)},
+        )
 
     def test_remove_interest_missing_assignment_returns_404(self):
         self.authenticate(self.admin_user)
@@ -635,6 +691,7 @@ class InterestApiTests(TestCase):
             self.get_person_interest_detail_url(self.active_business_person.id, self.networking.id)
         )
         self.assertEqual(response.status_code, 404)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.INTEREST_REMOVED).count(), 0)
 
     def test_remove_interest_nonexistent_interest_returns_404(self):
         self.authenticate(self.admin_user)
@@ -651,6 +708,7 @@ class InterestApiTests(TestCase):
             self.get_person_interest_detail_url(self.archived_business_person.id, self.networking.id)
         )
         self.assertEqual(response.status_code, 409)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.INTEREST_REMOVED).count(), 0)
 
     def test_remove_interest_technical_person_returns_404(self):
         self.authenticate(self.admin_user)
@@ -665,6 +723,21 @@ class InterestApiTests(TestCase):
             self.get_person_interest_detail_url(999999, self.networking.id)
         )
         self.assertEqual(response.status_code, 404)
+
+    def test_interest_removal_rolls_back_when_audit_write_fails(self):
+        PersonInterest.objects.create(person=self.active_business_person, interest=self.networking)
+
+        self.authenticate(self.admin_user)
+        with patch("interests.views.record_audit_event", side_effect=RuntimeError("audit down")):
+            response = self.client.delete(
+                self.get_person_interest_detail_url(self.active_business_person.id, self.networking.id)
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertTrue(
+            PersonInterest.objects.filter(person=self.active_business_person, interest=self.networking).exists()
+        )
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.INTEREST_REMOVED).count(), 0)
 
     def test_overview_returns_empty_interests_when_none_are_assigned(self):
         self.authenticate(self.admin_user)

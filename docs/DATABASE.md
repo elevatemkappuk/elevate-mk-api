@@ -186,6 +186,7 @@ Current rules:
 - Industry records should be deactivated rather than treated as disposable taxonomy values
 - new or changed Industry assignments must use an active Industry
 - an existing ProfessionalProfile may remain linked to an Industry that later becomes inactive
+- successful ProfessionalProfile create and real update mutations are audited separately from the authoritative row state
 
 ## Skill Relationship
 Current relationship:
@@ -206,6 +207,7 @@ Current rules:
 - inactive Skill definitions are excluded from normal active CRM reads
 - Skill definitions should be deactivated rather than treated as disposable taxonomy rows
 - removing a `PersonSkill` deletes only the relationship row, not the canonical `Skill`
+- successful PersonSkill assignment and removal mutations are audited separately from the authoritative relationship row
 
 ## Interest Relationship
 Current relationship:
@@ -226,6 +228,7 @@ Current rules:
 - inactive Interest definitions are excluded from normal active CRM reads
 - Interest definitions should be deactivated rather than treated as disposable taxonomy rows
 - removing a `PersonInterest` deletes only the relationship row, not the canonical `Interest`
+- successful PersonInterest assignment and removal mutations are audited separately from the authoritative relationship row
 
 ## Tag Relationship
 Current relationship:
@@ -808,16 +811,28 @@ Current successful business audit capture:
 
 - `MEMBERSHIP_CREATED` for successful Make Member
 - `MEMBERSHIP_ENDED` for successful ACTIVE -> FORMER transitions
+- `PROFESSIONAL_PROFILE_CREATED` for successful ProfessionalProfile creation
+- `PROFESSIONAL_PROFILE_UPDATED` for successful ProfessionalProfile updates that persist at least one real business-field change
+- `SKILL_ASSIGNED` for successful `PersonSkill` creation
+- `SKILL_REMOVED` for successful `PersonSkill` deletion
+- `INTEREST_ASSIGNED` for successful `PersonInterest` creation
+- `INTEREST_REMOVED` for successful `PersonInterest` deletion
 - `TAG_ASSIGNED` for first-time active `PersonTag` creation
 - `TAG_REACTIVATED` for reusing an existing inactive `PersonTag`
 - `TAG_REMOVED` for active -> inactive `PersonTag` removal
 
 Current conventions:
 
-- `Membership` and `PersonTag` remain authoritative for current state
-- `AuditEvent.entity_type` uses the mutated relationship resource: `Membership` or `PersonTag`
+- `Membership`, `ProfessionalProfile`, `PersonSkill`, `PersonInterest`, and `PersonTag` remain authoritative for current state
+- `AuditEvent.entity_type` uses the mutated resource: `Membership`, `ProfessionalProfile`, `PersonSkill`, `PersonInterest`, or `PersonTag`
 - `AuditEvent.entity_id` stores that mutated row's primary key as a string
 - `metadata.person_id` stores the related Person primary key as a string for future cross-domain Person audit history
+- Skill lifecycle events also store `metadata.skill_id` as the canonical Skill primary key string
+- Interest lifecycle events also store `metadata.interest_id` as the canonical Interest primary key string
 - Tag lifecycle events also store `metadata.tag_id` as the canonical Tag primary key string
-- `changes` remains compact and records only the lifecycle transition that occurred
-- no historical membership or tag events are fabricated for mutations that predated audit deployment
+- ProfessionalProfile create events store only the persisted writable business fields using compact before/after values
+- ProfessionalProfile update events store only fields that actually changed after persistence; no-op PATCH produces no update event
+- Skill and Interest removal events may continue to reference a deleted historical relationship row through `AuditEvent.entity_id`
+- `changes` remains compact and records only the business transition that occurred
+- required audit persistence failure rolls back the same authoritative mutation transaction instead of silently dropping audit history
+- no historical membership, professional profile, skill, interest, or tag events are fabricated for mutations that predated audit deployment
