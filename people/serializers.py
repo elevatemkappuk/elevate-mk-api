@@ -20,6 +20,8 @@ class PersonListQuerySerializer(serializers.Serializer):
     RECORD_STATE_ALL = "all"
 
     ORDERING_CHOICES = (
+        ("name", "Name ascending"),
+        ("-name", "Name descending"),
         ("first_name", "First name ascending"),
         ("-first_name", "First name descending"),
         ("last_name", "Last name ascending"),
@@ -28,11 +30,33 @@ class PersonListQuerySerializer(serializers.Serializer):
         ("-created_at", "Created at descending"),
         ("updated_at", "Updated at ascending"),
         ("-updated_at", "Updated at descending"),
+        ("membership_joined_at", "Membership joined date ascending"),
+        ("-membership_joined_at", "Membership joined date descending"),
     )
 
     page = serializers.IntegerField(required=False, min_value=1)
     page_size = serializers.IntegerField(required=False, min_value=1)
     q = serializers.CharField(required=False, allow_blank=True)
+    relationship = serializers.ListField(
+        child=serializers.ChoiceField(choices=(
+            ("CONTACT", "Contact"),
+            ("ACTIVE_MEMBER", "Active member"),
+            ("FORMER_MEMBER", "Former member"),
+        )),
+        required=False,
+    )
+    location = serializers.ListField(
+        child=serializers.CharField(allow_blank=False, trim_whitespace=True),
+        required=False,
+    )
+    industry = serializers.ListField(child=serializers.IntegerField(min_value=1), required=False)
+    career_stage = serializers.ListField(
+        child=serializers.ChoiceField(choices=ProfessionalProfile.CareerStage.choices),
+        required=False,
+    )
+    interest = serializers.ListField(child=serializers.IntegerField(min_value=1), required=False)
+    skill = serializers.ListField(child=serializers.IntegerField(min_value=1), required=False)
+    tag = serializers.ListField(child=serializers.IntegerField(min_value=1), required=False)
     record_state = serializers.ChoiceField(
         choices=(
             (RECORD_STATE_ACTIVE, "Active BUSINESS people"),

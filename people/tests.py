@@ -1159,3 +1159,84 @@ class PersonWriteLifecycleApiTests(TestCase):
         self.assertEqual(membership.status, Membership.Status.ACTIVE)
         self.assertTrue(AuditEvent.objects.filter(action=AuditEvent.Action.PERSON_ARCHIVED, entity_id=str(person.id)).exists())
         self.assertTrue(AuditEvent.objects.filter(action=AuditEvent.Action.PERSON_RESTORED, entity_id=str(person.id)).exists())
+
+
+@override_settings(ROOT_URLCONF="config.urls")
+class PeopleDirectoryQueryApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.url = "/api/v1/people/"
+        self.admin_user = User.objects.create_user(email="directory-admin@example.com", password="testpass123", person_first_name="Directory", person_last_name="Admin")
+        self.viewer_user = User.objects.create_user(email="directory-viewer@example.com", password="testpass123", person_first_name="Directory", person_last_name="Viewer")
+        self.nonstaff_user = User.objects.create_user(email="directory-nonstaff@example.com", password="testpass123", person_first_name="Directory", person_last_name="Nonstaff")
+        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN))
+        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=StaffRole.objects.get(code=StaffRole.CRM_VIEWER))
+        self.contact = Person.objects.create(first_name="Ada", last_name="Lovelace", primary_email="ada@example.com", mobile="991", location=" Milton Keynes ")
+        self.active_member = Person.objects.create(first_name="Grace", last_name="Hopper", primary_email="grace@example.com", location="London")
+        self.former_member = Person.objects.create(first_name="Alan", last_name="Turing", archived_at=timezone.now())
+        Membership.objects.create(person=self.active_member, status=Membership.Status.ACTIVE, joined_at="2024-01-01", membership_source=Membership.Source.STAFF)
+        Membership.objects.create(person=self.former_member, status=Membership.Status.FORMER, joined_at="2023-01-01", ended_at="2024-01-01", membership_source=Membership.Source.STAFF)
+        self.industry = Industry.objects.create(name="Technology", slug="technology")
+        ProfessionalProfile.objects.create(person=self.active_member, job_title="Software Engineer", company="Microsoft", industry=self.industry, career_stage=ProfessionalProfile.CareerStage.SENIOR)
+        self.interest_a = Interest.objects.create(name="Mentoring", slug="mentoring")
+        self.interest_b = Interest.objects.create(name="Networking", slug="networking")
+        self.skill = Skill.objects.create(name="Python", slug="python")
+        self.active_tag = Tag.objects.create(name="VIP", slug="vip")
+        self.removed_tag = Tag.objects.create(name="Removed", slug="removed")
+        PersonInterest.objects.create(person=self.active_member, interest=self.interest_a)
+        PersonInterest.objects.create(person=self.contact, interest=self.interest_b)
+        PersonSkill.objects.create(person=self.active_member, skill=self.skill)
+        PersonTag.objects.create(person=self.active_member, tag=self.active_tag, assigned_by=self.admin_user)
+        PersonTag.objects.create(person=self.active_member, tag=self.removed_tag, assigned_by=self.admin_user, is_active=False, removed_by=self.admin_user, removed_at=timezone.now())
+        Person.objects.create(first_name="Technical", last_name="Record", record_type=Person.RecordType.TECHNICAL, location="London")
+
+    def authenticate(self, user):
+        self.client.force_authenticate(user=user)
+
+    def result_ids(self, response):
+        return [item["id"] for item in response.data["results"]]
+
+    def test_authorization_and_business_boundary_remain_intact(self):
+        self.assertEqual(self.client.get(self.url).status_code, 401)
+        self.authenticate(self.nonstaff_user)
+        self.assertEqual(self.client.get(self.url).status_code, 403)
+        self.authenticate(self.viewer_user)
+        response = self.client.get(self.url, {"record_state": "all"})
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(Person.objects.get(first_name="Technical").id, self.result_ids(response))
+
+    def test_search_includes_identity_full_name_and_professional_profile(self):
+        self.authenticate(self.admin_user)
+        self.assertIn(self.contact.id, self.result_ids(self.client.get(self.url, {"q": "Ada Lovelace"})))
+        self.assertIn(self.active_member.id, self.result_ids(self.client.get(self.url, {"q": "engineer"})))
+        self.assertIn(self.active_member.id, self.result_ids(self.client.get(self.url, {"q": "MICROSOFT"})))
+        self.assertEqual(self.client.get(self.url, {"q": "   "}).status_code, 200)
+
+    def test_relationship_location_and_professional_filters_use_repeated_or_values(self):
+        self.authenticate(self.admin_user)
+        relationships = self.client.get(self.url, [("relationship", "CONTACT"), ("relationship", "ACTIVE_MEMBER")])
+        locations = self.client.get(self.url, [("location", "milton keynes"), ("location", "London")])
+        professional = self.client.get(self.url, [("industry", str(self.industry.id)), ("career_stage", "SENIOR")])
+        self.assertEqual(set(self.result_ids(relationships)), {self.contact.id, self.active_member.id})
+        self.assertEqual(set(self.result_ids(locations)), {self.contact.id, self.active_member.id})
+        self.assertEqual(self.result_ids(professional), [self.active_member.id])
+        self.assertEqual(self.client.get(self.url, {"relationship": "UNKNOWN"}).status_code, 400)
+        self.assertEqual(self.client.get(self.url, {"industry": "not-an-id"}).status_code, 400)
+
+    def test_classification_filters_are_or_within_and_and_across_without_duplicates(self):
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.url, [
+            ("interest", str(self.interest_a.id)), ("interest", str(self.interest_b.id)),
+            ("skill", str(self.skill.id)), ("tag", str(self.active_tag.id)),
+        ])
+        removed_tag = self.client.get(self.url, {"tag": self.removed_tag.id})
+        self.assertEqual(self.result_ids(response), [self.active_member.id])
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(self.result_ids(removed_tag), [])
+
+    def test_archived_state_and_membership_joined_ordering_are_deterministic(self):
+        self.authenticate(self.admin_user)
+        archived_former = self.client.get(self.url, {"record_state": "archived", "relationship": "FORMER_MEMBER"})
+        ordered = self.client.get(self.url, {"record_state": "all", "ordering": "-membership_joined_at"})
+        self.assertEqual(self.result_ids(archived_former), [self.former_member.id])
+        self.assertEqual(self.result_ids(ordered)[:2], [self.active_member.id, self.former_member.id])

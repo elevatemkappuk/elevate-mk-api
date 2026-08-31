@@ -148,6 +148,8 @@ Currently implemented rules:
 
 - A person can exist without any linked authentication account.
 - A person name is authoritative for display/name identity.
+- The CRM People directory derives relationship from the optional Membership row rather than storing a relationship column on Person.
+- Directory classification filters use canonical Industry, Interest, Skill, and Tag identifiers; active `PersonTag` state determines current Tag membership.
 - `record_type=BUSINESS` is the default for newly created people.
 - `record_type=TECHNICAL` is available for bootstrap or technical identities that still need a `Person`.
 - `record_type` and `archived_at` are independent.

@@ -1,8 +1,7 @@
 from interests.models import PersonInterest
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
-from django.db.models import Prefetch, Q, Value
-from django.db.models.functions import Concat
+from django.db.models import Prefetch, Q
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import generics, serializers, status
@@ -32,6 +31,7 @@ from people.serializers import (
     PersonUpdateSerializer,
 )
 from people.services import find_business_duplicate_people
+from people.querying import PeopleDirectoryQuery
 from memberships.models import Membership
 from staff_access.models import StaffRole
 from staff_access.permissions import HasActiveStaffRoleCodes
@@ -100,23 +100,15 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
     permission_classes = [IsAuthenticated, HasPeopleAccess]
     pagination_class = PeoplePagination
 
-    ORDERING_MAP = {
-        "first_name": ("first_name", "last_name", "id"),
-        "-first_name": ("-first_name", "last_name", "id"),
-        "last_name": ("last_name", "first_name", "id"),
-        "-last_name": ("-last_name", "first_name", "id"),
-        "created_at": ("created_at", "id"),
-        "-created_at": ("-created_at", "id"),
-        "updated_at": ("updated_at", "id"),
-        "-updated_at": ("-updated_at", "id"),
-    }
-
     @extend_schema(
         operation_id="people_list",
         summary="List CRM People",
         description=(
             "Returns BUSINESS Person records for the Staff CRM People directory. "
             "TECHNICAL persons are excluded for all record_state values. "
+            "Supports repeated relationship, location, industry, career_stage, interest, skill, and tag filters: "
+            "values are ORed within a category and categories combine with AND. "
+            "Interest, Skill, and Tag filters use current active assignments only. "
             "Active CRM staff roles CRM_ADMIN, CRM_MANAGER, and CRM_VIEWER are allowed. "
             "Session authentication is required."
         ),
@@ -162,38 +154,12 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
 
     def get_queryset(self):
         params = getattr(self, "validated_query_params", self.get_validated_query_params())
-
-        queryset = self.get_business_people_queryset()
-        queryset = self.apply_record_state(queryset, params["record_state"])
-        queryset = self.apply_search(queryset, params.get("q", ""))
-        return queryset.order_by(*self.ORDERING_MAP[params["ordering"]])
+        return PeopleDirectoryQuery(self.get_business_people_queryset(), params).apply()
 
     def get_validated_query_params(self):
         serializer = PersonListQuerySerializer(data=self.request.query_params)
         serializer.is_valid(raise_exception=True)
         return serializer.validated_data
-
-    def apply_record_state(self, queryset, record_state):
-        if record_state == PersonListQuerySerializer.RECORD_STATE_ARCHIVED:
-            return queryset.archived_business()
-        if record_state == PersonListQuerySerializer.RECORD_STATE_ALL:
-            return queryset.business()
-        return queryset.active_business()
-
-    def apply_search(self, queryset, query):
-        query = query.strip()
-        if not query:
-            return queryset
-
-        return queryset.annotate(
-            full_name=Concat("first_name", Value(" "), "last_name")
-        ).filter(
-            Q(first_name__icontains=query)
-            | Q(last_name__icontains=query)
-            | Q(primary_email__icontains=query)
-            | Q(mobile__icontains=query)
-            | Q(full_name__icontains=query)
-        )
 
     def get_permissions(self):
         permission_classes = [IsAuthenticated, HasPeopleAccess]

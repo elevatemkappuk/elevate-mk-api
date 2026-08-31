@@ -437,8 +437,15 @@ Query parameters:
 | Parameter | Required | Default | Allowed values / behavior |
 | --- | --- | --- | --- |
 | `record_state` | no | `active` | `active`, `archived`, `all` |
-| `q` | no | empty | Case-insensitive search across `first_name`, `last_name`, `primary_email`, `mobile`, plus full-name matching |
-| `ordering` | no | `last_name` | `first_name`, `-first_name`, `last_name`, `-last_name`, `created_at`, `-created_at`, `updated_at`, `-updated_at` |
+| `q` | no | empty | Case-insensitive search across Person identity fields, full name, ProfessionalProfile job title, and company |
+| `relationship` | no | none | Repeated `CONTACT`, `ACTIVE_MEMBER`, or `FORMER_MEMBER` values |
+| `location` | no | none | Repeated, trimmed, case-insensitive exact free-text locations |
+| `industry` | no | none | Repeated canonical Industry IDs |
+| `career_stage` | no | none | Repeated `STUDENT`, `EARLY_CAREER`, `MID_CAREER`, `SENIOR`, `LEADERSHIP`, `FOUNDER_BUSINESS_OWNER`, or `OTHER` values |
+| `interest` | no | none | Repeated canonical Interest IDs; current active assignments only |
+| `skill` | no | none | Repeated canonical Skill IDs; current active assignments only |
+| `tag` | no | none | Repeated canonical Tag IDs; only active `PersonTag` assignments and active Tags count |
+| `ordering` | no | `last_name` | Canonical `name`, `-name`, `created_at`, `-created_at`, `membership_joined_at`, `-membership_joined_at`, `updated_at`, `-updated_at`; existing first/last-name sort keys remain accepted for current client compatibility |
 | `page` | no | `1` | Standard DRF page-number pagination |
 | `page_size` | no | `25` | `25`, `50`, or `100` only |
 
@@ -448,6 +455,26 @@ Query parameters:
 - `archived`: `BUSINESS` Persons with `archived_at IS NOT NULL`
 - `all`: all `BUSINESS` Persons regardless of `archived_at`
 - Invalid `record_state`, `ordering`, or unsupported `page_size` values return `400 Bad Request`
+- Invalid relationship, career-stage, or numeric catalog filter syntax returns `400 Bad Request`
+
+Repeated filter syntax and composition:
+
+- Multi-select filters use repeated query keys, for example `?interest=2&interest=8&skill=4&tag=6`
+- Values within the same category are ORed: `interest=2&interest=8` means Interest 2 **or** Interest 8
+- Different categories are ANDed: the example above requires a matching Interest **and** Skill 4 **and** active Tag 6
+- Relationship is derived from Membership: no Membership is `CONTACT`, ACTIVE Membership is `ACTIVE_MEMBER`, and FORMER Membership is `FORMER_MEMBER`
+- Whitespace-only `q` behaves as no search filter; Notes, AuditEvents, Staff Access, and authentication data are never searched
+- `membership_joined_at` sorts dated Memberships first and Contacts/null dates last in both directions; every supported ordering has a stable Person ID tie-breaker
+- Related classification filters use database `EXISTS` subqueries, so result rows and pagination counts are not duplicated by multi-valued assignments
+
+Examples:
+
+- Contacts: `/api/v1/people/?relationship=CONTACT`
+- Active Members in Industry 5: `/api/v1/people/?relationship=ACTIVE_MEMBER&industry=5`
+- Either Interest 2 or 8: `/api/v1/people/?interest=2&interest=8`
+- Either Tag 3 or 7 with Skill 11: `/api/v1/people/?tag=3&tag=7&skill=11`
+- Archived former Members: `/api/v1/people/?record_state=archived&relationship=FORMER_MEMBER`
+- Professional search: `/api/v1/people/?q=engineer` or `/api/v1/people/?q=Microsoft`
 
 Response shape:
 
