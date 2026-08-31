@@ -190,6 +190,7 @@ class TagApiTests(TestCase):
         self.client = APIClient()
         self.tags_url = "/api/v1/tags/"
         self.person_tags_url_template = "/api/v1/people/{person_id}/tags/"
+        self.person_tag_remove_url_template = "/api/v1/people/{person_id}/tags/{tag_id}/remove/"
         self.person_overview_url_template = "/api/v1/people/{person_id}/overview/"
 
         self.non_staff_user = User.objects.create_user(
@@ -273,6 +274,9 @@ class TagApiTests(TestCase):
 
     def get_person_tags_url(self, person_id):
         return self.person_tags_url_template.format(person_id=person_id)
+
+    def get_person_tag_remove_url(self, person_id, tag_id):
+        return self.person_tag_remove_url_template.format(person_id=person_id, tag_id=tag_id)
 
     def get_person_overview_url(self, person_id):
         return self.person_overview_url_template.format(person_id=person_id)
@@ -452,6 +456,342 @@ class TagApiTests(TestCase):
 
         self.assertEqual(list(response.data[0].keys()), ["id", "name", "slug"])
 
+    def test_assign_tag_anonymous_receives_401(self):
+        response = self.client.post(self.get_person_tags_url(self.active_business_person.id), {"tag": self.vip.id}, format="json")
+        self.assertEqual(response.status_code, 401)
+
+    def test_assign_tag_nonstaff_receives_403(self):
+        self.authenticate(self.non_staff_user)
+        response = self.client.post(self.get_person_tags_url(self.active_business_person.id), {"tag": self.vip.id}, format="json")
+        self.assertEqual(response.status_code, 403)
+
+    def test_assign_tag_crm_viewer_receives_403(self):
+        self.authenticate(self.viewer_user)
+        response = self.client.post(self.get_person_tags_url(self.active_business_person.id), {"tag": self.vip.id}, format="json")
+        self.assertEqual(response.status_code, 403)
+
+    def test_assign_tag_crm_manager_creates_person_tag(self):
+        self.authenticate(self.manager_user)
+
+        response = self.client.post(
+            self.get_person_tags_url(self.active_business_person.id),
+            {"tag": self.vip.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        person_tag = PersonTag.objects.get(person=self.active_business_person, tag=self.vip)
+        self.assertTrue(person_tag.is_active)
+        self.assertEqual(person_tag.assigned_by, self.manager_user)
+        self.assertIsNotNone(person_tag.assigned_at)
+        self.assertIsNone(person_tag.removed_by)
+        self.assertIsNone(person_tag.removed_at)
+        self.assertEqual(response.data, {"id": self.vip.id, "name": "VIP", "slug": "vip"})
+        self.assertNotIn("assigned_by", response.data)
+
+    def test_assign_tag_crm_admin_creates_exactly_one_person_tag(self):
+        self.authenticate(self.admin_user)
+
+        response = self.client.post(
+            self.get_person_tags_url(self.active_business_person.id),
+            {"tag": self.potential_mentor.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            PersonTag.objects.filter(person=self.active_business_person, tag=self.potential_mentor).count(),
+            1,
+        )
+
+    def test_assign_tag_duplicate_active_assignment_returns_409_without_mutation(self):
+        person_tag = PersonTag.objects.create(
+            person=self.active_business_person,
+            tag=self.vip,
+            assigned_by=self.admin_user,
+        )
+        assigned_at = person_tag.assigned_at
+
+        self.authenticate(self.manager_user)
+        response = self.client.post(
+            self.get_person_tags_url(self.active_business_person.id),
+            {"tag": self.vip.id},
+            format="json",
+        )
+
+        person_tag.refresh_from_db()
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(PersonTag.objects.filter(person=self.active_business_person, tag=self.vip).count(), 1)
+        self.assertEqual(person_tag.assigned_by, self.admin_user)
+        self.assertEqual(person_tag.assigned_at, assigned_at)
+        self.assertTrue(person_tag.is_active)
+        self.assertIsNone(person_tag.removed_by)
+        self.assertIsNone(person_tag.removed_at)
+
+    def test_assign_tag_reactivates_same_row_and_clears_removal_fields(self):
+        person_tag = PersonTag.objects.create(
+            person=self.active_business_person,
+            tag=self.vip,
+            assigned_by=self.admin_user,
+            is_active=False,
+            removed_by=self.manager_user,
+            removed_at=timezone.now(),
+        )
+        original_assigned_at = person_tag.assigned_at
+
+        self.authenticate(self.manager_user)
+        response = self.client.post(
+            self.get_person_tags_url(self.active_business_person.id),
+            {"tag": self.vip.id},
+            format="json",
+        )
+
+        person_tag.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(PersonTag.objects.get(person=self.active_business_person, tag=self.vip).pk, person_tag.pk)
+        self.assertEqual(PersonTag.objects.filter(person=self.active_business_person, tag=self.vip).count(), 1)
+        self.assertTrue(person_tag.is_active)
+        self.assertEqual(person_tag.assigned_by, self.manager_user)
+        self.assertGreater(person_tag.assigned_at, original_assigned_at)
+        self.assertIsNone(person_tag.removed_by)
+        self.assertIsNone(person_tag.removed_at)
+        self.assertEqual(response.data, {"id": self.vip.id, "name": "VIP", "slug": "vip"})
+
+    def test_assign_tag_nonexistent_tag_returns_400(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(self.get_person_tags_url(self.active_business_person.id), {"tag": 999999}, format="json")
+        self.assertEqual(response.status_code, 400)
+
+    def test_assign_tag_inactive_tag_returns_400(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_tags_url(self.active_business_person.id),
+            {"tag": self.inactive_tag.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_assign_tag_reactivation_still_rejects_inactive_tag_definition(self):
+        person_tag = PersonTag.objects.create(
+            person=self.active_business_person,
+            tag=self.inactive_tag,
+            assigned_by=self.admin_user,
+            is_active=False,
+            removed_by=self.manager_user,
+            removed_at=timezone.now(),
+        )
+
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_tags_url(self.active_business_person.id),
+            {"tag": self.inactive_tag.id},
+            format="json",
+        )
+
+        person_tag.refresh_from_db()
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(person_tag.is_active)
+        self.assertFalse(self.inactive_tag.is_active)
+
+    def test_assign_tag_archived_business_person_returns_409(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_tags_url(self.archived_business_person.id),
+            {"tag": self.vip.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 409)
+
+    def test_assign_tag_archived_business_reactivation_returns_409(self):
+        person_tag = PersonTag.objects.create(
+            person=self.archived_business_person,
+            tag=self.vip,
+            assigned_by=self.admin_user,
+            is_active=False,
+            removed_by=self.manager_user,
+            removed_at=timezone.now(),
+        )
+
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_tags_url(self.archived_business_person.id),
+            {"tag": self.vip.id},
+            format="json",
+        )
+
+        person_tag.refresh_from_db()
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(person_tag.is_active)
+
+    def test_assign_tag_technical_person_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(self.get_person_tags_url(self.technical_person.id), {"tag": self.vip.id}, format="json")
+        self.assertEqual(response.status_code, 404)
+
+    def test_assign_tag_nonexistent_person_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(self.get_person_tags_url(999999), {"tag": self.vip.id}, format="json")
+        self.assertEqual(response.status_code, 404)
+
+    def test_assign_tag_strict_payload_rejects_unknown_and_lifecycle_fields(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_tags_url(self.active_business_person.id),
+            {
+                "tag": self.vip.id,
+                "person": self.archived_business_person.id,
+                "is_active": False,
+                "assigned_by": self.manager_user.id,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_assign_tag_rejects_slug_input(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_tags_url(self.active_business_person.id),
+            {"tag": self.vip.slug},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_remove_tag_anonymous_receives_401(self):
+        response = self.client.post(self.get_person_tag_remove_url(self.active_business_person.id, self.vip.id), format="json")
+        self.assertEqual(response.status_code, 401)
+
+    def test_remove_tag_nonstaff_receives_403(self):
+        self.authenticate(self.non_staff_user)
+        response = self.client.post(
+            self.get_person_tag_remove_url(self.active_business_person.id, self.vip.id),
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_remove_tag_crm_viewer_receives_403(self):
+        self.authenticate(self.viewer_user)
+        response = self.client.post(
+            self.get_person_tag_remove_url(self.active_business_person.id, self.vip.id),
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_remove_tag_crm_manager_marks_assignment_inactive(self):
+        person_tag = PersonTag.objects.create(
+            person=self.active_business_person,
+            tag=self.vip,
+            assigned_by=self.admin_user,
+        )
+        assigned_at = person_tag.assigned_at
+
+        self.authenticate(self.manager_user)
+        response = self.client.post(
+            self.get_person_tag_remove_url(self.active_business_person.id, self.vip.id),
+            format="json",
+        )
+
+        person_tag.refresh_from_db()
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(person_tag.pk, PersonTag.objects.get(person=self.active_business_person, tag=self.vip).pk)
+        self.assertFalse(person_tag.is_active)
+        self.assertEqual(person_tag.removed_by, self.manager_user)
+        self.assertIsNotNone(person_tag.removed_at)
+        self.assertEqual(person_tag.assigned_by, self.admin_user)
+        self.assertEqual(person_tag.assigned_at, assigned_at)
+
+    def test_remove_tag_crm_admin_can_remove_active_assignment(self):
+        PersonTag.objects.create(person=self.active_business_person, tag=self.vip, assigned_by=self.manager_user)
+
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_tag_remove_url(self.active_business_person.id, self.vip.id),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 204)
+
+    def test_remove_tag_allows_cleanup_of_inactive_tag_definition_assignment(self):
+        person_tag = PersonTag.objects.create(
+            person=self.active_business_person,
+            tag=self.inactive_tag,
+            assigned_by=self.admin_user,
+        )
+
+        self.authenticate(self.manager_user)
+        response = self.client.post(
+            self.get_person_tag_remove_url(self.active_business_person.id, self.inactive_tag.id),
+            format="json",
+        )
+
+        person_tag.refresh_from_db()
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(person_tag.is_active)
+        self.assertEqual(person_tag.removed_by, self.manager_user)
+
+    def test_remove_tag_missing_assignment_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_tag_remove_url(self.active_business_person.id, self.vip.id),
+            format="json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_remove_tag_already_inactive_returns_409_without_overwriting_removal_fields(self):
+        removed_at = timezone.now()
+        person_tag = PersonTag.objects.create(
+            person=self.active_business_person,
+            tag=self.vip,
+            assigned_by=self.admin_user,
+            is_active=False,
+            removed_by=self.manager_user,
+            removed_at=removed_at,
+        )
+
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_tag_remove_url(self.active_business_person.id, self.vip.id),
+            format="json",
+        )
+
+        person_tag.refresh_from_db()
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(person_tag.removed_by, self.manager_user)
+        self.assertEqual(person_tag.removed_at, removed_at)
+
+    def test_remove_tag_archived_business_person_returns_409(self):
+        PersonTag.objects.create(person=self.archived_business_person, tag=self.vip, assigned_by=self.admin_user)
+
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_tag_remove_url(self.archived_business_person.id, self.vip.id),
+            format="json",
+        )
+        self.assertEqual(response.status_code, 409)
+
+    def test_remove_tag_technical_person_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_tag_remove_url(self.technical_person.id, self.vip.id),
+            format="json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_remove_tag_nonexistent_person_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(self.get_person_tag_remove_url(999999, self.vip.id), format="json")
+        self.assertEqual(response.status_code, 404)
+
+    def test_remove_tag_rejects_request_body(self):
+        PersonTag.objects.create(person=self.active_business_person, tag=self.vip, assigned_by=self.admin_user)
+
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_tag_remove_url(self.active_business_person.id, self.vip.id),
+            {"removed_by": self.admin_user.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+
     def test_overview_returns_empty_tags_when_none_are_assigned(self):
         self.authenticate(self.admin_user)
         response = self.client.get(self.get_person_overview_url(self.active_business_person.id))
@@ -534,3 +874,81 @@ class TagApiTests(TestCase):
         response = self.client.get(self.get_person_overview_url(self.technical_person.id))
 
         self.assertEqual(response.status_code, 404)
+
+    def test_assignment_appears_in_person_tags_read_and_overview(self):
+        self.authenticate(self.admin_user)
+        assign_response = self.client.post(
+            self.get_person_tags_url(self.active_business_person.id),
+            {"tag": self.vip.id},
+            format="json",
+        )
+        list_response = self.client.get(self.get_person_tags_url(self.active_business_person.id))
+        overview_response = self.client.get(self.get_person_overview_url(self.active_business_person.id))
+
+        self.assertEqual(assign_response.status_code, 201)
+        self.assertEqual(list_response.data, [{"id": self.vip.id, "name": "VIP", "slug": "vip"}])
+        self.assertEqual(overview_response.data["tags"], [{"id": self.vip.id, "name": "VIP", "slug": "vip"}])
+        self.assertEqual(overview_response.data["skills"], [])
+        self.assertEqual(overview_response.data["interests"], [])
+        self.assertEqual(overview_response.data["membership"]["id"], self.membership.id)
+        self.assertEqual(overview_response.data["professional_profile"]["id"], self.professional_profile.id)
+
+    def test_reactivation_appears_again_in_person_tags_read_and_overview(self):
+        PersonTag.objects.create(
+            person=self.active_business_person,
+            tag=self.vip,
+            assigned_by=self.admin_user,
+            is_active=False,
+            removed_by=self.manager_user,
+            removed_at=timezone.now(),
+        )
+
+        self.authenticate(self.admin_user)
+        reactivate_response = self.client.post(
+            self.get_person_tags_url(self.active_business_person.id),
+            {"tag": self.vip.id},
+            format="json",
+        )
+        list_response = self.client.get(self.get_person_tags_url(self.active_business_person.id))
+        overview_response = self.client.get(self.get_person_overview_url(self.active_business_person.id))
+
+        self.assertEqual(reactivate_response.status_code, 200)
+        self.assertEqual(list_response.data, [{"id": self.vip.id, "name": "VIP", "slug": "vip"}])
+        self.assertEqual(overview_response.data["tags"], [{"id": self.vip.id, "name": "VIP", "slug": "vip"}])
+
+    def test_removal_disappears_from_person_tags_read_and_overview(self):
+        PersonTag.objects.create(person=self.active_business_person, tag=self.vip, assigned_by=self.admin_user)
+
+        self.authenticate(self.admin_user)
+        remove_response = self.client.post(
+            self.get_person_tag_remove_url(self.active_business_person.id, self.vip.id),
+            format="json",
+        )
+        list_response = self.client.get(self.get_person_tags_url(self.active_business_person.id))
+        overview_response = self.client.get(self.get_person_overview_url(self.active_business_person.id))
+
+        self.assertEqual(remove_response.status_code, 204)
+        self.assertEqual(list_response.data, [])
+        self.assertEqual(overview_response.data["tags"], [])
+
+    def test_inactive_tag_definition_remains_hidden_after_reactivation_attempt_conflict(self):
+        PersonTag.objects.create(
+            person=self.active_business_person,
+            tag=self.inactive_tag,
+            assigned_by=self.admin_user,
+            is_active=False,
+            removed_by=self.manager_user,
+            removed_at=timezone.now(),
+        )
+
+        self.authenticate(self.admin_user)
+        self.client.post(
+            self.get_person_tags_url(self.active_business_person.id),
+            {"tag": self.inactive_tag.id},
+            format="json",
+        )
+        list_response = self.client.get(self.get_person_tags_url(self.active_business_person.id))
+        overview_response = self.client.get(self.get_person_overview_url(self.active_business_person.id))
+
+        self.assertEqual(list_response.data, [])
+        self.assertEqual(overview_response.data["tags"], [])

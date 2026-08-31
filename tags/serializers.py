@@ -8,3 +8,10 @@ class TagSummarySerializer(serializers.ModelSerializer):
         model = Tag
         fields = ("id", "name", "slug")
 
+
+class AssignTagSerializer(serializers.Serializer):
+    tag = serializers.IntegerField(min_value=1)
+
+
+class EmptyRequestSerializer(serializers.Serializer):
+    pass

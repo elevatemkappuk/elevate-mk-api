@@ -33,6 +33,7 @@ Local development URLs when running `manage.py runserver` on the default port:
 - Person skills endpoint: `http://localhost:8000/api/v1/people/{person_id}/skills/`
 - Person interests endpoint: `http://localhost:8000/api/v1/people/{person_id}/interests/`
 - Person tags endpoint: `http://localhost:8000/api/v1/people/{person_id}/tags/`
+- Person tag removal endpoint: `http://localhost:8000/api/v1/people/{person_id}/tags/{tag_id}/remove/`
 - Person skill removal endpoint: `http://localhost:8000/api/v1/people/{person_id}/skills/{skill_id}/`
 - Person membership endpoint: `http://localhost:8000/api/v1/people/{person_id}/membership/`
 - Person professional profile endpoint: `http://localhost:8000/api/v1/people/{person_id}/professional-profile/`
@@ -56,6 +57,7 @@ Environment-relative URL patterns:
 - Person skills endpoint: `{BASE_URL}/api/v1/people/{person_id}/skills/`
 - Person interests endpoint: `{BASE_URL}/api/v1/people/{person_id}/interests/`
 - Person tags endpoint: `{BASE_URL}/api/v1/people/{person_id}/tags/`
+- Person tag removal endpoint: `{BASE_URL}/api/v1/people/{person_id}/tags/{tag_id}/remove/`
 - Person skill removal endpoint: `{BASE_URL}/api/v1/people/{person_id}/skills/{skill_id}/`
 - Person membership endpoint: `{BASE_URL}/api/v1/people/{person_id}/membership/`
 - Person professional profile endpoint: `{BASE_URL}/api/v1/people/{person_id}/professional-profile/`
@@ -82,6 +84,8 @@ Currently implemented Elevate endpoints:
 - `GET /api/v1/people/{person_id}/skills/`
 - `GET /api/v1/people/{person_id}/interests/`
 - `GET /api/v1/people/{person_id}/tags/`
+- `POST /api/v1/people/{person_id}/tags/`
+- `POST /api/v1/people/{person_id}/tags/{tag_id}/remove/`
 - `POST /api/v1/people/{person_id}/interests/`
 - `DELETE /api/v1/people/{person_id}/interests/{interest_id}/`
 - `POST /api/v1/people/{person_id}/skills/`
@@ -138,6 +142,8 @@ Current implementation is serializer-based and expects request bodies appropriat
 - `GET /api/v1/people/{person_id}/skills/`: path parameter only
 - `GET /api/v1/people/{person_id}/interests/`: path parameter only
 - `GET /api/v1/people/{person_id}/tags/`: path parameter only
+- `POST /api/v1/people/{person_id}/tags/`: path parameter plus JSON body
+- `POST /api/v1/people/{person_id}/tags/{tag_id}/remove/`: path parameters only; request body should be omitted
 - `POST /api/v1/people/{person_id}/interests/`: path parameter plus JSON body
 - `DELETE /api/v1/people/{person_id}/interests/{interest_id}/`: path parameters only
 - `POST /api/v1/people/{person_id}/skills/`: path parameter plus JSON body
@@ -911,6 +917,113 @@ Example response:
 ]
 ```
 
+## Endpoint: `POST /api/v1/people/{person_id}/tags/`
+Purpose:
+- Create or reactivate a lifecycle-aware `PersonTag` assignment for an active CRM-visible `BUSINESS` Person.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN` or `CRM_MANAGER` required
+- `CRM_VIEWER` is read-only and receives `403 Forbidden`
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+Write rules:
+
+- Only active `BUSINESS` Persons are writable
+- archived `BUSINESS` Persons return `409 Conflict`
+- `TECHNICAL` Person records are outside the CRM People domain and return `404 Not Found`
+- nonexistent Person IDs return `404 Not Found`
+- only active canonical Tags may be assigned or reactivated
+- the request mutates `PersonTag` only and does not edit Tag taxonomy rows
+
+Request body:
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `tag` | integer | yes | Canonical Tag primary key |
+
+Client must not supply:
+
+- `person`
+- `id`
+- `is_active`
+- `assigned_by`
+- `assigned_at`
+- `removed_by`
+- `removed_at`
+- `name`
+- `slug`
+- any unknown field
+
+Lifecycle behavior:
+
+- if no `PersonTag` exists, the endpoint creates one row and returns `201 Created`
+- if an inactive `PersonTag` already exists, the endpoint reactivates that same row and returns `200 OK`
+- reactivation refreshes `assigned_by` and `assigned_at`
+- reactivation clears `removed_by` and `removed_at`
+- if the `PersonTag` is already active, the endpoint returns `409 Conflict`
+- `unique(person, tag)` remains authoritative and duplicate creation races are converted to controlled conflicts
+
+Tag validation behavior:
+
+- nonexistent Tag IDs return `400 Bad Request`
+- inactive Tag definitions return `400 Bad Request`
+- inactive Tag definitions are not auto-reactivated
+- an inactive historical `PersonTag` tied to an inactive Tag cannot be reactivated until the canonical Tag definition is active again
+
+Example request:
+```json
+{
+  "tag": 8
+}
+```
+
+Example response:
+```json
+{
+  "id": 8,
+  "name": "VIP",
+  "slug": "vip"
+}
+```
+
+## Endpoint: `POST /api/v1/people/{person_id}/tags/{tag_id}/remove/`
+Purpose:
+- Mark an existing active `PersonTag` inactive for an active CRM-visible `BUSINESS` Person.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN` or `CRM_MANAGER` required
+- `CRM_VIEWER` is read-only and receives `403 Forbidden`
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+Write rules:
+
+- Only active `BUSINESS` Persons are writable
+- archived `BUSINESS` Persons return `409 Conflict`
+- `TECHNICAL` Person records return `404 Not Found`
+- nonexistent Person IDs return `404 Not Found`
+- missing `PersonTag` assignments return `404 Not Found`
+- already inactive `PersonTag` assignments return `409 Conflict`
+- request body should be omitted
+
+Removal lifecycle behavior:
+
+- successful removal preserves the existing `PersonTag` row
+- `is_active` becomes `False`
+- `removed_by` and `removed_at` are set by backend lifecycle logic
+- `assigned_by` and `assigned_at` are preserved
+- removing an assignment does not delete the canonical Tag definition
+- an active assignment tied to an inactive Tag definition may still be removed for cleanup
+- repeated reassignment later reuses the same `PersonTag` row instead of creating a duplicate
+
+Successful response:
+
+- Status: `204 No Content`
+- Empty body
+
 ## Endpoint: `POST /api/v1/people/{person_id}/interests/`
 Purpose:
 - Create a `PersonInterest` assignment for an active CRM-visible `BUSINESS` Person.
@@ -1557,6 +1670,9 @@ Tags behavior:
 - `PersonTag` lifecycle metadata is intentionally omitted from the compact overview projection
 - Tags are internal CRM classification data, not member-facing profile attributes
 - V1 Tags do not imply tasks, reminders, workflow completion, availability, or commitment
+- successful assignment and reactivation naturally make the Tag appear in overview
+- successful removal naturally removes the Tag from overview while preserving the underlying `PersonTag` row
+- inactive Tag definitions remain hidden from overview even if historical `PersonTag` rows still exist
 
 Fields intentionally not exposed:
 

@@ -237,14 +237,16 @@ Current rules:
 
 - Tag is an internal CRM classification taxonomy
 - PersonTag is the lifecycle-preserving assignment relationship
-- `unique(person, tag)` prevents duplicate rows and future re-assignment should reactivate the same row
+- `unique(person, tag)` prevents duplicate rows and reassignment reactivates the same row
 - active assignments have `removed_by = null` and `removed_at = null`
 - inactive assignments retain the row plus removal attribution
+- new assignment creates the row with current assignment attribution
+- removal preserves the row, sets `is_active = False`, and records `removed_by` plus `removed_at`
+- reactivation preserves the row, sets `is_active = True`, refreshes `assigned_by` plus `assigned_at`, and clears `removed_by` plus `removed_at`
 - Tags are distinct from Skills and Interests
 - Tags do not imply completed workflows, tasks, reminders, availability, or commitment
 - inactive Tag definitions and inactive assignments are excluded from normal CRM reads
 - Tag definitions should be deactivated rather than treated as disposable taxonomy rows
-- future removal/reassignment workflows should preserve the PersonTag row rather than creating a second row
 - Tags must not be exposed on public or member-facing surfaces
 - explicit AuditEvent integration is deferred
 
@@ -495,8 +497,10 @@ Currently implemented rules:
 - the same Tag may belong to many different People
 - a Person must not receive the same Tag twice
 - PersonTag preserves assignment/removal lifecycle state rather than behaving like a disposable join row
-- future removal of a Tag assignment should not delete historical lifecycle state
-- future re-assignment should reactivate the same row instead of creating a new row
+- Tag assignment does not delete historical lifecycle state
+- re-assignment reactivates the same row instead of creating a new row
+- active rows require `removed_by = null` and `removed_at = null`
+- inactive rows require both `removed_by` and `removed_at`
 - normal CRM reads expose only active PersonTag assignments whose Tag definition is active
 
 ## Model: `memberships.Membership`
