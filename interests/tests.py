@@ -3,6 +3,7 @@ from django.db import IntegrityError
 from django.db.models import ProtectedError
 from django.test import TestCase, override_settings
 from django.utils import timezone
+from unittest.mock import patch
 
 from accounts.models import User
 from interests.admin import InterestAdmin, PersonInterestAdmin
@@ -106,6 +107,7 @@ class InterestApiTests(TestCase):
         self.client = APIClient()
         self.interests_url = "/api/v1/interests/"
         self.person_interests_url_template = "/api/v1/people/{person_id}/interests/"
+        self.person_interest_detail_url_template = "/api/v1/people/{person_id}/interests/{interest_id}/"
         self.person_overview_url_template = "/api/v1/people/{person_id}/overview/"
 
         self.non_staff_user = User.objects.create_user(
@@ -195,6 +197,9 @@ class InterestApiTests(TestCase):
 
     def get_person_interests_url(self, person_id):
         return self.person_interests_url_template.format(person_id=person_id)
+
+    def get_person_interest_detail_url(self, person_id, interest_id):
+        return self.person_interest_detail_url_template.format(person_id=person_id, interest_id=interest_id)
 
     def get_person_overview_url(self, person_id):
         return self.person_overview_url_template.format(person_id=person_id)
@@ -379,6 +384,288 @@ class InterestApiTests(TestCase):
 
         self.assertEqual(list(response.data[0].keys()), ["id", "name", "slug"])
 
+    def test_assign_interest_anonymous_receives_401(self):
+        response = self.client.post(
+            self.get_person_interests_url(self.active_business_person.id),
+            {"interest": self.networking.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_assign_interest_nonstaff_receives_403(self):
+        self.authenticate(self.non_staff_user)
+        response = self.client.post(
+            self.get_person_interests_url(self.active_business_person.id),
+            {"interest": self.networking.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_assign_interest_viewer_receives_403(self):
+        self.authenticate(self.viewer_user)
+        response = self.client.post(
+            self.get_person_interests_url(self.active_business_person.id),
+            {"interest": self.networking.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_assign_interest_manager_receives_201(self):
+        self.authenticate(self.manager_user)
+        response = self.client.post(
+            self.get_person_interests_url(self.active_business_person.id),
+            {"interest": self.networking.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+
+    def test_assign_interest_admin_receives_201(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_interests_url(self.active_business_person.id),
+            {"interest": self.networking.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+
+    def test_assign_interest_active_business_and_active_interest_creates_person_interest(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_interests_url(self.active_business_person.id),
+            {"interest": self.technology.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(PersonInterest.objects.filter(person=self.active_business_person, interest=self.technology).exists())
+        self.assertEqual(
+            response.data,
+            {"id": self.technology.id, "name": "Technology", "slug": "technology"},
+        )
+
+    def test_assign_interest_duplicate_returns_409_and_does_not_create_second_row(self):
+        PersonInterest.objects.create(person=self.active_business_person, interest=self.networking)
+
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_interests_url(self.active_business_person.id),
+            {"interest": self.networking.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(PersonInterest.objects.filter(person=self.active_business_person, interest=self.networking).count(), 1)
+
+    def test_assign_interest_duplicate_inactive_assignment_returns_409(self):
+        PersonInterest.objects.create(person=self.active_business_person, interest=self.inactive_interest)
+
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_interests_url(self.active_business_person.id),
+            {"interest": self.inactive_interest.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409)
+
+    def test_assign_interest_inactive_interest_returns_400(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_interests_url(self.active_business_person.id),
+            {"interest": self.inactive_interest.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("interest", response.data)
+
+    def test_assign_interest_nonexistent_interest_returns_400(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_interests_url(self.active_business_person.id),
+            {"interest": 999999},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("interest", response.data)
+
+    def test_assign_interest_archived_business_person_returns_409(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_interests_url(self.archived_business_person.id),
+            {"interest": self.networking.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 409)
+
+    def test_assign_interest_technical_person_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_interests_url(self.technical_person.id),
+            {"interest": self.networking.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_assign_interest_nonexistent_person_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_interests_url(999999),
+            {"interest": self.networking.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_assign_interest_client_cannot_control_person(self):
+        other_person = Person.objects.create(first_name="Other", last_name="Person")
+
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_interests_url(self.active_business_person.id),
+            {"interest": self.networking.id, "person": other_person.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("person", response.data)
+        self.assertFalse(PersonInterest.objects.filter(person=other_person, interest=self.networking).exists())
+
+    def test_assign_interest_unknown_fields_are_rejected(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_interests_url(self.active_business_person.id),
+            {"interest": self.networking.id, "created_at": "2026-08-31T10:00:00Z"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("created_at", response.data)
+
+    def test_assign_interest_response_does_not_expose_person_interest_id(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_interests_url(self.active_business_person.id),
+            {"interest": self.networking.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(set(response.data.keys()), {"id", "name", "slug"})
+
+    def test_assign_interest_duplicate_integrity_error_is_returned_as_409(self):
+        self.authenticate(self.admin_user)
+        with patch("interests.views.PersonInterest.objects.create", side_effect=IntegrityError):
+            response = self.client.post(
+                self.get_person_interests_url(self.active_business_person.id),
+                {"interest": self.networking.id},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 409)
+
+    def test_remove_interest_anonymous_receives_401(self):
+        PersonInterest.objects.create(person=self.active_business_person, interest=self.networking)
+        response = self.client.delete(
+            self.get_person_interest_detail_url(self.active_business_person.id, self.networking.id)
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_remove_interest_nonstaff_receives_403(self):
+        PersonInterest.objects.create(person=self.active_business_person, interest=self.networking)
+        self.authenticate(self.non_staff_user)
+        response = self.client.delete(
+            self.get_person_interest_detail_url(self.active_business_person.id, self.networking.id)
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_remove_interest_viewer_receives_403(self):
+        PersonInterest.objects.create(person=self.active_business_person, interest=self.networking)
+        self.authenticate(self.viewer_user)
+        response = self.client.delete(
+            self.get_person_interest_detail_url(self.active_business_person.id, self.networking.id)
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_remove_interest_manager_receives_204(self):
+        PersonInterest.objects.create(person=self.active_business_person, interest=self.networking)
+        self.authenticate(self.manager_user)
+        response = self.client.delete(
+            self.get_person_interest_detail_url(self.active_business_person.id, self.networking.id)
+        )
+        self.assertEqual(response.status_code, 204)
+
+    def test_remove_interest_admin_receives_204(self):
+        PersonInterest.objects.create(person=self.active_business_person, interest=self.networking)
+        self.authenticate(self.admin_user)
+        response = self.client.delete(
+            self.get_person_interest_detail_url(self.active_business_person.id, self.networking.id)
+        )
+        self.assertEqual(response.status_code, 204)
+
+    def test_remove_interest_existing_assignment_returns_204_and_deletes_person_interest_only(self):
+        PersonInterest.objects.create(person=self.active_business_person, interest=self.networking)
+        other_person = Person.objects.create(first_name="Other", last_name="Worker")
+        PersonInterest.objects.create(person=other_person, interest=self.networking)
+
+        self.authenticate(self.admin_user)
+        response = self.client.delete(
+            self.get_person_interest_detail_url(self.active_business_person.id, self.networking.id)
+        )
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(PersonInterest.objects.filter(person=self.active_business_person, interest=self.networking).exists())
+        self.assertTrue(Interest.objects.filter(pk=self.networking.id).exists())
+        self.assertTrue(PersonInterest.objects.filter(person=other_person, interest=self.networking).exists())
+
+    def test_remove_inactive_interest_assignment_can_be_removed(self):
+        PersonInterest.objects.create(person=self.active_business_person, interest=self.inactive_interest)
+
+        self.authenticate(self.admin_user)
+        response = self.client.delete(
+            self.get_person_interest_detail_url(self.active_business_person.id, self.inactive_interest.id)
+        )
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(PersonInterest.objects.filter(person=self.active_business_person, interest=self.inactive_interest).exists())
+
+    def test_remove_interest_missing_assignment_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.delete(
+            self.get_person_interest_detail_url(self.active_business_person.id, self.networking.id)
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_remove_interest_nonexistent_interest_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.delete(
+            self.get_person_interest_detail_url(self.active_business_person.id, 999999)
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_remove_interest_archived_business_person_returns_409(self):
+        PersonInterest.objects.create(person=self.archived_business_person, interest=self.networking)
+
+        self.authenticate(self.admin_user)
+        response = self.client.delete(
+            self.get_person_interest_detail_url(self.archived_business_person.id, self.networking.id)
+        )
+        self.assertEqual(response.status_code, 409)
+
+    def test_remove_interest_technical_person_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.delete(
+            self.get_person_interest_detail_url(self.technical_person.id, self.networking.id)
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_remove_interest_nonexistent_person_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.delete(
+            self.get_person_interest_detail_url(999999, self.networking.id)
+        )
+        self.assertEqual(response.status_code, 404)
+
     def test_overview_returns_empty_interests_when_none_are_assigned(self):
         self.authenticate(self.admin_user)
         response = self.client.get(self.get_person_overview_url(self.active_business_person.id))
@@ -444,3 +731,49 @@ class InterestApiTests(TestCase):
         response = self.client.get(self.get_person_overview_url(self.technical_person.id))
 
         self.assertEqual(response.status_code, 404)
+
+    def test_assignment_appears_in_overview_without_changing_skills_membership_or_professional_profile(self):
+        PersonSkill.objects.create(person=self.active_business_person, skill=self.accounting_skill)
+
+        self.authenticate(self.admin_user)
+        create_response = self.client.post(
+            self.get_person_interests_url(self.active_business_person.id),
+            {"interest": self.networking.id},
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        overview_response = self.client.get(self.get_person_overview_url(self.active_business_person.id))
+
+        self.assertEqual(overview_response.status_code, 200)
+        self.assertEqual(
+            overview_response.data["interests"],
+            [{"id": self.networking.id, "name": "Networking", "slug": "networking"}],
+        )
+        self.assertEqual(
+            overview_response.data["skills"],
+            [{"id": self.accounting_skill.id, "name": "Accounting", "slug": "accounting"}],
+        )
+        self.assertEqual(overview_response.data["membership"]["id"], self.membership.id)
+        self.assertEqual(overview_response.data["professional_profile"]["id"], self.professional_profile.id)
+
+    def test_removal_disappears_from_overview_without_changing_skills_membership_or_professional_profile(self):
+        PersonInterest.objects.create(person=self.active_business_person, interest=self.networking)
+        PersonSkill.objects.create(person=self.active_business_person, skill=self.accounting_skill)
+
+        self.authenticate(self.admin_user)
+        delete_response = self.client.delete(
+            self.get_person_interest_detail_url(self.active_business_person.id, self.networking.id)
+        )
+        self.assertEqual(delete_response.status_code, 204)
+
+        overview_response = self.client.get(self.get_person_overview_url(self.active_business_person.id))
+
+        self.assertEqual(overview_response.status_code, 200)
+        self.assertEqual(overview_response.data["interests"], [])
+        self.assertEqual(
+            overview_response.data["skills"],
+            [{"id": self.accounting_skill.id, "name": "Accounting", "slug": "accounting"}],
+        )
+        self.assertEqual(overview_response.data["membership"]["id"], self.membership.id)
+        self.assertEqual(overview_response.data["professional_profile"]["id"], self.professional_profile.id)

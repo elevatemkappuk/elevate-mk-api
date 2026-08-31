@@ -76,6 +76,8 @@ Currently implemented Elevate endpoints:
 - `GET /api/v1/people/{person_id}/`
 - `GET /api/v1/people/{person_id}/skills/`
 - `GET /api/v1/people/{person_id}/interests/`
+- `POST /api/v1/people/{person_id}/interests/`
+- `DELETE /api/v1/people/{person_id}/interests/{interest_id}/`
 - `POST /api/v1/people/{person_id}/skills/`
 - `DELETE /api/v1/people/{person_id}/skills/{skill_id}/`
 - `GET /api/v1/people/{person_id}/membership/`
@@ -128,6 +130,8 @@ Current implementation is serializer-based and expects request bodies appropriat
 - `GET /api/v1/people/{person_id}/`: path parameter only
 - `GET /api/v1/people/{person_id}/skills/`: path parameter only
 - `GET /api/v1/people/{person_id}/interests/`: path parameter only
+- `POST /api/v1/people/{person_id}/interests/`: path parameter plus JSON body
+- `DELETE /api/v1/people/{person_id}/interests/{interest_id}/`: path parameters only
 - `POST /api/v1/people/{person_id}/skills/`: path parameter plus JSON body
 - `DELETE /api/v1/people/{person_id}/skills/{skill_id}/`: path parameters only
 - `GET /api/v1/people/{person_id}/membership/`: path parameter only
@@ -800,6 +804,87 @@ Example response:
   }
 ]
 ```
+
+## Endpoint: `POST /api/v1/people/{person_id}/interests/`
+Purpose:
+- Create a `PersonInterest` assignment for an active CRM-visible `BUSINESS` Person.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN` or `CRM_MANAGER` required
+- `CRM_VIEWER` is read-only and receives `403 Forbidden`
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+Write rules:
+
+- Only active `BUSINESS` Persons are writable
+- archived `BUSINESS` Persons return `409 Conflict`
+- `TECHNICAL` Person records are outside the CRM People domain and return `404 Not Found`
+- nonexistent Person IDs return `404 Not Found`
+- only active canonical Interests may be assigned
+- duplicate assignments return `409 Conflict`
+- duplicate handling remains authoritative even if the stored assignment references an Interest later deactivated
+
+Request body:
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `interest` | integer | yes | Canonical Interest primary key |
+
+Client must not supply:
+
+- `person`
+- `id`
+- `created_at`
+- `name`
+- `slug`
+- any unknown field
+
+Validation and conflict behavior:
+
+- nonexistent Interest IDs return `400 Bad Request`
+- inactive Interests return `400 Bad Request`
+- duplicate assignments return `409 Conflict`
+- the endpoint creates only the relationship row; it does not edit canonical Interest taxonomy data
+- Interest assignment means interest only and does not imply willingness, availability, mentoring direction, or commitment
+
+Example request:
+```json
+{
+  "interest": 5
+}
+```
+
+Successful response:
+
+- Status: `201 Created`
+- returns the standard Interest summary representation
+
+## Endpoint: `DELETE /api/v1/people/{person_id}/interests/{interest_id}/`
+Purpose:
+- Remove only the `PersonInterest` assignment between a CRM-visible `BUSINESS` Person and an Interest.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN` or `CRM_MANAGER` required
+- `CRM_VIEWER` is read-only and receives `403 Forbidden`
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+Delete rules:
+
+- Only active `BUSINESS` Persons are writable
+- archived `BUSINESS` Persons return `409 Conflict`
+- `TECHNICAL` Person records are outside the CRM People domain and return `404 Not Found`
+- nonexistent Person IDs return `404 Not Found`
+- missing assignments return `404 Not Found`
+- inactive Interest assignments may still be removed by known `interest_id`
+- the endpoint deletes only the `PersonInterest` relationship; it does not delete or deactivate the canonical Interest
+
+Successful response:
+
+- Status: `204 No Content`
 
 ## Endpoint: `POST /api/v1/people/{person_id}/skills/`
 Purpose:

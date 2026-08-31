@@ -221,6 +221,7 @@ Current rules:
 - inactive Interest definitions remain referentially valid through existing `PersonInterest` rows
 - inactive Interest definitions are excluded from normal active CRM reads
 - Interest definitions should be deactivated rather than treated as disposable taxonomy rows
+- removing a `PersonInterest` deletes only the relationship row, not the canonical `Interest`
 
 ## Model: `professional_profiles.Industry`
 Database table: `professional_profiles_industry`
@@ -401,6 +402,7 @@ Currently implemented rules:
 - a Person must not receive the same Interest twice
 - the join intentionally carries no direction, ranking, source, notes, willingness, availability, or commitment metadata
 - inactive `Interest` rows may continue to have stored `PersonInterest` references until explicitly removed
+- deleting a `PersonInterest` does not delete the canonical `Interest`
 
 ## Model: `memberships.Membership`
 Database table: `memberships_membership`
