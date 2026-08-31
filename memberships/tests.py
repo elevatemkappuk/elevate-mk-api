@@ -1,4 +1,5 @@
 from datetime import date
+from unittest import mock
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
@@ -8,6 +9,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from accounts.models import User
+from audit.models import AuditEvent
 from memberships.models import Membership
 from people.models import Person
 from staff_access.models import StaffRole, StaffRoleAssignment
@@ -460,6 +462,7 @@ class MakeMembershipApiTests(TestCase):
         self.authenticate(self.viewer_user)
         response = self.client.post(self.get_url(self.business_person.id), data={}, format="json")
         self.assertEqual(response.status_code, 403)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.MEMBERSHIP_CREATED).count(), 0)
 
     def test_crm_manager_can_make_member(self):
         self.authenticate(self.manager_user)
@@ -715,6 +718,88 @@ class MakeMembershipApiTests(TestCase):
         self.assertEqual(overview_response.data["relationship"]["label"], "Active Member")
         self.assertIsNotNone(overview_response.data["membership"])
 
+    def test_successful_make_member_creates_membership_created_audit_event(self):
+        self.authenticate(self.admin_user)
+
+        response = self.client.post(
+            self.get_url(self.business_person.id),
+            data={"joined_at": "2024-04-12", "membership_source": "STAFF"},
+            format="json",
+        )
+
+        membership = Membership.objects.get(person=self.business_person)
+        event = AuditEvent.objects.get(action=AuditEvent.Action.MEMBERSHIP_CREATED)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(event.actor_user, self.admin_user)
+        self.assertEqual(event.entity_type, "Membership")
+        self.assertEqual(event.entity_id, str(membership.id))
+        self.assertEqual(event.metadata, {"person_id": str(self.business_person.id)})
+        self.assertEqual(
+            event.changes,
+            {
+                "status": {"from": None, "to": Membership.Status.ACTIVE},
+                "joined_at": {"from": None, "to": "2024-04-12"},
+                "membership_source": {"from": None, "to": Membership.Source.STAFF},
+            },
+        )
+        self.assertNotIn("primary_email", event.metadata)
+        self.assertNotIn("person", event.changes)
+
+    def test_make_member_conflicts_and_validation_create_no_membership_created_audit_event(self):
+        self.authenticate(self.admin_user)
+
+        duplicate_response = self.client.post(
+            self.get_url(self.active_membership_person.id),
+            data={"joined_at": "2025-01-01", "membership_source": "STAFF"},
+            format="json",
+        )
+        archived_response = self.client.post(
+            self.get_url(self.archived_business_person.id),
+            data={"joined_at": "2024-04-12", "membership_source": "STAFF"},
+            format="json",
+        )
+        invalid_response = self.client.post(
+            self.get_url(self.business_person.id),
+            data={"joined_at": "not-a-date", "membership_source": "STAFF"},
+            format="json",
+        )
+        technical_response = self.client.post(
+            self.get_url(self.technical_person.id),
+            data={"joined_at": "2024-04-12", "membership_source": "STAFF"},
+            format="json",
+        )
+
+        self.assertEqual(duplicate_response.status_code, 409)
+        self.assertEqual(archived_response.status_code, 409)
+        self.assertEqual(invalid_response.status_code, 400)
+        self.assertEqual(technical_response.status_code, 404)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.MEMBERSHIP_CREATED).count(), 0)
+
+    def test_viewer_make_member_creates_no_membership_created_audit_event(self):
+        self.authenticate(self.viewer_user)
+        response = self.client.post(
+            self.get_url(self.business_person.id),
+            data={"joined_at": "2024-04-12", "membership_source": "STAFF"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.MEMBERSHIP_CREATED).count(), 0)
+
+    def test_make_member_rolls_back_when_audit_write_fails(self):
+        self.authenticate(self.admin_user)
+
+        with mock.patch("memberships.views.record_audit_event", side_effect=RuntimeError("audit down")):
+            response = self.client.post(
+                self.get_url(self.business_person.id),
+                data={"joined_at": "2024-04-12", "membership_source": "STAFF"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertFalse(Membership.objects.filter(person=self.business_person).exists())
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.MEMBERSHIP_CREATED).count(), 0)
+
 
 @override_settings(ROOT_URLCONF="config.urls")
 class EndMembershipApiTests(TestCase):
@@ -834,6 +919,7 @@ class EndMembershipApiTests(TestCase):
         self.authenticate(self.viewer_user)
         response = self.client.post(self.get_url(self.business_person.id), data={}, format="json")
         self.assertEqual(response.status_code, 403)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.MEMBERSHIP_ENDED).count(), 0)
 
     def test_crm_manager_can_end_membership(self):
         self.authenticate(self.manager_user)
@@ -1051,3 +1137,76 @@ class EndMembershipApiTests(TestCase):
         self.assertEqual(overview_response.data["relationship"]["label"], "Former Member")
         self.assertEqual(overview_response.data["membership"]["status"], "FORMER")
         self.assertEqual(overview_response.data["membership"]["ended_at"], "2026-08-30")
+
+    def test_successful_end_membership_creates_membership_ended_audit_event(self):
+        self.authenticate(self.admin_user)
+
+        response = self.client.post(
+            self.get_url(self.business_person.id),
+            data={"ended_at": "2026-08-30"},
+            format="json",
+        )
+
+        event = AuditEvent.objects.get(action=AuditEvent.Action.MEMBERSHIP_ENDED)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(event.actor_user, self.admin_user)
+        self.assertEqual(event.entity_type, "Membership")
+        self.assertEqual(event.entity_id, str(self.active_membership.id))
+        self.assertEqual(event.metadata, {"person_id": str(self.business_person.id)})
+        self.assertEqual(
+            event.changes,
+            {
+                "status": {"from": Membership.Status.ACTIVE, "to": Membership.Status.FORMER},
+                "ended_at": {"from": None, "to": "2026-08-30"},
+            },
+        )
+        self.assertNotIn("joined_at", event.changes)
+        self.assertNotIn("membership_source", event.changes)
+
+    def test_end_membership_failures_create_no_membership_ended_audit_event(self):
+        self.authenticate(self.admin_user)
+
+        already_former = self.client.post(
+            self.get_url(self.former_person.id),
+            data={"ended_at": "2026-08-30"},
+            format="json",
+        )
+        invalid_date = self.client.post(
+            self.get_url(self.business_person.id),
+            data={"ended_at": "2024-04-11"},
+            format="json",
+        )
+        archived = self.client.post(
+            self.get_url(self.archived_business_person.id),
+            data={"ended_at": "2026-08-30"},
+            format="json",
+        )
+
+        self.authenticate(self.viewer_user)
+        viewer = self.client.post(
+            self.get_url(self.business_person.id),
+            data={"ended_at": "2026-08-30"},
+            format="json",
+        )
+
+        self.assertEqual(already_former.status_code, 409)
+        self.assertEqual(invalid_date.status_code, 400)
+        self.assertEqual(archived.status_code, 409)
+        self.assertEqual(viewer.status_code, 403)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.MEMBERSHIP_ENDED).count(), 0)
+
+    def test_end_membership_rolls_back_when_audit_write_fails(self):
+        self.authenticate(self.admin_user)
+
+        with mock.patch("memberships.views.record_audit_event", side_effect=RuntimeError("audit down")):
+            response = self.client.post(
+                self.get_url(self.business_person.id),
+                data={"ended_at": "2026-08-30"},
+                format="json",
+            )
+
+        self.active_membership.refresh_from_db()
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(self.active_membership.status, Membership.Status.ACTIVE)
+        self.assertIsNone(self.active_membership.ended_at)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.MEMBERSHIP_ENDED).count(), 0)

@@ -970,6 +970,9 @@ Lifecycle behavior:
 - reactivation clears `removed_by` and `removed_at`
 - if the `PersonTag` is already active, the endpoint returns `409 Conflict`
 - `unique(person, tag)` remains authoritative and duplicate creation races are converted to controlled conflicts
+- successful new assignment writes an immutable `AuditEvent` with action `TAG_ASSIGNED`
+- successful reactivation writes an immutable `AuditEvent` with action `TAG_REACTIVATED`
+- rejected or conflicting requests do not emit a successful lifecycle audit event
 
 Tag validation behavior:
 
@@ -1024,6 +1027,8 @@ Removal lifecycle behavior:
 - removing an assignment does not delete the canonical Tag definition
 - an active assignment tied to an inactive Tag definition may still be removed for cleanup
 - repeated reassignment later reuses the same `PersonTag` row instead of creating a duplicate
+- successful removal writes an immutable `AuditEvent` with action `TAG_REMOVED`
+- rejected or conflicting requests do not emit a successful lifecycle audit event
 
 Successful response:
 
@@ -1251,6 +1256,7 @@ Successful response:
 
 - Status: `201 Created`
 - Response body uses the standard Membership read representation
+- a successful mutation also writes an immutable `AuditEvent` with action `MEMBERSHIP_CREATED`
 
 Example request:
 ```json
@@ -1287,6 +1293,7 @@ Validation behavior:
 - invalid dates return `400 Bad Request`
 - invalid source values return `400 Bad Request`
 - client-controlled lifecycle fields are rejected rather than silently accepted
+- rejected or conflicting requests do not emit a successful lifecycle audit event
 
 ## Endpoint: `POST /api/v1/people/{person_id}/membership/end/`
 Purpose:
@@ -1356,6 +1363,8 @@ Conflict behavior:
 - archived BUSINESS person -> `409 Conflict`
 - `TECHNICAL` Person -> `404 Not Found`
 - nonexistent Person -> `404 Not Found`
+- successful `ACTIVE -> FORMER` transition also writes an immutable `AuditEvent` with action `MEMBERSHIP_ENDED`
+- rejected or conflicting requests do not emit a successful lifecycle audit event
 
 Independence:
 

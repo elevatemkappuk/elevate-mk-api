@@ -793,6 +793,7 @@ Application-level meaning:
 - normal application workflows must only append new rows
 - any future business mutation should write its audit row deliberately, not through magical implicit signals
 - future business mutations should write audit in the same transaction as the authoritative mutation where practical
+- required audit persistence failure rolls back the authoritative mutation rather than allowing state to commit without its audit record
 
 ### Security and Privacy Rules
 Current implementation rules:
@@ -801,3 +802,22 @@ Current implementation rules:
 - sensitive Note bodies must not later be copied into generic audit payloads
 - failed login audit currently does not retain attempted email
 - current auth audit also leaves `request_id` and `ip_address` null because no explicit trusted infrastructure/policy has been established yet
+
+### Current Integrated Mutation Auditing
+Current successful business audit capture:
+
+- `MEMBERSHIP_CREATED` for successful Make Member
+- `MEMBERSHIP_ENDED` for successful ACTIVE -> FORMER transitions
+- `TAG_ASSIGNED` for first-time active `PersonTag` creation
+- `TAG_REACTIVATED` for reusing an existing inactive `PersonTag`
+- `TAG_REMOVED` for active -> inactive `PersonTag` removal
+
+Current conventions:
+
+- `Membership` and `PersonTag` remain authoritative for current state
+- `AuditEvent.entity_type` uses the mutated relationship resource: `Membership` or `PersonTag`
+- `AuditEvent.entity_id` stores that mutated row's primary key as a string
+- `metadata.person_id` stores the related Person primary key as a string for future cross-domain Person audit history
+- Tag lifecycle events also store `metadata.tag_id` as the canonical Tag primary key string
+- `changes` remains compact and records only the lifecycle transition that occurred
+- no historical membership or tag events are fabricated for mutations that predated audit deployment

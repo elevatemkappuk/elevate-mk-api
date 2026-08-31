@@ -7,6 +7,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.serializers import ValidationError
 
+from audit.models import AuditEvent
+from audit.services import record_audit_event
 from people.models import Person
 from staff_access.models import StaffRole
 from staff_access.permissions import HasActiveStaffRoleCodes
@@ -183,44 +185,62 @@ class PersonTagListView(generics.GenericAPIView):
         tag_id = input_serializer.validated_data["tag"]
         actor = request.user
 
-        try:
-            with transaction.atomic():
-                person = self.get_business_person_or_404(select_for_update=True)
+        with transaction.atomic():
+            person = self.get_business_person_or_404(select_for_update=True)
 
-                if person.archived_at is not None:
-                    raise TagAssignmentConflict("Archived people cannot receive tag changes.")
+            if person.archived_at is not None:
+                raise TagAssignmentConflict("Archived people cannot receive tag changes.")
 
-                tag = Tag.objects.filter(pk=tag_id).first()
-                if tag is None:
-                    raise ValidationError({"tag": ["Tag does not exist."]})
-                if not tag.is_active:
-                    raise ValidationError({"tag": ["Only active tags may be assigned."]})
+            tag = Tag.objects.filter(pk=tag_id).first()
+            if tag is None:
+                raise ValidationError({"tag": ["Tag does not exist."]})
+            if not tag.is_active:
+                raise ValidationError({"tag": ["Only active tags may be assigned."]})
 
-                person_tag = (
-                    PersonTag.objects.select_for_update()
-                    .filter(person=person, tag=tag)
-                    .first()
-                )
+            person_tag = (
+                PersonTag.objects.select_for_update()
+                .filter(person=person, tag=tag)
+                .first()
+            )
 
-                if person_tag is None:
+            if person_tag is None:
+                try:
                     person_tag = PersonTag.objects.create(
                         person=person,
                         tag=tag,
                         assigned_by=actor,
                     )
-                    response_status = status.HTTP_201_CREATED
-                elif person_tag.is_active:
+                except IntegrityError:
                     raise TagAssignmentConflict("This tag is already assigned to the person.")
-                else:
-                    person_tag.is_active = True
-                    person_tag.assigned_by = actor
-                    person_tag.assigned_at = timezone.now()
-                    person_tag.removed_by = None
-                    person_tag.removed_at = None
-                    person_tag.save()
-                    response_status = status.HTTP_200_OK
-        except IntegrityError:
-            raise TagAssignmentConflict("This tag is already assigned to the person.")
+
+                record_audit_event(
+                    action=AuditEvent.Action.TAG_ASSIGNED,
+                    actor_user=actor,
+                    entity_type="PersonTag",
+                    entity_id=person_tag.id,
+                    changes={"is_active": {"from": None, "to": True}},
+                    metadata={"person_id": str(person.id), "tag_id": str(tag.id)},
+                )
+                response_status = status.HTTP_201_CREATED
+            elif person_tag.is_active:
+                raise TagAssignmentConflict("This tag is already assigned to the person.")
+            else:
+                person_tag.is_active = True
+                person_tag.assigned_by = actor
+                person_tag.assigned_at = timezone.now()
+                person_tag.removed_by = None
+                person_tag.removed_at = None
+                person_tag.save()
+
+                record_audit_event(
+                    action=AuditEvent.Action.TAG_REACTIVATED,
+                    actor_user=actor,
+                    entity_type="PersonTag",
+                    entity_id=person_tag.id,
+                    changes={"is_active": {"from": False, "to": True}},
+                    metadata={"person_id": str(person.id), "tag_id": str(tag.id)},
+                )
+                response_status = status.HTTP_200_OK
 
         serializer = TagSummarySerializer(person_tag.tag)
         return Response(serializer.data, status=response_status)
@@ -310,6 +330,15 @@ class PersonTagRemoveView(generics.GenericAPIView):
             person_tag.removed_by = request.user
             person_tag.removed_at = timezone.now()
             person_tag.save()
+
+            record_audit_event(
+                action=AuditEvent.Action.TAG_REMOVED,
+                actor_user=request.user,
+                entity_type="PersonTag",
+                entity_id=person_tag.id,
+                changes={"is_active": {"from": True, "to": False}},
+                metadata={"person_id": str(person.id), "tag_id": str(person_tag.tag_id)},
+            )
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 

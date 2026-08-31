@@ -1,3 +1,5 @@
+from unittest import mock
+
 from django.contrib.admin.sites import AdminSite
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
@@ -6,6 +8,7 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from accounts.models import User
+from audit.models import AuditEvent
 from interests.models import Interest, PersonInterest
 from memberships.models import Membership
 from people.models import Person
@@ -489,6 +492,27 @@ class TagApiTests(TestCase):
         self.assertEqual(response.data, {"id": self.vip.id, "name": "VIP", "slug": "vip"})
         self.assertNotIn("assigned_by", response.data)
 
+    def test_new_tag_assignment_creates_tag_assigned_audit_event(self):
+        self.authenticate(self.admin_user)
+
+        response = self.client.post(
+            self.get_person_tags_url(self.active_business_person.id),
+            {"tag": self.vip.id},
+            format="json",
+        )
+
+        person_tag = PersonTag.objects.get(person=self.active_business_person, tag=self.vip)
+        event = AuditEvent.objects.get(action=AuditEvent.Action.TAG_ASSIGNED)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(event.actor_user, self.admin_user)
+        self.assertEqual(event.entity_type, "PersonTag")
+        self.assertEqual(event.entity_id, str(person_tag.id))
+        self.assertEqual(
+            event.metadata,
+            {"person_id": str(self.active_business_person.id), "tag_id": str(self.vip.id)},
+        )
+        self.assertEqual(event.changes, {"is_active": {"from": None, "to": True}})
+
     def test_assign_tag_crm_admin_creates_exactly_one_person_tag(self):
         self.authenticate(self.admin_user)
 
@@ -527,6 +551,8 @@ class TagApiTests(TestCase):
         self.assertTrue(person_tag.is_active)
         self.assertIsNone(person_tag.removed_by)
         self.assertIsNone(person_tag.removed_at)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.TAG_ASSIGNED).count(), 0)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.TAG_REACTIVATED).count(), 0)
 
     def test_assign_tag_reactivates_same_row_and_clears_removal_fields(self):
         person_tag = PersonTag.objects.create(
@@ -557,10 +583,40 @@ class TagApiTests(TestCase):
         self.assertIsNone(person_tag.removed_at)
         self.assertEqual(response.data, {"id": self.vip.id, "name": "VIP", "slug": "vip"})
 
+    def test_tag_reactivation_creates_tag_reactivated_audit_event_not_tag_assigned(self):
+        person_tag = PersonTag.objects.create(
+            person=self.active_business_person,
+            tag=self.vip,
+            assigned_by=self.admin_user,
+            is_active=False,
+            removed_by=self.manager_user,
+            removed_at=timezone.now(),
+        )
+
+        self.authenticate(self.manager_user)
+        response = self.client.post(
+            self.get_person_tags_url(self.active_business_person.id),
+            {"tag": self.vip.id},
+            format="json",
+        )
+
+        event = AuditEvent.objects.get(action=AuditEvent.Action.TAG_REACTIVATED)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.TAG_ASSIGNED).count(), 0)
+        self.assertEqual(event.actor_user, self.manager_user)
+        self.assertEqual(event.entity_type, "PersonTag")
+        self.assertEqual(event.entity_id, str(person_tag.id))
+        self.assertEqual(
+            event.metadata,
+            {"person_id": str(self.active_business_person.id), "tag_id": str(self.vip.id)},
+        )
+        self.assertEqual(event.changes, {"is_active": {"from": False, "to": True}})
+
     def test_assign_tag_nonexistent_tag_returns_400(self):
         self.authenticate(self.admin_user)
         response = self.client.post(self.get_person_tags_url(self.active_business_person.id), {"tag": 999999}, format="json")
         self.assertEqual(response.status_code, 400)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.TAG_ASSIGNED).count(), 0)
 
     def test_assign_tag_inactive_tag_returns_400(self):
         self.authenticate(self.admin_user)
@@ -570,6 +626,8 @@ class TagApiTests(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 400)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.TAG_ASSIGNED).count(), 0)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.TAG_REACTIVATED).count(), 0)
 
     def test_assign_tag_reactivation_still_rejects_inactive_tag_definition(self):
         person_tag = PersonTag.objects.create(
@@ -592,6 +650,7 @@ class TagApiTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertFalse(person_tag.is_active)
         self.assertFalse(self.inactive_tag.is_active)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.TAG_REACTIVATED).count(), 0)
 
     def test_assign_tag_archived_business_person_returns_409(self):
         self.authenticate(self.admin_user)
@@ -601,6 +660,8 @@ class TagApiTests(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 409)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.TAG_ASSIGNED).count(), 0)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.TAG_REACTIVATED).count(), 0)
 
     def test_assign_tag_archived_business_reactivation_returns_409(self):
         person_tag = PersonTag.objects.create(
@@ -622,11 +683,14 @@ class TagApiTests(TestCase):
         person_tag.refresh_from_db()
         self.assertEqual(response.status_code, 409)
         self.assertFalse(person_tag.is_active)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.TAG_REACTIVATED).count(), 0)
 
     def test_assign_tag_technical_person_returns_404(self):
         self.authenticate(self.admin_user)
         response = self.client.post(self.get_person_tags_url(self.technical_person.id), {"tag": self.vip.id}, format="json")
         self.assertEqual(response.status_code, 404)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.TAG_ASSIGNED).count(), 0)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.TAG_REACTIVATED).count(), 0)
 
     def test_assign_tag_nonexistent_person_returns_404(self):
         self.authenticate(self.admin_user)
@@ -699,6 +763,32 @@ class TagApiTests(TestCase):
         self.assertEqual(person_tag.assigned_by, self.admin_user)
         self.assertEqual(person_tag.assigned_at, assigned_at)
 
+    def test_tag_removal_creates_tag_removed_audit_event(self):
+        person_tag = PersonTag.objects.create(
+            person=self.active_business_person,
+            tag=self.vip,
+            assigned_by=self.admin_user,
+        )
+
+        self.authenticate(self.manager_user)
+        response = self.client.post(
+            self.get_person_tag_remove_url(self.active_business_person.id, self.vip.id),
+            format="json",
+        )
+
+        person_tag.refresh_from_db()
+        event = AuditEvent.objects.get(action=AuditEvent.Action.TAG_REMOVED)
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(person_tag.is_active)
+        self.assertEqual(event.actor_user, self.manager_user)
+        self.assertEqual(event.entity_type, "PersonTag")
+        self.assertEqual(event.entity_id, str(person_tag.id))
+        self.assertEqual(
+            event.metadata,
+            {"person_id": str(self.active_business_person.id), "tag_id": str(self.vip.id)},
+        )
+        self.assertEqual(event.changes, {"is_active": {"from": True, "to": False}})
+
     def test_remove_tag_crm_admin_can_remove_active_assignment(self):
         PersonTag.objects.create(person=self.active_business_person, tag=self.vip, assigned_by=self.manager_user)
 
@@ -727,6 +817,11 @@ class TagApiTests(TestCase):
         self.assertEqual(response.status_code, 204)
         self.assertFalse(person_tag.is_active)
         self.assertEqual(person_tag.removed_by, self.manager_user)
+        event = AuditEvent.objects.get(action=AuditEvent.Action.TAG_REMOVED)
+        self.assertEqual(
+            event.metadata,
+            {"person_id": str(self.active_business_person.id), "tag_id": str(self.inactive_tag.id)},
+        )
 
     def test_remove_tag_missing_assignment_returns_404(self):
         self.authenticate(self.admin_user)
@@ -735,6 +830,7 @@ class TagApiTests(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 404)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.TAG_REMOVED).count(), 0)
 
     def test_remove_tag_already_inactive_returns_409_without_overwriting_removal_fields(self):
         removed_at = timezone.now()
@@ -757,6 +853,7 @@ class TagApiTests(TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(person_tag.removed_by, self.manager_user)
         self.assertEqual(person_tag.removed_at, removed_at)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.TAG_REMOVED).count(), 0)
 
     def test_remove_tag_archived_business_person_returns_409(self):
         PersonTag.objects.create(person=self.archived_business_person, tag=self.vip, assigned_by=self.admin_user)
@@ -767,6 +864,7 @@ class TagApiTests(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 409)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.TAG_REMOVED).count(), 0)
 
     def test_remove_tag_technical_person_returns_404(self):
         self.authenticate(self.admin_user)
@@ -775,6 +873,7 @@ class TagApiTests(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 404)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.TAG_REMOVED).count(), 0)
 
     def test_remove_tag_nonexistent_person_returns_404(self):
         self.authenticate(self.admin_user)
@@ -791,6 +890,68 @@ class TagApiTests(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 400)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.TAG_REMOVED).count(), 0)
+
+    def test_tag_assignment_rolls_back_when_audit_write_fails(self):
+        self.authenticate(self.admin_user)
+
+        with mock.patch("tags.views.record_audit_event", side_effect=RuntimeError("audit down")):
+            response = self.client.post(
+                self.get_person_tags_url(self.active_business_person.id),
+                {"tag": self.vip.id},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertFalse(PersonTag.objects.filter(person=self.active_business_person, tag=self.vip).exists())
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.TAG_ASSIGNED).count(), 0)
+
+    def test_tag_reactivation_rolls_back_when_audit_write_fails(self):
+        person_tag = PersonTag.objects.create(
+            person=self.active_business_person,
+            tag=self.vip,
+            assigned_by=self.admin_user,
+            is_active=False,
+            removed_by=self.manager_user,
+            removed_at=timezone.now(),
+        )
+        removed_at = person_tag.removed_at
+
+        self.authenticate(self.admin_user)
+        with mock.patch("tags.views.record_audit_event", side_effect=RuntimeError("audit down")):
+            response = self.client.post(
+                self.get_person_tags_url(self.active_business_person.id),
+                {"tag": self.vip.id},
+                format="json",
+            )
+
+        person_tag.refresh_from_db()
+        self.assertEqual(response.status_code, 500)
+        self.assertFalse(person_tag.is_active)
+        self.assertEqual(person_tag.removed_by, self.manager_user)
+        self.assertEqual(person_tag.removed_at, removed_at)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.TAG_REACTIVATED).count(), 0)
+
+    def test_tag_removal_rolls_back_when_audit_write_fails(self):
+        person_tag = PersonTag.objects.create(
+            person=self.active_business_person,
+            tag=self.vip,
+            assigned_by=self.admin_user,
+        )
+
+        self.authenticate(self.admin_user)
+        with mock.patch("tags.views.record_audit_event", side_effect=RuntimeError("audit down")):
+            response = self.client.post(
+                self.get_person_tag_remove_url(self.active_business_person.id, self.vip.id),
+                format="json",
+            )
+
+        person_tag.refresh_from_db()
+        self.assertEqual(response.status_code, 500)
+        self.assertTrue(person_tag.is_active)
+        self.assertIsNone(person_tag.removed_by)
+        self.assertIsNone(person_tag.removed_at)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.TAG_REMOVED).count(), 0)
 
     def test_overview_returns_empty_tags_when_none_are_assigned(self):
         self.authenticate(self.admin_user)

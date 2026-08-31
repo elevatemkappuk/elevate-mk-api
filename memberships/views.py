@@ -6,6 +6,8 @@ from rest_framework.exceptions import APIException, NotFound
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from audit.models import AuditEvent
+from audit.services import record_audit_event
 from memberships.models import Membership
 from memberships.serializers import EndMembershipSerializer, MakeMembershipSerializer, MembershipSerializer
 from people.models import Person
@@ -155,24 +157,40 @@ class PersonMembershipView(generics.GenericAPIView):
         input_serializer = MakeMembershipSerializer(data=request.data)
         input_serializer.is_valid(raise_exception=True)
 
-        try:
-            with transaction.atomic():
-                person = self.get_business_person_or_404(select_for_update=True)
+        with transaction.atomic():
+            person = self.get_business_person_or_404(select_for_update=True)
 
-                if person.archived_at is not None:
-                    raise MembershipConflict("Archived people cannot receive a new membership.")
+            if person.archived_at is not None:
+                raise MembershipConflict("Archived people cannot receive a new membership.")
 
-                if Membership.objects.filter(person=person).exists():
-                    raise MembershipConflict("This person already has a membership record.")
+            if Membership.objects.filter(person=person).exists():
+                raise MembershipConflict("This person already has a membership record.")
 
+            joined_at = input_serializer.validated_data["joined_at"]
+            membership_source = input_serializer.validated_data["membership_source"]
+
+            try:
                 membership = Membership.objects.create(
                     person=person,
                     status=Membership.Status.ACTIVE,
-                    joined_at=input_serializer.validated_data["joined_at"],
-                    membership_source=input_serializer.validated_data["membership_source"],
+                    joined_at=joined_at,
+                    membership_source=membership_source,
                 )
-        except IntegrityError:
-            raise MembershipConflict("This person already has a membership record.")
+            except IntegrityError:
+                raise MembershipConflict("This person already has a membership record.")
+
+            record_audit_event(
+                action=AuditEvent.Action.MEMBERSHIP_CREATED,
+                actor_user=request.user,
+                entity_type="Membership",
+                entity_id=membership.id,
+                changes={
+                    "status": {"from": None, "to": Membership.Status.ACTIVE},
+                    "joined_at": {"from": None, "to": joined_at.isoformat()},
+                    "membership_source": {"from": None, "to": membership_source},
+                },
+                metadata={"person_id": str(person.id)},
+            )
 
         serializer = self.get_serializer(membership)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -259,29 +277,39 @@ class PersonMembershipEndView(generics.GenericAPIView):
         input_serializer = EndMembershipSerializer(data=request.data)
         input_serializer.is_valid(raise_exception=True)
 
-        try:
-            with transaction.atomic():
-                person = self.get_business_person_or_404(select_for_update=True)
+        with transaction.atomic():
+            person = self.get_business_person_or_404(select_for_update=True)
 
-                if person.archived_at is not None:
-                    raise EndMembershipConflict("Archived people cannot receive membership lifecycle changes.")
+            if person.archived_at is not None:
+                raise EndMembershipConflict("Archived people cannot receive membership lifecycle changes.")
 
-                membership = Membership.objects.select_for_update().filter(person=person).first()
-                if membership is None:
-                    raise EndMembershipConflict("There is no active membership to end for this person.")
+            membership = Membership.objects.select_for_update().filter(person=person).first()
+            if membership is None:
+                raise EndMembershipConflict("There is no active membership to end for this person.")
 
-                if membership.status == Membership.Status.FORMER:
-                    raise EndMembershipConflict("This membership is already former.")
+            if membership.status == Membership.Status.FORMER:
+                raise EndMembershipConflict("This membership is already former.")
 
-                membership.status = Membership.Status.FORMER
-                membership.ended_at = input_serializer.validated_data["ended_at"]
-                try:
-                    membership.full_clean()
-                except DjangoValidationError as error:
-                    raise serializers.ValidationError(error.message_dict)
-                membership.save(update_fields=["status", "ended_at", "updated_at"])
-        except IntegrityError:
-            raise EndMembershipConflict("This membership could not be ended because its state changed.")
+            ended_at = input_serializer.validated_data["ended_at"]
+            membership.status = Membership.Status.FORMER
+            membership.ended_at = ended_at
+            try:
+                membership.full_clean()
+            except DjangoValidationError as error:
+                raise serializers.ValidationError(error.message_dict)
+            membership.save(update_fields=["status", "ended_at", "updated_at"])
+
+            record_audit_event(
+                action=AuditEvent.Action.MEMBERSHIP_ENDED,
+                actor_user=request.user,
+                entity_type="Membership",
+                entity_id=membership.id,
+                changes={
+                    "status": {"from": Membership.Status.ACTIVE, "to": Membership.Status.FORMER},
+                    "ended_at": {"from": None, "to": ended_at.isoformat()},
+                },
+                metadata={"person_id": str(person.id)},
+            )
 
         serializer = self.get_serializer(membership)
         return Response(serializer.data, status=status.HTTP_200_OK)
