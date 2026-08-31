@@ -22,6 +22,23 @@ The current Elevate-owned models are:
 - `audit.AuditEvent`
 - `staff_access.StaffRole`
 - `staff_access.StaffRoleAssignment`
+- `data_imports.ImportBatch`
+- `data_imports.ImportRecord`
+
+## Historical Import Staging
+
+Historical migration is a durable, staged subsystem:
+
+```text
+Historical source -> ImportBatch -> ImportRecord staging -> normalization
+-> identity resolution -> staff review where needed -> explicit commit -> authoritative CRM
+```
+
+- `raw_data` preserves source evidence; `normalized_data` is a separate future-adapter projection
+- staging does not create or modify `Person`, `Membership`, or other authoritative CRM data
+- matching, review decisions, and explicit CRM commit are later phases
+- future operational API/UI access will require `CRM_ADMIN`; Django Admin remains technical administration
+- future commit actions, rather than staging, will explicitly write relevant audit history
 
 Django-managed framework tables also exist because this project uses Django authentication, permissions, content types, admin, and server-side sessions. Those framework tables are not documented field-by-field here.
 

@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     'tags',
     'notes',
     'notifications',
+    'data_imports',
     'corsheaders',
     'rest_framework',
     'drf_spectacular',
