@@ -10,3 +10,7 @@ def fingerprint_source(value):
 
 def fingerprint_source_row(raw_data):
     return fingerprint_source(raw_data)
+
+
+def fingerprint_bytes(source_bytes):
+    return hashlib.sha256(source_bytes).hexdigest()

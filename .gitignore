@@ -17,6 +17,9 @@ logs/
 # Environment variables
 .env
 
+# Local historical-import source files may contain personal data.
+data_imports/sheets/*.xlsx
+
 # VS Code
 .vscode/
 

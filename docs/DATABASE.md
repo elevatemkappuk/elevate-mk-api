@@ -40,6 +40,18 @@ Historical source -> ImportBatch -> ImportRecord staging -> normalization
 - future operational API/UI access will require `CRM_ADMIN`; Django Admin remains technical administration
 - future commit actions, rather than staging, will explicitly write relevant audit history
 
+Membership Form ingestion currently stops at staging:
+
+```text
+Membership workbook -> MembershipForm adapter -> raw row preservation
+-> normalization and validation -> ImportRecord staging -> STOP
+```
+
+- `source_timestamp` is preserved but is not applied to `Membership.joined_at`
+- Industry remains source text and is not resolved to the CRM Industry taxonomy
+- staging does not create or update `Person` or `Membership`
+- identity matching is the next phase; repeated file ingestion deliberately creates a new staging batch
+
 Django-managed framework tables also exist because this project uses Django authentication, permissions, content types, admin, and server-side sessions. Those framework tables are not documented field-by-field here.
 
 ## Identity Relationship
