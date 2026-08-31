@@ -1,0 +1,7 @@
+Django==6.1
+django-cors-headers==4.9.0
+django-environ==0.14.0
+djangorestframework==3.18.0
+drf-spectacular==0.30.0
+psycopg[binary]==3.3.4
+brevo-python==5.0.1

@@ -44,6 +44,17 @@ Current behavior:
 - The `createsuperuser` workflow uses Django's secure password prompt and password validation flow.
 - The auth API never returns password fields.
 
+## Transactional Email Infrastructure
+
+The backend uses the Brevo Transactional Email API for server-to-server transactional delivery. It does not use SMTP.
+
+- `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, and `BREVO_SENDER_NAME` are required only when an application feature sends email
+- `BREVO_REPLY_TO_EMAIL` and `BREVO_REPLY_TO_NAME` are optional sender-reply settings
+- `BREVO_PASSWORD_RESET_TEMPLATE_ID` is reserved for the future password-reset feature and does not enable password recovery by itself
+- feature code supplies the Brevo template ID and safe parameter names; template parameters may contain sensitive values and are not logged
+- Brevo credentials are backend-only environment configuration and must never be committed, returned by APIs, sent to the frontend, or stored in audit metadata
+- the generic notification service supports Brevo templates such as a future password-reset template receiving `params.reset_url`
+
 ## Account Activation
 Current behavior:
 

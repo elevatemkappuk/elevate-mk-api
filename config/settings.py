@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'interests',
     'tags',
     'notes',
+    'notifications',
     'corsheaders',
     'rest_framework',
     'drf_spectacular',
@@ -166,11 +167,11 @@ SPECTACULAR_SETTINGS = {
 }
 
 
-# Email
-# https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
-
-MAILERS = {
-    'default': {
-        'BACKEND': 'django.core.mail.backends.console.EmailBackend',
-    },
-}
+# Transactional email is delivered server-to-server through the Brevo API.
+# These values are validated only when an application feature sends email.
+BREVO_API_KEY = env("BREVO_API_KEY", default="")
+BREVO_SENDER_EMAIL = env("BREVO_SENDER_EMAIL", default="")
+BREVO_SENDER_NAME = env("BREVO_SENDER_NAME", default="")
+BREVO_REPLY_TO_EMAIL = env("BREVO_REPLY_TO_EMAIL", default="")
+BREVO_REPLY_TO_NAME = env("BREVO_REPLY_TO_NAME", default="")
+BREVO_PASSWORD_RESET_TEMPLATE_ID = env("BREVO_PASSWORD_RESET_TEMPLATE_ID", default="")
