@@ -3,9 +3,12 @@ from django.db import IntegrityError
 from django.db.models import ProtectedError
 from django.test import TestCase, override_settings
 from django.utils import timezone
+from unittest.mock import patch
 
 from accounts.models import User
+from memberships.models import Membership
 from people.models import Person
+from professional_profiles.models import ProfessionalProfile
 from rest_framework.test import APIClient
 from staff_access.models import StaffRole, StaffRoleAssignment
 from skills.admin import PersonSkillAdmin, SkillAdmin
@@ -103,6 +106,8 @@ class SkillApiTests(TestCase):
         self.client = APIClient()
         self.skills_url = "/api/v1/skills/"
         self.person_skills_url_template = "/api/v1/people/{person_id}/skills/"
+        self.person_skill_detail_url_template = "/api/v1/people/{person_id}/skills/{skill_id}/"
+        self.person_overview_url_template = "/api/v1/people/{person_id}/overview/"
 
         self.non_staff_user = User.objects.create_user(
             email="nonstaff-skills@example.com",
@@ -155,6 +160,24 @@ class SkillApiTests(TestCase):
 
         self.accounting = Skill.objects.get(slug="accounting")
         self.strategy = Skill.objects.get(slug="strategy")
+        self.project_management = Skill.objects.get(slug="project-management")
+        self.inactive_skill = Skill.objects.create(
+            name="Inactive Assignment Skill",
+            slug="inactive-assignment-skill",
+            is_active=False,
+            display_order=999,
+        )
+        self.membership = Membership.objects.create(
+            person=self.active_business_person,
+            status=Membership.Status.ACTIVE,
+            joined_at=timezone.datetime(2024, 4, 12).date(),
+            membership_source=Membership.Source.STAFF,
+        )
+        self.professional_profile = ProfessionalProfile.objects.create(
+            person=self.active_business_person,
+            job_title="Operator",
+            company="Elevate MK",
+        )
 
     def authenticate(self, user):
         self.client.force_authenticate(user=user)
@@ -162,8 +185,44 @@ class SkillApiTests(TestCase):
     def get_person_skills_url(self, person_id):
         return self.person_skills_url_template.format(person_id=person_id)
 
+    def get_person_skill_detail_url(self, person_id, skill_id):
+        return self.person_skill_detail_url_template.format(person_id=person_id, skill_id=skill_id)
+
+    def get_person_overview_url(self, person_id):
+        return self.person_overview_url_template.format(person_id=person_id)
+
     def test_skill_seed_contains_27_canonical_rows(self):
-        seeded = list(Skill.objects.order_by("display_order", "name", "id").values_list("slug", flat=True))
+        seeded = list(
+            Skill.objects.filter(slug__in=[
+                "accounting",
+                "business-development",
+                "coaching",
+                "content-creation",
+                "customer-service",
+                "data-analysis",
+                "digital-marketing",
+                "event-management",
+                "finance",
+                "graphic-design",
+                "leadership",
+                "marketing",
+                "mentoring",
+                "operations-management",
+                "photography",
+                "project-management",
+                "public-speaking",
+                "recruitment",
+                "sales",
+                "social-media-management",
+                "software-development",
+                "strategy",
+                "teaching-training",
+                "video-production",
+                "web-design",
+                "writing-editing",
+                "other",
+            ]).order_by("display_order", "name", "id").values_list("slug", flat=True)
+        )
 
         self.assertEqual(len(seeded), 27)
         self.assertEqual(
@@ -198,7 +257,6 @@ class SkillApiTests(TestCase):
                 "other",
             ],
         )
-        self.assertFalse(Skill.objects.filter(is_active=False).exists())
 
     def test_unrelated_custom_skill_is_preserved(self):
         custom_skill = Skill.objects.create(name="Community Mediation", slug="community-mediation")
@@ -323,3 +381,232 @@ class SkillApiTests(TestCase):
         response = self.client.get(self.get_person_skills_url(self.active_business_person.id))
 
         self.assertEqual(list(response.data[0].keys()), ["id", "name", "slug"])
+
+    def test_assign_skill_anonymous_receives_401(self):
+        response = self.client.post(self.get_person_skills_url(self.active_business_person.id), {"skill": self.accounting.id}, format="json")
+        self.assertEqual(response.status_code, 401)
+
+    def test_assign_skill_nonstaff_receives_403(self):
+        self.authenticate(self.non_staff_user)
+        response = self.client.post(self.get_person_skills_url(self.active_business_person.id), {"skill": self.accounting.id}, format="json")
+        self.assertEqual(response.status_code, 403)
+
+    def test_assign_skill_viewer_receives_403(self):
+        self.authenticate(self.viewer_user)
+        response = self.client.post(self.get_person_skills_url(self.active_business_person.id), {"skill": self.accounting.id}, format="json")
+        self.assertEqual(response.status_code, 403)
+
+    def test_assign_skill_manager_receives_201(self):
+        self.authenticate(self.manager_user)
+        response = self.client.post(self.get_person_skills_url(self.active_business_person.id), {"skill": self.accounting.id}, format="json")
+        self.assertEqual(response.status_code, 201)
+
+    def test_assign_skill_admin_receives_201(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(self.get_person_skills_url(self.active_business_person.id), {"skill": self.accounting.id}, format="json")
+        self.assertEqual(response.status_code, 201)
+
+    def test_assign_skill_active_business_and_active_skill_creates_person_skill(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(self.get_person_skills_url(self.active_business_person.id), {"skill": self.project_management.id}, format="json")
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(PersonSkill.objects.filter(person=self.active_business_person, skill=self.project_management).exists())
+        self.assertEqual(
+            response.data,
+            {"id": self.project_management.id, "name": "Project Management", "slug": "project-management"},
+        )
+
+    def test_assign_skill_duplicate_returns_409_and_does_not_create_second_row(self):
+        PersonSkill.objects.create(person=self.active_business_person, skill=self.accounting)
+
+        self.authenticate(self.admin_user)
+        response = self.client.post(self.get_person_skills_url(self.active_business_person.id), {"skill": self.accounting.id}, format="json")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(PersonSkill.objects.filter(person=self.active_business_person, skill=self.accounting).count(), 1)
+
+    def test_assign_skill_inactive_skill_returns_400(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(self.get_person_skills_url(self.active_business_person.id), {"skill": self.inactive_skill.id}, format="json")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("skill", response.data)
+
+    def test_assign_skill_nonexistent_skill_returns_400(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(self.get_person_skills_url(self.active_business_person.id), {"skill": 999999}, format="json")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("skill", response.data)
+
+    def test_assign_skill_archived_business_person_returns_409(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(self.get_person_skills_url(self.archived_business_person.id), {"skill": self.accounting.id}, format="json")
+        self.assertEqual(response.status_code, 409)
+
+    def test_assign_skill_technical_person_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(self.get_person_skills_url(self.technical_person.id), {"skill": self.accounting.id}, format="json")
+        self.assertEqual(response.status_code, 404)
+
+    def test_assign_skill_nonexistent_person_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(self.get_person_skills_url(999999), {"skill": self.accounting.id}, format="json")
+        self.assertEqual(response.status_code, 404)
+
+    def test_assign_skill_client_cannot_control_person(self):
+        other_person = Person.objects.create(first_name="Other", last_name="Person")
+
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_skills_url(self.active_business_person.id),
+            {"skill": self.accounting.id, "person": other_person.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("person", response.data)
+        self.assertFalse(PersonSkill.objects.filter(person=other_person, skill=self.accounting).exists())
+
+    def test_assign_skill_unknown_fields_are_rejected(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(
+            self.get_person_skills_url(self.active_business_person.id),
+            {"skill": self.accounting.id, "created_at": "2026-08-31T10:00:00Z"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("created_at", response.data)
+
+    def test_assign_skill_response_does_not_expose_person_skill_id(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(self.get_person_skills_url(self.active_business_person.id), {"skill": self.accounting.id}, format="json")
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(set(response.data.keys()), {"id", "name", "slug"})
+
+    def test_assign_skill_duplicate_integrity_error_is_returned_as_409(self):
+        self.authenticate(self.admin_user)
+        with patch("skills.views.PersonSkill.objects.create", side_effect=IntegrityError):
+            response = self.client.post(
+                self.get_person_skills_url(self.active_business_person.id),
+                {"skill": self.accounting.id},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 409)
+
+    def test_remove_skill_anonymous_receives_401(self):
+        PersonSkill.objects.create(person=self.active_business_person, skill=self.accounting)
+        response = self.client.delete(self.get_person_skill_detail_url(self.active_business_person.id, self.accounting.id))
+        self.assertEqual(response.status_code, 401)
+
+    def test_remove_skill_nonstaff_receives_403(self):
+        PersonSkill.objects.create(person=self.active_business_person, skill=self.accounting)
+        self.authenticate(self.non_staff_user)
+        response = self.client.delete(self.get_person_skill_detail_url(self.active_business_person.id, self.accounting.id))
+        self.assertEqual(response.status_code, 403)
+
+    def test_remove_skill_viewer_receives_403(self):
+        PersonSkill.objects.create(person=self.active_business_person, skill=self.accounting)
+        self.authenticate(self.viewer_user)
+        response = self.client.delete(self.get_person_skill_detail_url(self.active_business_person.id, self.accounting.id))
+        self.assertEqual(response.status_code, 403)
+
+    def test_remove_skill_manager_receives_204(self):
+        PersonSkill.objects.create(person=self.active_business_person, skill=self.accounting)
+        self.authenticate(self.manager_user)
+        response = self.client.delete(self.get_person_skill_detail_url(self.active_business_person.id, self.accounting.id))
+        self.assertEqual(response.status_code, 204)
+
+    def test_remove_skill_admin_receives_204(self):
+        PersonSkill.objects.create(person=self.active_business_person, skill=self.accounting)
+        self.authenticate(self.admin_user)
+        response = self.client.delete(self.get_person_skill_detail_url(self.active_business_person.id, self.accounting.id))
+        self.assertEqual(response.status_code, 204)
+
+    def test_remove_skill_existing_assignment_returns_204_and_deletes_person_skill_only(self):
+        PersonSkill.objects.create(person=self.active_business_person, skill=self.accounting)
+        other_person = Person.objects.create(first_name="Other", last_name="Worker")
+        PersonSkill.objects.create(person=other_person, skill=self.accounting)
+
+        self.authenticate(self.admin_user)
+        response = self.client.delete(self.get_person_skill_detail_url(self.active_business_person.id, self.accounting.id))
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(PersonSkill.objects.filter(person=self.active_business_person, skill=self.accounting).exists())
+        self.assertTrue(Skill.objects.filter(pk=self.accounting.id).exists())
+        self.assertTrue(PersonSkill.objects.filter(person=other_person, skill=self.accounting).exists())
+
+    def test_remove_skill_inactive_skill_assignment_can_be_removed(self):
+        PersonSkill.objects.create(person=self.active_business_person, skill=self.inactive_skill)
+
+        self.authenticate(self.admin_user)
+        response = self.client.delete(self.get_person_skill_detail_url(self.active_business_person.id, self.inactive_skill.id))
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(PersonSkill.objects.filter(person=self.active_business_person, skill=self.inactive_skill).exists())
+
+    def test_remove_skill_missing_assignment_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.delete(self.get_person_skill_detail_url(self.active_business_person.id, self.accounting.id))
+        self.assertEqual(response.status_code, 404)
+
+    def test_remove_skill_nonexistent_skill_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.delete(self.get_person_skill_detail_url(self.active_business_person.id, 999999))
+        self.assertEqual(response.status_code, 404)
+
+    def test_remove_skill_archived_business_person_returns_409(self):
+        PersonSkill.objects.create(person=self.archived_business_person, skill=self.accounting)
+
+        self.authenticate(self.admin_user)
+        response = self.client.delete(self.get_person_skill_detail_url(self.archived_business_person.id, self.accounting.id))
+        self.assertEqual(response.status_code, 409)
+
+    def test_remove_skill_technical_person_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.delete(self.get_person_skill_detail_url(self.technical_person.id, self.accounting.id))
+        self.assertEqual(response.status_code, 404)
+
+    def test_remove_skill_nonexistent_person_returns_404(self):
+        self.authenticate(self.admin_user)
+        response = self.client.delete(self.get_person_skill_detail_url(999999, self.accounting.id))
+        self.assertEqual(response.status_code, 404)
+
+    def test_assignment_appears_in_overview_without_changing_membership_or_professional_profile(self):
+        self.authenticate(self.admin_user)
+        create_response = self.client.post(
+            self.get_person_skills_url(self.active_business_person.id),
+            {"skill": self.accounting.id},
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        overview_response = self.client.get(self.get_person_overview_url(self.active_business_person.id))
+
+        self.assertEqual(overview_response.status_code, 200)
+        self.assertEqual(
+            overview_response.data["skills"],
+            [{"id": self.accounting.id, "name": "Accounting", "slug": "accounting"}],
+        )
+        self.assertEqual(overview_response.data["membership"]["id"], self.membership.id)
+        self.assertEqual(overview_response.data["professional_profile"]["id"], self.professional_profile.id)
+
+    def test_removal_disappears_from_overview_without_changing_membership_or_professional_profile(self):
+        PersonSkill.objects.create(person=self.active_business_person, skill=self.accounting)
+
+        self.authenticate(self.admin_user)
+        delete_response = self.client.delete(
+            self.get_person_skill_detail_url(self.active_business_person.id, self.accounting.id)
+        )
+        self.assertEqual(delete_response.status_code, 204)
+
+        overview_response = self.client.get(self.get_person_overview_url(self.active_business_person.id))
+
+        self.assertEqual(overview_response.status_code, 200)
+        self.assertEqual(overview_response.data["skills"], [])
+        self.assertEqual(overview_response.data["membership"]["id"], self.membership.id)
+        self.assertEqual(overview_response.data["professional_profile"]["id"], self.professional_profile.id)

@@ -29,6 +29,7 @@ Local development URLs when running `manage.py runserver` on the default port:
 - Industries endpoint: `http://localhost:8000/api/v1/industries/`
 - Person detail endpoint: `http://localhost:8000/api/v1/people/{person_id}/`
 - Person skills endpoint: `http://localhost:8000/api/v1/people/{person_id}/skills/`
+- Person skill removal endpoint: `http://localhost:8000/api/v1/people/{person_id}/skills/{skill_id}/`
 - Person membership endpoint: `http://localhost:8000/api/v1/people/{person_id}/membership/`
 - Person professional profile endpoint: `http://localhost:8000/api/v1/people/{person_id}/professional-profile/`
 - Person overview endpoint: `http://localhost:8000/api/v1/people/{person_id}/overview/`
@@ -47,6 +48,7 @@ Environment-relative URL patterns:
 - Industries endpoint: `{BASE_URL}/api/v1/industries/`
 - Person detail endpoint: `{BASE_URL}/api/v1/people/{person_id}/`
 - Person skills endpoint: `{BASE_URL}/api/v1/people/{person_id}/skills/`
+- Person skill removal endpoint: `{BASE_URL}/api/v1/people/{person_id}/skills/{skill_id}/`
 - Person membership endpoint: `{BASE_URL}/api/v1/people/{person_id}/membership/`
 - Person professional profile endpoint: `{BASE_URL}/api/v1/people/{person_id}/professional-profile/`
 - Person overview endpoint: `{BASE_URL}/api/v1/people/{person_id}/overview/`
@@ -68,6 +70,8 @@ Currently implemented Elevate endpoints:
 - `GET /api/v1/industries/`
 - `GET /api/v1/people/{person_id}/`
 - `GET /api/v1/people/{person_id}/skills/`
+- `POST /api/v1/people/{person_id}/skills/`
+- `DELETE /api/v1/people/{person_id}/skills/{skill_id}/`
 - `GET /api/v1/people/{person_id}/membership/`
 - `POST /api/v1/people/{person_id}/membership/`
 - `POST /api/v1/people/{person_id}/membership/end/`
@@ -116,6 +120,8 @@ Current implementation is serializer-based and expects request bodies appropriat
 - `GET /api/v1/industries/`: no request body
 - `GET /api/v1/people/{person_id}/`: path parameter only
 - `GET /api/v1/people/{person_id}/skills/`: path parameter only
+- `POST /api/v1/people/{person_id}/skills/`: path parameter plus JSON body
+- `DELETE /api/v1/people/{person_id}/skills/{skill_id}/`: path parameters only
 - `GET /api/v1/people/{person_id}/membership/`: path parameter only
 - `POST /api/v1/people/{person_id}/membership/`: path parameter plus JSON body
 - `POST /api/v1/people/{person_id}/membership/end/`: path parameter plus JSON body
@@ -694,6 +700,101 @@ Example response:
 ]
 ```
 
+## Endpoint: `POST /api/v1/people/{person_id}/skills/`
+Purpose:
+- Create a `PersonSkill` assignment for an active CRM-visible `BUSINESS` Person.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN` or `CRM_MANAGER` required
+- `CRM_VIEWER` is read-only and receives `403 Forbidden`
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+Write rules:
+
+- Only active `BUSINESS` Persons are writable
+- archived `BUSINESS` Persons return `409 Conflict`
+- `TECHNICAL` Person records are outside the CRM People domain and return `404 Not Found`
+- nonexistent Person IDs return `404 Not Found`
+- only active canonical Skills may be assigned
+- duplicate assignments return `409 Conflict`
+
+Request body:
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `skill` | integer | yes | Canonical Skill primary key |
+
+Client must not supply:
+
+- `person`
+- `id`
+- `created_at`
+- `name`
+- `slug`
+- any unknown field
+
+Validation and conflict behavior:
+
+- nonexistent Skill IDs return `400 Bad Request`
+- inactive Skill IDs return `400 Bad Request`
+- the route Person remains authoritative and cannot be overridden from the body
+- existing `unique(person, skill)` remains authoritative for duplicate prevention
+- duplicate races are converted from `IntegrityError` into controlled `409 Conflict`
+
+Successful response:
+
+- Status: `201 Created`
+- returns the normal Skill summary representation
+
+Example request:
+```json
+{
+  "skill": 16
+}
+```
+
+Example response:
+```json
+{
+  "id": 16,
+  "name": "Project Management",
+  "slug": "project-management"
+}
+```
+
+## Endpoint: `DELETE /api/v1/people/{person_id}/skills/{skill_id}/`
+Purpose:
+- Remove only the `PersonSkill` assignment between a CRM-visible `BUSINESS` Person and a Skill.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN` or `CRM_MANAGER` required
+- `CRM_VIEWER` is read-only and receives `403 Forbidden`
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+Write rules:
+
+- archived `BUSINESS` Persons return `409 Conflict`
+- `TECHNICAL` Person records return `404 Not Found`
+- nonexistent Person IDs return `404 Not Found`
+- missing assignments return `404 Not Found`
+- nonexistent `skill_id` values also return `404 Not Found`
+
+Removal semantics:
+
+- deletes only the `PersonSkill` relationship
+- does not delete or deactivate the canonical Skill definition
+- does not modify `Person`, `Membership`, `ProfessionalProfile`, `User`, or Staff Access
+- inactive Skill assignments may still be removed by known `skill_id`
+
+Successful response:
+
+- Status: `204 No Content`
+- empty body
+
 ## Endpoint: `POST /api/v1/people/{person_id}/membership/`
 Purpose:
 - Execute the explicit business action `Make Member` for an existing CRM-visible `BUSINESS` Person.
@@ -1133,6 +1234,8 @@ Skills behavior:
 - only active Skill definitions appear in the overview projection
 - `PersonSkill` assignment internals are intentionally omitted
 - V1 Skills mean what a person can do; they do not imply interest, proficiency, years of experience, or willingness to participate
+- successful assignment naturally makes the active Skill appear in overview
+- successful removal naturally removes the Skill from overview
 
 Fields intentionally not exposed:
 

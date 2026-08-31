@@ -197,6 +197,7 @@ Current rules:
 - inactive Skill definitions remain referentially valid through existing `PersonSkill` rows
 - inactive Skill definitions are excluded from normal active CRM reads
 - Skill definitions should be deactivated rather than treated as disposable taxonomy rows
+- removing a `PersonSkill` deletes only the relationship row, not the canonical `Skill`
 
 ## Model: `professional_profiles.Industry`
 Database table: `professional_profiles_industry`
@@ -316,6 +317,8 @@ Currently implemented rules:
 - the same Skill may belong to many different People
 - a Person must not receive the same Skill twice
 - the join intentionally carries no proficiency, years, source, notes, or endorsement metadata
+- deleting a `PersonSkill` does not delete the canonical `Skill`
+- inactive `Skill` rows may continue to have stored `PersonSkill` references until explicitly removed
 
 ## Model: `memberships.Membership`
 Database table: `memberships_membership`
