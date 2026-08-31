@@ -12,6 +12,7 @@ class ImportBatch(models.Model):
         PENDING = "PENDING", "Pending"
         PROCESSING = "PROCESSING", "Processing"
         STAGED = "STAGED", "Staged"
+        ANALYZED = "ANALYZED", "Analyzed"
         READY_FOR_REVIEW = "READY_FOR_REVIEW", "Ready for review"
         COMMITTING = "COMMITTING", "Committing"
         COMPLETED = "COMPLETED", "Completed"
@@ -78,6 +79,7 @@ class ImportRecord(models.Model):
     resolution_method = models.CharField(max_length=32, choices=ResolutionMethod.choices, null=True, blank=True)
     resolution_reason = models.TextField(null=True, blank=True)
     match_candidates = models.JSONField(default=list, blank=True)
+    match_evidence = models.JSONField(default=dict, blank=True)
     validation_errors = models.JSONField(default=list, blank=True)
     reviewed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="import_records_reviewed"

@@ -52,6 +52,20 @@ Membership workbook -> MembershipForm adapter -> raw row preservation
 - staging does not create or update `Person` or `Membership`
 - identity matching is the next phase; repeated file ingestion deliberately creates a new staging batch
 
+Identity analysis now classifies staged rows without committing CRM changes:
+
+```text
+STAGED ImportRecord -> identity analyzer
+  -> unique exact email without contradiction: AUTO_MATCH
+  -> ambiguous or contradictory strong evidence: REVIEW_REQUIRED
+  -> no strong candidate: NO_MATCH
+```
+
+- names alone never produce candidates; mobile-only candidates require review in V1
+- job title, industry, location, age, gender, and LinkedIn drift are not identity contradictions
+- analysis does not mutate Person, Membership, or ProfessionalProfile
+- CRM_ADMIN manual reconciliation is the next phase
+
 Django-managed framework tables also exist because this project uses Django authentication, permissions, content types, admin, and server-side sessions. Those framework tables are not documented field-by-field here.
 
 ## Identity Relationship
