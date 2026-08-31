@@ -119,6 +119,7 @@ Current behavior:
 - Protected endpoints expect an authenticated Django session cookie.
 - Login establishes that session with `django.contrib.auth.login()`.
 - Logout invalidates it with `django.contrib.auth.logout()`.
+- successful login, failed credential authentication attempts, and authenticated logout now also write append-only `audit.AuditEvent` rows
 
 Architectural direction:
 
@@ -292,6 +293,10 @@ Security behavior:
 - Does not reveal whether the email exists.
 - Rejects inactive users through the same generic failure message.
 - On success, calls Django `login()` to create the authenticated session.
+- On successful authentication, writes a `LOGIN_SUCCEEDED` audit event.
+- Rejected credential attempts that reach authentication write a `LOGIN_FAILED` audit event.
+- Malformed requests that never reach credential authentication are not treated as `LOGIN_FAILED`.
+- Audit capture stores no password, session key, cookie, CSRF token, or attempted email.
 - Returns the same current-user shape used by `GET /api/v1/auth/me/`, including active `staff_roles`.
 - Passwords are never returned.
 
@@ -320,6 +325,7 @@ Error responses:
 
 Security behavior:
 
+- Writes a `LOGOUT` audit event while the authenticated actor is still available, then clears the Django session.
 - Uses Django `logout()` to invalidate the current session.
 - After logout, the prior authenticated session no longer grants access to protected endpoints.
 - State-changing request, so CSRF protection applies.

@@ -100,6 +100,14 @@ Currently implemented:
 - reusable DRF permission classes
 - `/api/v1/auth/me/` role exposure
 
+## Django Admin and Audit Inspection
+Current clarification:
+
+- Django Admin technical privileges remain separate from Elevate CRM operational authorization
+- read-only inspection of `audit.AuditEvent` in Django Admin is a technical administration capability, not a CRM role grant
+- future CRM Audit History access should be implemented separately with explicit operational authorization rules
+- Django `is_staff` and `is_superuser` still do not become Elevate CRM roles
+
 Planned, not yet implemented:
 
 - Staff CRM resource endpoints

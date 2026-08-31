@@ -19,6 +19,7 @@ The current Elevate-owned models are:
 - `interests.PersonInterest`
 - `tags.Tag`
 - `tags.PersonTag`
+- `audit.AuditEvent`
 - `staff_access.StaffRole`
 - `staff_access.StaffRoleAssignment`
 
@@ -36,7 +37,7 @@ Current rules:
 - A `Person` may also have zero or many assigned `Skill` definitions through `PersonSkill`.
 - A `Person` may also have zero or many assigned `Interest` definitions through `PersonInterest`.
 - A `Person` may also have zero or many internal CRM `Tag` classifications through `PersonTag`.
-- A `Person` may also have zero or many assigned `Interest` definitions through `PersonInterest`.
+- An authenticated `User` may also be referenced as the actor on zero or many immutable `AuditEvent` rows.
 
 Information deliberately stored on `Person` instead of `User`:
 
@@ -740,3 +741,63 @@ Current project features imply framework-managed tables such as:
 - session tables from `django.contrib.sessions`
 
 These exist to support Django's framework behavior and are separate from Elevate's domain model.
+
+## Model: `audit.AuditEvent`
+Database table: `audit_auditevent`
+
+Purpose:
+- Stores append-only cross-domain history that an important security or business event occurred.
+
+Authoritative-boundary rules:
+
+- domain models remain authoritative for current state
+- `AuditEvent` is not a replacement for lifecycle fields such as `PersonTag`
+- `AuditEvent` is not a generic log dump or revision engine
+- historical audit rows are not fabricated for actions that occurred before audit capture was deployed
+
+### Fields
+| Field | Type | Null / Blank | Default / Automatic | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
+| `actor_user` | `ForeignKey(accounts.User)` | `null=True`, `blank=True` | none | Authenticated actor when known; may be null for unauthenticated events such as `LOGIN_FAILED` |
+| `action` | `CharField(max_length=100)` | not null, `blank=False` | none | Controlled action identifier from Django `TextChoices` |
+| `entity_type` | `CharField(max_length=100)` | not null, `blank=False` | none | Stable resource/domain label such as `User` or `Authentication` |
+| `entity_id` | `CharField(max_length=255)` | `null=True`, `blank=True` | none | Generic identifier stored as string when present |
+| `changes` | `JSONField` | not null, `blank=True` | `dict` | Small structured mutation summary; defaults to `{}` |
+| `metadata` | `JSONField` | not null, `blank=True` | `dict` | Small non-secret contextual data; defaults to `{}` |
+| `request_id` | `CharField(max_length=255)` | `null=True`, `blank=True` | none | Reserved for future trusted request correlation |
+| `ip_address` | `GenericIPAddressField` | `null=True`, `blank=True` | none | Optional schema support only; current auth audit does not populate it |
+| `occurred_at` | `DateTimeField` | not null | `timezone.now` | Event timestamp |
+
+### Indexes and Ordering
+Current implementation:
+
+- default ordering is newest first: `occurred_at DESC`, then `id DESC`
+- `action` is indexed
+- `occurred_at` is indexed
+- `(entity_type, entity_id)` has a composite index for future lookup use
+- `actor_user` uses Django's normal foreign-key index
+
+### Append-Only Protections
+Current implementation:
+
+- normal model `save()` permits initial insert only
+- normal model updates are rejected after creation
+- normal model `delete()` is rejected
+- queryset `update()` is rejected
+- queryset `delete()` is rejected
+- Django Admin is read-only for inspection and does not allow add, edit, or delete
+
+Application-level meaning:
+
+- normal application workflows must only append new rows
+- any future business mutation should write its audit row deliberately, not through magical implicit signals
+- future business mutations should write audit in the same transaction as the authoritative mutation where practical
+
+### Security and Privacy Rules
+Current implementation rules:
+
+- generic audit payloads must never contain passwords, password hashes, session IDs, cookies, CSRF tokens, authorization headers, or reset tokens
+- sensitive Note bodies must not later be copied into generic audit payloads
+- failed login audit currently does not retain attempted email
+- current auth audit also leaves `request_id` and `ip_address` null because no explicit trusted infrastructure/policy has been established yet

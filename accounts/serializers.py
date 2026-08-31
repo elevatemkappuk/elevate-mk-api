@@ -6,6 +6,10 @@ from accounts.models import User, normalize_email_address
 from staff_access.permissions import get_active_staff_role_codes_for_user
 
 
+class InvalidCredentialsError(serializers.ValidationError):
+    pass
+
+
 class PersonSummarySerializer(serializers.Serializer):
     id = serializers.IntegerField()
     first_name = serializers.CharField()
@@ -52,7 +56,7 @@ class LoginSerializer(serializers.Serializer):
         user = authenticate(request=request, email=email, password=password)
 
         if user is None or not user.is_active:
-            raise serializers.ValidationError(
+            raise InvalidCredentialsError(
                 {"detail": self.error_messages["invalid_credentials"]}
             )
 

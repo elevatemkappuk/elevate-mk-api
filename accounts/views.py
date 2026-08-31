@@ -12,8 +12,22 @@ from accounts.serializers import (
     AuthErrorSerializer,
     CurrentUserSerializer,
     DetailSerializer,
+    InvalidCredentialsError,
     LoginSerializer,
 )
+from audit.models import AuditEvent
+from audit.services import record_audit_event
+
+
+class AuditPersistenceError(Exception):
+    pass
+
+
+def record_auth_audit_or_raise(**kwargs):
+    try:
+        record_audit_event(**kwargs)
+    except Exception as exc:
+        raise AuditPersistenceError from exc
 
 
 @method_decorator(ensure_csrf_cookie, name="dispatch")
@@ -69,10 +83,39 @@ class LoginView(APIView):
     )
     def post(self, request):
         serializer = LoginSerializer(data=request.data, context={"request": request})
-        serializer.is_valid(raise_exception=True)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except InvalidCredentialsError:
+            try:
+                record_auth_audit_or_raise(
+                    action=AuditEvent.Action.LOGIN_FAILED,
+                    actor_user=None,
+                    entity_type="Authentication",
+                    entity_id=None,
+                )
+            except AuditPersistenceError:
+                return Response(
+                    {"detail": ["Authentication could not be completed right now."]},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            raise
 
         user = serializer.validated_data["user"]
         login(request, user)
+
+        try:
+            record_auth_audit_or_raise(
+                action=AuditEvent.Action.LOGIN_SUCCEEDED,
+                actor_user=user,
+                entity_type="User",
+                entity_id=user.id,
+            )
+        except AuditPersistenceError:
+            logout(request)
+            return Response(
+                {"detail": ["Authentication could not be completed right now."]},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
         return Response(CurrentUserSerializer(user).data, status=status.HTTP_200_OK)
 
@@ -96,6 +139,20 @@ class LogoutView(APIView):
         tags=["Authentication"],
     )
     def post(self, request):
+        user = request.user
+        try:
+            record_auth_audit_or_raise(
+                action=AuditEvent.Action.LOGOUT,
+                actor_user=user,
+                entity_type="User",
+                entity_id=user.id,
+            )
+        except AuditPersistenceError:
+            return Response(
+                {"detail": "Logout could not be completed right now."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
         logout(request)
         return Response(status=status.HTTP_204_NO_CONTENT)
 

@@ -1,6 +1,6 @@
 # Elevate MK Authentication
 Status: Living Documentation
-Last Updated: 2026-08-29
+Last Updated: 2026-08-31
 
 ## Current Authentication Architecture
 Elevate currently separates human identity from authentication account data:
@@ -129,6 +129,13 @@ Current login flow:
 5. Invalid credentials and inactive accounts are rejected with the same generic error.
 6. On success, `LoginView` calls Django `login(request, user)`.
 7. Django persists the authenticated user ID in the server-side session and returns a session cookie to the client.
+8. A successful login writes an append-only `AuditEvent` with action `LOGIN_SUCCEEDED`.
+
+Failed-authentication audit behavior:
+
+- rejected credential attempts that actually reach `authenticate()` write `LOGIN_FAILED`
+- malformed login requests that fail serializer or parsing validation before an authentication attempt are not treated as `LOGIN_FAILED`
+- failed-login audit stores no password, no attempted email, no session identifier, and no CSRF/token data
 
 Request-flow diagram:
 ```text
@@ -286,20 +293,43 @@ Current logout endpoint:
 Current logout flow:
 
 1. An authenticated client sends the logout request.
-2. `LogoutView` calls Django `logout(request)`.
-3. Django clears the authenticated session state.
-4. Subsequent protected requests from that client are anonymous unless a new login occurs.
+2. While the authenticated actor is still available, `LogoutView` writes an append-only `AuditEvent` with action `LOGOUT`.
+3. `LogoutView` then calls Django `logout(request)`.
+4. Django clears the authenticated session state.
+5. Subsequent protected requests from that client are anonymous unless a new login occurs.
 
 Request-flow diagram:
 ```text
 Client
   -> POST /api/v1/auth/logout/ with session cookie
 Server
+  -> write LOGOUT audit event
   -> logout(request)
   -> clear authenticated session state
 Client
   -> later protected request is anonymous
 ```
+
+## Authentication Audit Capture
+Current auth audit scope:
+
+- `LOGIN_SUCCEEDED`
+- `LOGIN_FAILED`
+- `LOGOUT`
+
+Current design rules:
+
+- audit capture is append-only and stored in `audit.AuditEvent`
+- `LOGIN_SUCCEEDED` and `LOGOUT` use the authenticated `User` as `actor_user`
+- `LOGIN_FAILED` keeps `actor_user = null`, `entity_type = Authentication`, and `entity_id = null`
+- no password, password hash, session key, session cookie, CSRF token, or authorization header is stored
+- initial failed-login capture also does not retain the attempted email
+- the schema supports optional `request_id` and `ip_address`, but current auth integration leaves them null until explicit trusted infrastructure and retention policy are defined
+
+Operational note:
+
+- this audit capture begins when the feature is deployed
+- no historical login or logout events are reconstructed retroactively
 
 ## CSRF Protection
 Current behavior:
