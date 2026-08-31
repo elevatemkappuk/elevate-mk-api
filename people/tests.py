@@ -6,6 +6,7 @@ from django.utils import timezone
 from django.test import TestCase
 
 from accounts.models import User
+from interests.models import Interest, PersonInterest
 from memberships.models import Membership
 from people.admin import PersonAdmin
 from people.models import Person
@@ -623,6 +624,15 @@ class PersonOverviewApiTests(TestCase):
             display_order=5,
             is_active=False,
         )
+        self.networking_interest = Interest.objects.get(slug="networking")
+        self.technology_interest = Interest.objects.get(slug="technology")
+        self.startups_interest = Interest.objects.get(slug="startups")
+        self.inactive_interest = Interest.objects.create(
+            name="Legacy Interest",
+            slug="legacy-overview-interest",
+            display_order=5,
+            is_active=False,
+        )
 
     def authenticate(self, user):
         self.client.force_authenticate(user=user)
@@ -682,6 +692,7 @@ class PersonOverviewApiTests(TestCase):
         self.assertIsNone(response.data["membership"])
         self.assertIsNone(response.data["professional_profile"])
         self.assertEqual(response.data["skills"], [])
+        self.assertEqual(response.data["interests"], [])
         self.assertEqual(response.data["relationship"]["type"], "CONTACT")
         self.assertEqual(response.data["relationship"]["label"], "Contact")
 
@@ -722,6 +733,47 @@ class PersonOverviewApiTests(TestCase):
                     "id": self.accounting_skill.id,
                     "name": "Accounting",
                     "slug": "accounting",
+                }
+            ],
+        )
+
+    def test_interests_are_included_in_deterministic_order_when_present(self):
+        PersonInterest.objects.create(person=self.active_member_person, interest=self.startups_interest)
+        PersonInterest.objects.create(person=self.active_member_person, interest=self.technology_interest)
+
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.active_member_person.id))
+
+        self.assertEqual(
+            response.data["interests"],
+            [
+                {
+                    "id": self.technology_interest.id,
+                    "name": "Technology",
+                    "slug": "technology",
+                },
+                {
+                    "id": self.startups_interest.id,
+                    "name": "Startups",
+                    "slug": "startups",
+                },
+            ],
+        )
+
+    def test_inactive_assigned_interests_are_omitted_from_overview(self):
+        PersonInterest.objects.create(person=self.active_member_person, interest=self.networking_interest)
+        PersonInterest.objects.create(person=self.active_member_person, interest=self.inactive_interest)
+
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.active_member_person.id))
+
+        self.assertEqual(
+            response.data["interests"],
+            [
+                {
+                    "id": self.networking_interest.id,
+                    "name": "Networking",
+                    "slug": "networking",
                 }
             ],
         )
@@ -779,6 +831,7 @@ class PersonOverviewApiTests(TestCase):
 
     def test_archived_business_person_still_returns_professional_profile(self):
         PersonSkill.objects.create(person=self.archived_business_person, skill=self.accounting_skill)
+        PersonInterest.objects.create(person=self.archived_business_person, interest=self.networking_interest)
 
         self.authenticate(self.admin_user)
         response = self.client.get(self.get_url(self.archived_business_person.id))
@@ -793,6 +846,16 @@ class PersonOverviewApiTests(TestCase):
                     "id": self.accounting_skill.id,
                     "name": "Accounting",
                     "slug": "accounting",
+                }
+            ]
+        )
+        self.assertEqual(
+            response.data["interests"],
+            [
+                {
+                    "id": self.networking_interest.id,
+                    "name": "Networking",
+                    "slug": "networking",
                 }
             ],
         )
@@ -851,6 +914,7 @@ class PersonOverviewApiTests(TestCase):
 
     def test_response_does_not_expose_auth_staff_or_speculative_fields(self):
         PersonSkill.objects.create(person=self.active_member_person, skill=self.accounting_skill)
+        PersonInterest.objects.create(person=self.active_member_person, interest=self.networking_interest)
 
         self.authenticate(self.admin_user)
         response = self.client.get(self.get_url(self.active_member_person.id))
@@ -861,17 +925,18 @@ class PersonOverviewApiTests(TestCase):
         self.assertNotIn("is_superuser", response.data["person"])
         self.assertNotIn("staff_roles", response.data)
         self.assertEqual(list(response.data["skills"][0].keys()), ["id", "name", "slug"])
+        self.assertEqual(list(response.data["interests"][0].keys()), ["id", "name", "slug"])
         self.assertNotIn("person", response.data["membership"])
-        self.assertNotIn("interests", response.data)
         self.assertNotIn("tags", response.data)
         self.assertNotIn("notes", response.data)
         self.assertNotIn("engagement", response.data)
 
     def test_endpoint_uses_compact_query_shape(self):
         PersonSkill.objects.create(person=self.active_member_person, skill=self.accounting_skill)
+        PersonInterest.objects.create(person=self.active_member_person, interest=self.networking_interest)
 
         self.authenticate(self.admin_user)
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(4):
             response = self.client.get(self.get_url(self.active_member_person.id))
 
         self.assertEqual(response.status_code, 200)

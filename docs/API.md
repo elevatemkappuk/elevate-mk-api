@@ -9,7 +9,7 @@ This document describes the HTTP API currently implemented in the Django server 
 Current base path and versioning convention:
 
 - Base prefix: `/api/v1/`
-- Current Elevate API routes are defined in `accounts.urls`, `people.urls`, `memberships.urls`, `professional_profiles.urls`, and `skills.urls`, all mounted from `config.urls`
+- Current Elevate API routes are defined in `accounts.urls`, `people.urls`, `memberships.urls`, `professional_profiles.urls`, `skills.urls`, and `interests.urls`, all mounted from `config.urls`
 - Machine-readable OpenAPI schema: `/api/schema/`
 - Swagger UI: `/api/docs/`
 - ReDoc: `/api/redoc/`
@@ -26,9 +26,11 @@ Local development URLs when running `manage.py runserver` on the default port:
 - Me endpoint: `http://localhost:8000/api/v1/auth/me/`
 - People endpoint: `http://localhost:8000/api/v1/people/`
 - Skills endpoint: `http://localhost:8000/api/v1/skills/`
+- Interests endpoint: `http://localhost:8000/api/v1/interests/`
 - Industries endpoint: `http://localhost:8000/api/v1/industries/`
 - Person detail endpoint: `http://localhost:8000/api/v1/people/{person_id}/`
 - Person skills endpoint: `http://localhost:8000/api/v1/people/{person_id}/skills/`
+- Person interests endpoint: `http://localhost:8000/api/v1/people/{person_id}/interests/`
 - Person skill removal endpoint: `http://localhost:8000/api/v1/people/{person_id}/skills/{skill_id}/`
 - Person membership endpoint: `http://localhost:8000/api/v1/people/{person_id}/membership/`
 - Person professional profile endpoint: `http://localhost:8000/api/v1/people/{person_id}/professional-profile/`
@@ -45,9 +47,11 @@ Environment-relative URL patterns:
 - Me endpoint: `{BASE_URL}/api/v1/auth/me/`
 - People endpoint: `{BASE_URL}/api/v1/people/`
 - Skills endpoint: `{BASE_URL}/api/v1/skills/`
+- Interests endpoint: `{BASE_URL}/api/v1/interests/`
 - Industries endpoint: `{BASE_URL}/api/v1/industries/`
 - Person detail endpoint: `{BASE_URL}/api/v1/people/{person_id}/`
 - Person skills endpoint: `{BASE_URL}/api/v1/people/{person_id}/skills/`
+- Person interests endpoint: `{BASE_URL}/api/v1/people/{person_id}/interests/`
 - Person skill removal endpoint: `{BASE_URL}/api/v1/people/{person_id}/skills/{skill_id}/`
 - Person membership endpoint: `{BASE_URL}/api/v1/people/{person_id}/membership/`
 - Person professional profile endpoint: `{BASE_URL}/api/v1/people/{person_id}/professional-profile/`
@@ -67,9 +71,11 @@ Currently implemented Elevate endpoints:
 - `GET /api/v1/auth/me/`
 - `GET /api/v1/people/`
 - `GET /api/v1/skills/`
+- `GET /api/v1/interests/`
 - `GET /api/v1/industries/`
 - `GET /api/v1/people/{person_id}/`
 - `GET /api/v1/people/{person_id}/skills/`
+- `GET /api/v1/people/{person_id}/interests/`
 - `POST /api/v1/people/{person_id}/skills/`
 - `DELETE /api/v1/people/{person_id}/skills/{skill_id}/`
 - `GET /api/v1/people/{person_id}/membership/`
@@ -117,9 +123,11 @@ Current implementation is serializer-based and expects request bodies appropriat
 - `GET /api/v1/auth/me/`: no request body
 - `GET /api/v1/people/`: query parameters only
 - `GET /api/v1/skills/`: no request body
+- `GET /api/v1/interests/`: no request body
 - `GET /api/v1/industries/`: no request body
 - `GET /api/v1/people/{person_id}/`: path parameter only
 - `GET /api/v1/people/{person_id}/skills/`: path parameter only
+- `GET /api/v1/people/{person_id}/interests/`: path parameter only
 - `POST /api/v1/people/{person_id}/skills/`: path parameter plus JSON body
 - `DELETE /api/v1/people/{person_id}/skills/{skill_id}/`: path parameters only
 - `GET /api/v1/people/{person_id}/membership/`: path parameter only
@@ -610,6 +618,50 @@ Example response:
 ]
 ```
 
+## Endpoint: `GET /api/v1/interests/`
+Purpose:
+- Return the active canonical Interest taxonomy for CRM forms and overview reads.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` required
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+Behavior:
+
+- Only active Interests are returned
+- Results are ordered deterministically by `display_order`, `name`, then `id`
+- The endpoint is intentionally unpaginated because it is a small controlled lookup collection
+- Interest definitions are canonical taxonomy values and should be deactivated rather than treated as disposable
+- Interests mean what a Person is interested in, not what a Person can do and not how staff classify a Person
+- V1 Interests do not encode willingness, availability, mentoring direction, or commitment
+
+Returned fields:
+
+- `id`
+- `name`
+- `slug`
+
+Fields intentionally not exposed:
+
+- `description`
+- `is_active`
+- `display_order`
+- `created_at`
+- `updated_at`
+
+Example response:
+```json
+[
+  {
+    "id": 1,
+    "name": "Networking",
+    "slug": "networking"
+  }
+]
+```
+
 ## Endpoint: `GET /api/v1/skills/`
 Purpose:
 - Return the active canonical Skill taxonomy for future CRM assignment UI and filtering.
@@ -696,6 +748,55 @@ Example response:
     "id": 16,
     "name": "Project Management",
     "slug": "project-management"
+  }
+]
+```
+
+## Endpoint: `GET /api/v1/people/{person_id}/interests/`
+Purpose:
+- Return the active assigned Interests for a single CRM-visible `BUSINESS` Person.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` required
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+People visibility rule:
+
+- The endpoint operates only within the CRM `BUSINESS` Person domain
+- Active and archived `BUSINESS` records are both retrievable by direct ID
+- `TECHNICAL` Person records are never returned
+- Requesting a `TECHNICAL` Person ID returns `404 Not Found`
+- A missing Person ID also returns `404 Not Found`
+- A `BUSINESS` Person with no Interests returns `200 OK` with `[]`
+
+Interest activity rule:
+
+- Only active Interest definitions appear in the response
+- If a `PersonInterest` references an Interest that is later deactivated, the relationship remains stored but is omitted from this normal CRM read
+- Response order is deterministic by `display_order`, `name`, then `id`
+
+Returned fields:
+
+- `id`
+- `name`
+- `slug`
+
+Fields intentionally not exposed:
+
+- `PersonInterest` internal IDs
+- assignment timestamps
+- `description`
+- willingness, direction, availability, or commitment metadata
+
+Example response:
+```json
+[
+  {
+    "id": 5,
+    "name": "Technology",
+    "slug": "technology"
   }
 ]
 ```
@@ -1170,6 +1271,7 @@ Response structure:
 - `membership`: Membership projection or `null`
 - `professional_profile`: ProfessionalProfile projection or `null`
 - `skills`: active Skill summary collection
+- `interests`: active Interest summary collection
 
 Relationship derivation:
 
@@ -1220,6 +1322,12 @@ Returned `skills` items when present:
 - `name`
 - `slug`
 
+Returned `interests` items when present:
+
+- `id`
+- `name`
+- `slug`
+
 Professional-profile behavior:
 
 - `professional_profile` is `null` when no ProfessionalProfile exists
@@ -1236,6 +1344,13 @@ Skills behavior:
 - V1 Skills mean what a person can do; they do not imply interest, proficiency, years of experience, or willingness to participate
 - successful assignment naturally makes the active Skill appear in overview
 - successful removal naturally removes the Skill from overview
+
+Interests behavior:
+
+- `interests` is `[]` when the person has no active assigned Interests
+- only active Interest definitions appear in the overview projection
+- `PersonInterest` assignment internals are intentionally omitted
+- V1 Interests mean what a person is interested in; they do not imply willingness, availability, mentoring direction, or commitment
 
 Fields intentionally not exposed:
 
@@ -1268,7 +1383,8 @@ Example response for a contact:
   },
   "membership": null,
   "professional_profile": null,
-  "skills": []
+  "skills": [],
+  "interests": []
 }
 ```
 

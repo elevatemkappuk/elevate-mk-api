@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'memberships',
     'professional_profiles',
     'skills',
+    'interests',
     'corsheaders',
     'rest_framework',
     'drf_spectacular',

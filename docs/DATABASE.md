@@ -15,6 +15,8 @@ The current Elevate-owned models are:
 - `professional_profiles.ProfessionalProfile`
 - `skills.Skill`
 - `skills.PersonSkill`
+- `interests.Interest`
+- `interests.PersonInterest`
 - `staff_access.StaffRole`
 - `staff_access.StaffRoleAssignment`
 
@@ -30,6 +32,7 @@ Current rules:
 - A `Person` may also have zero or one `ProfessionalProfile`.
 - A `ProfessionalProfile` may optionally reference one canonical `Industry`.
 - A `Person` may also have zero or many assigned `Skill` definitions through `PersonSkill`.
+- A `Person` may also have zero or many assigned `Interest` definitions through `PersonInterest`.
 
 Information deliberately stored on `Person` instead of `User`:
 
@@ -184,6 +187,7 @@ Current relationship:
 
 ```text
 Person 0..* PersonSkill *..1 Skill
+Person 0..* PersonInterest *..1 Interest
 ```
 
 Current rules:
@@ -198,6 +202,25 @@ Current rules:
 - inactive Skill definitions are excluded from normal active CRM reads
 - Skill definitions should be deactivated rather than treated as disposable taxonomy rows
 - removing a `PersonSkill` deletes only the relationship row, not the canonical `Skill`
+
+## Interest Relationship
+Current relationship:
+
+```text
+Person 0..* PersonInterest *..1 Interest
+```
+
+Current rules:
+
+- Interest is a canonical taxonomy
+- PersonInterest is the assignment relationship
+- `unique(person, interest)` prevents duplicate assignment rows
+- Interests mean what a Person is interested in
+- Interests are distinct from Skills and Tags
+- V1 Interests do not encode willingness, availability, mentoring direction, ranking, or commitment
+- inactive Interest definitions remain referentially valid through existing `PersonInterest` rows
+- inactive Interest definitions are excluded from normal active CRM reads
+- Interest definitions should be deactivated rather than treated as disposable taxonomy rows
 
 ## Model: `professional_profiles.Industry`
 Database table: `professional_profiles_industry`
@@ -319,6 +342,65 @@ Currently implemented rules:
 - the join intentionally carries no proficiency, years, source, notes, or endorsement metadata
 - deleting a `PersonSkill` does not delete the canonical `Skill`
 - inactive `Skill` rows may continue to have stored `PersonSkill` references until explicitly removed
+
+## Model: `interests.Interest`
+Database table: `interests_interest`
+
+Purpose:
+- Stores the canonical Interest taxonomy reusable across person assignment, overview display, onboarding, and analytics.
+
+### Fields
+| Field | Type | Null / Blank | Default / Automatic | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
+| `name` | `CharField(max_length=255)` | not null, `blank=False` | none | Required canonical label |
+| `slug` | `SlugField` | not null, `blank=False` | none | Required unique machine-readable identifier |
+| `description` | `TextField` | not null, `blank=True` | empty string | Optional description |
+| `is_active` | `BooleanField` | not null | `True` | Inactive values remain stored but are excluded from normal active CRM reads |
+| `display_order` | `PositiveIntegerField` | not null | `100` | Controls deterministic presentation order |
+| `created_at` | `DateTimeField` | not null | `auto_now_add=True` | Set automatically on create |
+| `updated_at` | `DateTimeField` | not null | `auto_now=True` | Updated automatically on save |
+
+### Constraints and Behavior
+Current implementation:
+
+- `slug` is unique
+- default ordering is `display_order`, `name`, `id`
+- the approved initial 19-row taxonomy is seeded by migration
+- canonical rows are updated by slug if they already exist
+- unrelated rows are not deleted by the seed migration
+- existing descriptions are preserved during canonical reseeding because no approved descriptions are seeded in V1
+
+## Model: `interests.PersonInterest`
+Database table: `interests_personinterest`
+
+Purpose:
+- Stores the narrow Interest assignment relationship between a `Person` and a canonical `Interest`.
+
+### Fields
+| Field | Type | Null / Blank | Default / Automatic | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
+| `person` | `ForeignKey(people.Person)` | not null, `blank=False` | none | Required Person target |
+| `interest` | `ForeignKey(interests.Interest)` | not null, `blank=False` | none | Required canonical Interest target |
+| `created_at` | `DateTimeField` | not null | `auto_now_add=True` | Set automatically on create |
+
+### Constraints and Behavior
+Current implementation:
+
+- unique constraint on `person` + `interest`
+- `person` uses `PROTECT`, so deleting a referenced Person is blocked
+- `interest` uses `PROTECT`, so deleting a referenced Interest is blocked
+- default ordering is `person_id`, `interest_id`, `id`
+
+### Domain Rules
+Currently implemented rules:
+
+- a Person may have zero or many Interest assignments
+- the same Interest may belong to many different People
+- a Person must not receive the same Interest twice
+- the join intentionally carries no direction, ranking, source, notes, willingness, availability, or commitment metadata
+- inactive `Interest` rows may continue to have stored `PersonInterest` references until explicitly removed
 
 ## Model: `memberships.Membership`
 Database table: `memberships_membership`

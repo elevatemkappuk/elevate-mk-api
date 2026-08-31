@@ -1,3 +1,5 @@
+from interests.models import Interest
+from interests.serializers import InterestSummarySerializer
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
@@ -96,6 +98,7 @@ class PersonOverviewSerializer(serializers.Serializer):
     membership = serializers.SerializerMethodField()
     professional_profile = serializers.SerializerMethodField()
     skills = serializers.SerializerMethodField()
+    interests = serializers.SerializerMethodField()
 
     @extend_schema_field(PersonRelationshipSerializer)
     def get_relationship(self, instance):
@@ -133,6 +136,10 @@ class PersonOverviewSerializer(serializers.Serializer):
     def get_skills(self, instance):
         return SkillSummarySerializer(self._get_active_skills(instance), many=True).data
 
+    @extend_schema_field(InterestSummarySerializer(many=True))
+    def get_interests(self, instance):
+        return InterestSummarySerializer(self._get_active_interests(instance), many=True).data
+
     def _get_membership(self, instance):
         try:
             return instance.membership
@@ -153,6 +160,18 @@ class PersonOverviewSerializer(serializers.Serializer):
         return list(
             Skill.objects.filter(
                 person_skills__person=instance,
+                is_active=True,
+            ).order_by("display_order", "name", "id")
+        )
+
+    def _get_active_interests(self, instance):
+        prefetched_person_interests = getattr(instance, "active_person_interests", None)
+        if prefetched_person_interests is not None:
+            return [person_interest.interest for person_interest in prefetched_person_interests]
+
+        return list(
+            Interest.objects.filter(
+                person_interests__person=instance,
                 is_active=True,
             ).order_by("display_order", "name", "id")
         )

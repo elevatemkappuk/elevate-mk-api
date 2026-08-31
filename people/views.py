@@ -1,3 +1,4 @@
+from interests.models import PersonInterest
 from django.db.models import Prefetch, Q, Value
 from django.db.models.functions import Concat
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
@@ -200,12 +201,12 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
         summary="Retrieve CRM Person overview projection",
         description=(
             "Returns a read-only aggregate CRM projection for a single BUSINESS Person. "
-            "The response composes the authoritative Person resource plus optional Membership, ProfessionalProfile, and Skill data. "
+            "The response composes the authoritative Person resource plus optional Membership, ProfessionalProfile, Skill, and Interest data. "
             "Archived BUSINESS records remain retrievable by direct ID. "
             "TECHNICAL persons are outside the CRM People domain and return 404. "
             "When no Membership exists, membership is null and relationship is derived as Contact. "
             "When no ProfessionalProfile exists, professional_profile is null. "
-            "Only active Skill definitions appear in the overview skills collection."
+            "Only active Skill and Interest definitions appear in the overview collections."
         ),
         parameters=[
             OpenApiParameter(
@@ -276,6 +277,13 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
                             "slug": "software-development",
                         }
                     ],
+                    "interests": [
+                        {
+                            "id": 5,
+                            "name": "Technology",
+                            "slug": "technology",
+                        }
+                    ],
                 },
                 response_only=True,
             )
@@ -288,10 +296,14 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
         active_person_skills = PersonSkill.objects.select_related("skill").filter(
             skill__is_active=True,
         ).order_by("skill__display_order", "skill__name", "skill__id")
+        active_person_interests = PersonInterest.objects.select_related("interest").filter(
+            interest__is_active=True,
+        ).order_by("interest__display_order", "interest__name", "interest__id")
         return self.get_business_people_queryset().select_related(
             "membership",
             "professional_profile",
             "professional_profile__industry",
         ).prefetch_related(
-            Prefetch("person_skills", queryset=active_person_skills, to_attr="active_person_skills")
+            Prefetch("person_skills", queryset=active_person_skills, to_attr="active_person_skills"),
+            Prefetch("person_interests", queryset=active_person_interests, to_attr="active_person_interests"),
         )
