@@ -550,11 +550,11 @@ class PersonAuditHistoryApiTests(TestCase):
         self.assertEqual(result["description"], "Internal note updated")
         self.assertEqual(result["actor"], {"id": self.admin_user.id, "email": self.admin_user.email})
         self.assertEqual(result["entity_type"], "InternalNote")
-        self.assertEqual(result["entity_id"], "61")
         self.assertEqual(result["changes"], {})
         self.assertNotIn("metadata", result)
         self.assertNotIn("request_id", result)
         self.assertNotIn("ip_address", result)
+        self.assertNotIn("entity_id", result)
         self.assertNotIn("body", str(result["changes"]))
         self.assertNotIn("archive_reason", str(result["changes"]))
 

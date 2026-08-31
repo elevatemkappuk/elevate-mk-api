@@ -1774,7 +1774,6 @@ Response projection per event:
 - `actor`: `null` or `{ "id", "email" }`
 - `occurred_at`
 - `entity_type`
-- `entity_id`
 - `changes`
 
 Safe projection rules:

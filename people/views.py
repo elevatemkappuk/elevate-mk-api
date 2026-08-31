@@ -398,7 +398,6 @@ class PersonAuditHistoryView(BusinessPersonQuerysetMixin, generics.GenericAPIVie
                             "actor": {"id": 3, "email": "manager@example.com"},
                             "occurred_at": "2026-08-31T16:10:00Z",
                             "entity_type": "PersonTag",
-                            "entity_id": "11",
                             "changes": {"is_active": {"from": None, "to": True}},
                         },
                         {
@@ -408,7 +407,6 @@ class PersonAuditHistoryView(BusinessPersonQuerysetMixin, generics.GenericAPIVie
                             "actor": {"id": 2, "email": "admin@example.com"},
                             "occurred_at": "2026-08-31T16:00:00Z",
                             "entity_type": "Membership",
-                            "entity_id": "7",
                             "changes": {
                                 "status": {"from": None, "to": "ACTIVE"},
                                 "joined_at": {"from": None, "to": "2026-08-31"},

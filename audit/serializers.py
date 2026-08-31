@@ -26,7 +26,6 @@ class PersonAuditHistoryEventSerializer(serializers.Serializer):
     actor = serializers.SerializerMethodField()
     occurred_at = serializers.DateTimeField()
     entity_type = serializers.CharField()
-    entity_id = serializers.CharField(allow_null=True)
     changes = serializers.SerializerMethodField()
 
     @extend_schema_field(serializers.CharField())
