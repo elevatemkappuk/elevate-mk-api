@@ -1,14 +1,19 @@
 from interests.models import PersonInterest
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django.db.models import Prefetch, Q, Value
 from django.db.models.functions import Concat
+from django.utils import timezone
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
-from rest_framework import generics
-from rest_framework.exceptions import NotFound
+from rest_framework import generics, serializers, status
+from rest_framework.exceptions import APIException, NotFound
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 
 from audit.models import AuditEvent
 from audit.policies import build_person_audit_scope_q, filter_person_audit_visibility_for_user
+from audit.services import record_audit_event
 from audit.serializers import (
     PaginatedPersonAuditHistorySerializer,
     PersonAuditHistoryEventSerializer,
@@ -16,11 +21,18 @@ from audit.serializers import (
 )
 from people.models import Person
 from people.serializers import (
+    DuplicatePersonMatchSerializer,
+    EmptyPersonLifecycleSerializer,
     PaginatedPersonListSerializer,
+    PersonCreateSerializer,
     PersonListQuerySerializer,
     PersonListSerializer,
+    PersonMemberCreateSerializer,
     PersonOverviewSerializer,
+    PersonUpdateSerializer,
 )
+from people.services import find_business_duplicate_people
+from memberships.models import Membership
 from staff_access.models import StaffRole
 from staff_access.permissions import HasActiveStaffRoleCodes
 from skills.models import PersonSkill
@@ -43,6 +55,33 @@ class HasPeopleAccess(HasActiveStaffRoleCodes):
         StaffRole.CRM_MANAGER,
         StaffRole.CRM_VIEWER,
     )
+
+
+class HasPeopleWriteAccess(HasActiveStaffRoleCodes):
+    required_role_codes = (
+        StaffRole.CRM_ADMIN,
+        StaffRole.CRM_MANAGER,
+    )
+
+
+class PersonLifecycleConflict(APIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "Person lifecycle action cannot be completed."
+    default_code = "person_lifecycle_conflict"
+
+
+class DuplicatePersonConflict(APIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_code = "duplicate_person"
+
+    def __init__(self, matches):
+        super().__init__(
+            {
+                "detail": "A possible existing Person was found.",
+                "code": self.default_code,
+                "matches": DuplicatePersonMatchSerializer(matches, many=True).data,
+            }
+        )
 
 
 class BusinessPersonQuerysetMixin:
@@ -156,6 +195,138 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
             | Q(full_name__icontains=query)
         )
 
+    def get_permissions(self):
+        permission_classes = [IsAuthenticated, HasPeopleAccess]
+        if self.request.method == "POST":
+            permission_classes = [IsAuthenticated, HasPeopleWriteAccess]
+        return [permission() for permission in permission_classes]
+
+    @extend_schema(
+        operation_id="people_create",
+        summary="Create CRM Contact",
+        description=(
+            "Creates an active BUSINESS Person with no Membership. Only CRM_ADMIN and CRM_MANAGER "
+            "may create People. Potential duplicate BUSINESS identities, including archived records, return 409."
+        ),
+        request=PersonCreateSerializer,
+        responses={
+            201: PersonListSerializer,
+            400: OpenApiResponse(description="Invalid or server-managed request field."),
+            401: OpenApiResponse(description="Authentication credentials were not provided."),
+            403: OpenApiResponse(description="You do not have a permitted active staff role."),
+            409: OpenApiResponse(description="A possible existing BUSINESS Person was found."),
+        },
+        tags=["People"],
+    )
+    def post(self, request, *args, **kwargs):
+        input_serializer = PersonCreateSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            self.raise_if_duplicate(**input_serializer.validated_data)
+            person = self.create_person(input_serializer.validated_data)
+            self.record_person_audit(AuditEvent.Action.PERSON_CREATED, request.user, person, {
+                "created": {"from": False, "to": True},
+            })
+
+        return Response(PersonListSerializer(person).data, status=status.HTTP_201_CREATED)
+
+    @staticmethod
+    def create_person(validated_data):
+        person = Person(record_type=Person.RecordType.BUSINESS, **validated_data)
+        try:
+            person.full_clean()
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(error.message_dict)
+        person.save()
+        return person
+
+    @staticmethod
+    def raise_if_duplicate(*, primary_email="", mobile="", exclude_person_id=None, **_unused):
+        matches = find_business_duplicate_people(
+            primary_email=primary_email,
+            mobile=mobile,
+            exclude_person_id=exclude_person_id,
+        )
+        if matches:
+            raise DuplicatePersonConflict(matches)
+
+    @staticmethod
+    def record_person_audit(action, actor_user, person, changes):
+        record_audit_event(
+            action=action,
+            actor_user=actor_user,
+            entity_type="Person",
+            entity_id=person.id,
+            changes=changes,
+            metadata={"person_id": str(person.id)},
+        )
+
+
+class PersonMemberCreateView(generics.GenericAPIView):
+    permission_classes = [IsAuthenticated, HasPeopleWriteAccess]
+
+    @extend_schema(
+        operation_id="people_members_create",
+        summary="Create CRM Member",
+        description=(
+            "Creates an active BUSINESS Person and its first ACTIVE Membership in one transaction. "
+            "Both PERSON_CREATED and MEMBERSHIP_CREATED audit events must persist or all new state rolls back."
+        ),
+        request=PersonMemberCreateSerializer,
+        responses={
+            201: PersonListSerializer,
+            400: OpenApiResponse(description="Invalid or server-managed request field."),
+            401: OpenApiResponse(description="Authentication credentials were not provided."),
+            403: OpenApiResponse(description="You do not have a permitted active staff role."),
+            409: OpenApiResponse(description="A possible existing BUSINESS Person was found."),
+        },
+        tags=["People", "Membership"],
+    )
+    def post(self, request, *args, **kwargs):
+        input_serializer = PersonMemberCreateSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+        person_data = {
+            field: value for field, value in input_serializer.validated_data.items()
+            if field in PersonCreateSerializer().fields
+        }
+
+        with transaction.atomic():
+            PeopleListView.raise_if_duplicate(**person_data)
+            person = PeopleListView.create_person(person_data)
+            membership = Membership(
+                person=person,
+                status=Membership.Status.ACTIVE,
+                ended_at=None,
+                joined_at=input_serializer.validated_data["joined_at"],
+                membership_source=input_serializer.validated_data["membership_source"],
+            )
+            try:
+                membership.full_clean()
+            except DjangoValidationError as error:
+                raise serializers.ValidationError(error.message_dict)
+            membership.save()
+            PeopleListView.record_person_audit(
+                AuditEvent.Action.PERSON_CREATED,
+                request.user,
+                person,
+                {"created": {"from": False, "to": True}},
+            )
+            record_audit_event(
+                action=AuditEvent.Action.MEMBERSHIP_CREATED,
+                actor_user=request.user,
+                entity_type="Membership",
+                entity_id=membership.id,
+                changes={
+                    "status": {"from": None, "to": Membership.Status.ACTIVE},
+                    "joined_at": {"from": None, "to": membership.joined_at.isoformat()},
+                    "membership_source": {"from": None, "to": membership.membership_source},
+                },
+                metadata={"person_id": str(person.id)},
+            )
+
+        return Response(PersonListSerializer(person).data, status=status.HTTP_201_CREATED)
+
 
 class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
     serializer_class = PersonListSerializer
@@ -204,6 +375,132 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
 
     def get_queryset(self):
         return self.get_business_people_queryset()
+
+    def get_permissions(self):
+        permission_classes = [IsAuthenticated, HasPeopleAccess]
+        if self.request.method == "PATCH":
+            permission_classes = [IsAuthenticated, HasPeopleWriteAccess]
+        return [permission() for permission in permission_classes]
+
+    @extend_schema(
+        operation_id="people_partial_update",
+        summary="Edit CRM Person",
+        description=(
+            "Edits authoritative Person-owned fields for an active BUSINESS Person. "
+            "Only changed fields are audited; a no-op PATCH succeeds without a PERSON_UPDATED event."
+        ),
+        request=PersonUpdateSerializer,
+        responses={
+            200: PersonListSerializer,
+            400: OpenApiResponse(description="Invalid or server-managed request field."),
+            401: OpenApiResponse(description="Authentication credentials were not provided."),
+            403: OpenApiResponse(description="You do not have a permitted active staff role."),
+            404: OpenApiResponse(description="No CRM-visible BUSINESS Person matches the supplied ID."),
+            409: OpenApiResponse(description="The person is archived or a duplicate candidate was found."),
+        },
+        tags=["People"],
+    )
+    def patch(self, request, *args, **kwargs):
+        input_serializer = PersonUpdateSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            person = self.get_business_people_queryset().select_for_update().filter(
+                pk=self.kwargs["person_id"]
+            ).first()
+            if person is None:
+                raise NotFound("Not found.")
+            if person.archived_at is not None:
+                raise PersonLifecycleConflict("Archived people cannot be edited.")
+
+            changes = {}
+            for field, new_value in input_serializer.validated_data.items():
+                old_value = getattr(person, field)
+                if old_value != new_value:
+                    changes[field] = {"from": old_value, "to": new_value}
+
+            if changes:
+                changed_identity_fields = {"primary_email", "mobile"}.intersection(changes)
+                if changed_identity_fields:
+                    PeopleListView.raise_if_duplicate(
+                        primary_email=person.primary_email if "primary_email" not in changes else changes["primary_email"]["to"],
+                        mobile=person.mobile if "mobile" not in changes else changes["mobile"]["to"],
+                        exclude_person_id=person.id,
+                    )
+                for field, change in changes.items():
+                    setattr(person, field, change["to"])
+                try:
+                    person.full_clean()
+                except DjangoValidationError as error:
+                    raise serializers.ValidationError(error.message_dict)
+                person.save(update_fields=[*changes.keys(), "updated_at"])
+                PeopleListView.record_person_audit(
+                    AuditEvent.Action.PERSON_UPDATED, request.user, person, changes
+                )
+
+        return Response(PersonListSerializer(person).data)
+
+
+class PersonArchiveView(BusinessPersonQuerysetMixin, generics.GenericAPIView):
+    permission_classes = [IsAuthenticated, HasPeopleWriteAccess]
+
+    @extend_schema(
+        operation_id="people_archive",
+        summary="Archive CRM Person",
+        description=(
+            "Archives an active BUSINESS Person. This does not alter Membership, User, Staff Access, "
+            "or other related domain records, and emits PERSON_ARCHIVED."
+        ),
+        request=EmptyPersonLifecycleSerializer,
+        responses={200: PersonListSerializer, 401: OpenApiResponse(description="Authentication credentials were not provided."), 403: OpenApiResponse(description="You do not have a permitted active staff role."), 404: OpenApiResponse(description="No CRM-visible BUSINESS Person matches the supplied ID."), 409: OpenApiResponse(description="The person is already archived.")},
+        tags=["People"],
+    )
+    def post(self, request, *args, **kwargs):
+        EmptyPersonLifecycleSerializer(data=request.data).is_valid(raise_exception=True)
+        with transaction.atomic():
+            person = self.get_locked_business_person()
+            if person.archived_at is not None:
+                raise PersonLifecycleConflict("This person is already archived.")
+            person.archived_at = timezone.now()
+            person.save(update_fields=["archived_at", "updated_at"])
+            PeopleListView.record_person_audit(
+                AuditEvent.Action.PERSON_ARCHIVED, request.user, person, {"archived": {"from": False, "to": True}}
+            )
+        return Response(PersonListSerializer(person).data)
+
+    def get_locked_business_person(self):
+        person = self.get_business_people_queryset().select_for_update().filter(
+            pk=self.kwargs["person_id"]
+        ).first()
+        if person is None:
+            raise NotFound("Not found.")
+        return person
+
+
+class PersonRestoreView(PersonArchiveView):
+    @extend_schema(
+        operation_id="people_restore",
+        summary="Restore CRM Person",
+        description=(
+            "Restores an archived BUSINESS Person without changing Membership, User, Staff Access, "
+            "or other related domain records, and emits PERSON_RESTORED."
+        ),
+        request=EmptyPersonLifecycleSerializer,
+        responses={200: PersonListSerializer, 401: OpenApiResponse(description="Authentication credentials were not provided."), 403: OpenApiResponse(description="You do not have a permitted active staff role."), 404: OpenApiResponse(description="No CRM-visible BUSINESS Person matches the supplied ID."), 409: OpenApiResponse(description="The person is already active.")},
+        tags=["People"],
+    )
+    def post(self, request, *args, **kwargs):
+        EmptyPersonLifecycleSerializer(data=request.data).is_valid(raise_exception=True)
+        with transaction.atomic():
+            person = self.get_locked_business_person()
+            if person.archived_at is None:
+                raise PersonLifecycleConflict("This person is already active.")
+            person.archived_at = None
+            person.save(update_fields=["archived_at", "updated_at"])
+            PeopleListView.record_person_audit(
+                AuditEvent.Action.PERSON_RESTORED, request.user, person, {"archived": {"from": True, "to": False}}
+            )
+        return Response(PersonListSerializer(person).data)
 
 
 class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):

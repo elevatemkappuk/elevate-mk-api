@@ -20,6 +20,10 @@ PERSON_AUDIT_SENSITIVE_DOMAIN_ROLE_CODES = frozenset(
     }
 )
 PERSON_AUDIT_DESCRIPTION_OVERRIDES = {
+    AuditEvent.Action.PERSON_CREATED: "Person created",
+    AuditEvent.Action.PERSON_UPDATED: "Person updated",
+    AuditEvent.Action.PERSON_ARCHIVED: "Person archived",
+    AuditEvent.Action.PERSON_RESTORED: "Person restored",
     AuditEvent.Action.MEMBERSHIP_CREATED: "Membership created",
     AuditEvent.Action.MEMBERSHIP_ENDED: "Membership ended",
     AuditEvent.Action.PROFESSIONAL_PROFILE_CREATED: "Professional profile created",
@@ -43,7 +47,7 @@ PERSON_AUDIT_ALLOWED_CHANGE_FIELDS_BY_ENTITY_TYPE = {
     "PersonInterest": frozenset({"assigned"}),
     "PersonTag": frozenset({"is_active"}),
     "InternalNote": frozenset({"created", "archived"}),
-    "Person": frozenset({"archived", "first_name", "last_name", "primary_email", "mobile", "location", "age_range", "gender"}),
+    "Person": frozenset({"created", "archived", "first_name", "last_name", "primary_email", "mobile", "location", "age_range", "gender"}),
 }
 
 

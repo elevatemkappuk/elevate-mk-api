@@ -834,6 +834,10 @@ Current implementation rules:
 ### Current Integrated Mutation Auditing
 Current successful business audit capture:
 
+- `PERSON_CREATED` for successful Contact or composite Add Member Person creation
+- `PERSON_UPDATED` for a Person PATCH that persists one or more Person-owned fields
+- `PERSON_ARCHIVED` for successful Person archive
+- `PERSON_RESTORED` for successful Person restore
 - `MEMBERSHIP_CREATED` for successful Make Member
 - `MEMBERSHIP_ENDED` for successful ACTIVE -> FORMER transitions
 - `PROFESSIONAL_PROFILE_CREATED` for successful ProfessionalProfile creation
@@ -876,6 +880,15 @@ Current conventions:
 - `changes` remains compact and records only the business transition that occurred
 - required audit persistence failure rolls back the same authoritative mutation transaction instead of silently dropping audit history
 - no historical membership, professional profile, skill, interest, note, staff access, or tag events are fabricated for mutations that predated audit deployment
+
+### Person Lifecycle and Duplicate Detection
+
+- CRM Person write workflows always create and manage `BUSINESS` records; `record_type` is server-controlled for operational APIs
+- `primary_email` intentionally remains non-unique at the database level because historical CRM identity ambiguity can exist
+- staff creation uses application-level duplicate detection against active and archived BUSINESS people: normalized exact email and conservative normalized mobile; name alone is not a blocking key
+- this operational check is not equivalent to a database uniqueness constraint and cannot completely eliminate a simultaneous-create race
+- Add Member creates Person and ACTIVE Membership atomically; a failed Membership or required audit write rolls back the new Person
+- archive is the Person lifecycle and does not hard-delete or implicitly change Membership, User, Staff Access, ProfessionalProfile, Skills, Interests, Tags, Notes, or AuditEvents
 
 ## Model: `notes.InternalNote`
 Database table: `notes_internalnote`

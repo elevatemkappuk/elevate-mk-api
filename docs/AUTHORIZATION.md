@@ -92,6 +92,13 @@ Current clarification:
 - a `CRM_ADMIN` user can be linked to either a `BUSINESS` or `TECHNICAL` person
 - staff access remains evaluated from active `StaffRoleAssignment` data rather than person classification
 
+## Person Write Lifecycle
+
+- `CRM_ADMIN` and `CRM_MANAGER` may create Contacts, create Members, edit active BUSINESS Persons, archive Persons, and restore Persons
+- `CRM_VIEWER` is read-only and receives `403 Forbidden` for all Person write endpoints
+- authenticated users with no qualifying active CRM role receive `403 Forbidden`; anonymous callers receive `401 Unauthorized`
+- Django `is_staff` and `is_superuser` alone do not grant operational Person write authority
+
 ## Currently Implemented vs Planned
 Currently implemented:
 

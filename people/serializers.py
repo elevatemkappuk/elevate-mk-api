@@ -72,6 +72,55 @@ class PersonListSerializer(serializers.ModelSerializer):
         )
 
 
+class StrictPersonWriteSerializer(serializers.Serializer):
+    """Explicit Person write contract; read projections remain read-only."""
+
+    first_name = serializers.CharField(max_length=150)
+    last_name = serializers.CharField(max_length=150)
+    primary_email = serializers.EmailField(required=False, allow_blank=True, allow_null=True)
+    mobile = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    location = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    age_range = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    gender = serializers.CharField(max_length=100, required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        unknown_fields = set(self.initial_data.keys()) - set(self.fields.keys())
+        if unknown_fields:
+            raise serializers.ValidationError(
+                {field: ["This field is not allowed."] for field in sorted(unknown_fields)}
+            )
+        return attrs
+
+
+class PersonCreateSerializer(StrictPersonWriteSerializer):
+    pass
+
+
+class PersonUpdateSerializer(StrictPersonWriteSerializer):
+    first_name = serializers.CharField(max_length=150, required=False)
+    last_name = serializers.CharField(max_length=150, required=False)
+
+
+class PersonMemberCreateSerializer(StrictPersonWriteSerializer):
+    joined_at = serializers.DateField()
+    membership_source = serializers.ChoiceField(choices=Membership.Source.choices)
+
+
+class DuplicatePersonMatchSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Person
+        fields = ("id", "first_name", "last_name", "primary_email", "mobile", "archived_at")
+
+
+class EmptyPersonLifecycleSerializer(serializers.Serializer):
+    def validate(self, attrs):
+        if self.initial_data:
+            raise serializers.ValidationError(
+                {field: ["This field is not allowed."] for field in sorted(self.initial_data.keys())}
+            )
+        return attrs
+
+
 class PaginatedPersonListSerializer(serializers.Serializer):
     count = serializers.IntegerField()
     next = serializers.URLField(allow_null=True)

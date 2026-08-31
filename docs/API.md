@@ -30,6 +30,10 @@ Local development URLs when running `manage.py runserver` on the default port:
 - Tags endpoint: `http://localhost:8000/api/v1/tags/`
 - Industries endpoint: `http://localhost:8000/api/v1/industries/`
 - Person detail endpoint: `http://localhost:8000/api/v1/people/{person_id}/`
+- Create Contact endpoint: `http://localhost:8000/api/v1/people/`
+- Create Member endpoint: `http://localhost:8000/api/v1/people/members/`
+- Archive Person endpoint: `http://localhost:8000/api/v1/people/{person_id}/archive/`
+- Restore Person endpoint: `http://localhost:8000/api/v1/people/{person_id}/restore/`
 - Person skills endpoint: `http://localhost:8000/api/v1/people/{person_id}/skills/`
 - Person interests endpoint: `http://localhost:8000/api/v1/people/{person_id}/interests/`
 - Person tags endpoint: `http://localhost:8000/api/v1/people/{person_id}/tags/`
@@ -54,6 +58,10 @@ Environment-relative URL patterns:
 - Tags endpoint: `{BASE_URL}/api/v1/tags/`
 - Industries endpoint: `{BASE_URL}/api/v1/industries/`
 - Person detail endpoint: `{BASE_URL}/api/v1/people/{person_id}/`
+- Create Contact endpoint: `{BASE_URL}/api/v1/people/`
+- Create Member endpoint: `{BASE_URL}/api/v1/people/members/`
+- Archive Person endpoint: `{BASE_URL}/api/v1/people/{person_id}/archive/`
+- Restore Person endpoint: `{BASE_URL}/api/v1/people/{person_id}/restore/`
 - Person skills endpoint: `{BASE_URL}/api/v1/people/{person_id}/skills/`
 - Person interests endpoint: `{BASE_URL}/api/v1/people/{person_id}/interests/`
 - Person tags endpoint: `{BASE_URL}/api/v1/people/{person_id}/tags/`
@@ -76,11 +84,16 @@ Currently implemented Elevate endpoints:
 - `POST /api/v1/auth/logout/`
 - `GET /api/v1/auth/me/`
 - `GET /api/v1/people/`
+- `POST /api/v1/people/`
+- `POST /api/v1/people/members/`
 - `GET /api/v1/skills/`
 - `GET /api/v1/interests/`
 - `GET /api/v1/tags/`
 - `GET /api/v1/industries/`
 - `GET /api/v1/people/{person_id}/`
+- `PATCH /api/v1/people/{person_id}/`
+- `POST /api/v1/people/{person_id}/archive/`
+- `POST /api/v1/people/{person_id}/restore/`
 - `GET /api/v1/people/{person_id}/skills/`
 - `GET /api/v1/people/{person_id}/interests/`
 - `GET /api/v1/people/{person_id}/tags/`
@@ -1228,6 +1241,56 @@ Successful response:
 - Status: `204 No Content`
 - empty body
 
+## Person Write Lifecycle
+
+All Person write endpoints require an authenticated session plus an active `CRM_ADMIN` or `CRM_MANAGER` role. `CRM_VIEWER` and authenticated non-staff users receive `403`; anonymous requests receive `401`. Django `is_staff` and `is_superuser` are not CRM write grants.
+
+Only CRM-visible `BUSINESS` Persons are created or mutated. `record_type`, identifiers, timestamps, User fields, staff-role fields, Membership status, and unrelated domain data are server-controlled or rejected. There is no Person delete endpoint: archive and restore are the lifecycle.
+
+### Endpoint: `POST /api/v1/people/`
+
+Creates an active `BUSINESS` Contact with no Membership. Required fields are `first_name` and `last_name`; optional Person-owned fields are `primary_email`, `mobile`, `location`, `age_range`, and `gender`. The response is `201 Created` with the standard Person representation.
+
+Before persistence, the API checks existing `BUSINESS` records, including archived records, for an exact normalized email (trimmed, lowercase) and a conservatively normalized mobile (trimmed with spaces, hyphens, and parentheses removed). Name alone never blocks creation. A match returns `409 Conflict`:
+
+```json
+{
+  "detail": "A possible existing Person was found.",
+  "code": "duplicate_person",
+  "matches": [{"id": 14, "first_name": "Amina", "last_name": "Zulu", "primary_email": "amina@example.com", "mobile": "991000001", "archived_at": null}]
+}
+```
+
+TECHNICAL records are never duplicate candidates. `PERSON_CREATED` is written in the same transaction as the Person.
+
+### Endpoint: `POST /api/v1/people/members/`
+
+Creates a new `BUSINESS` Person and their first Membership atomically. It accepts the Contact fields above plus required `joined_at` (`YYYY-MM-DD`) and `membership_source`. The server forces Membership `status` to `ACTIVE` and `ended_at` to `null`.
+
+The endpoint returns `201 Created` with the standard Person representation. It emits both `PERSON_CREATED` and `MEMBERSHIP_CREATED`; a Person, Membership, or either audit persistence failure rolls back the whole workflow. Duplicate detection occurs before any row is created.
+
+This is distinct from `POST /api/v1/people/{person_id}/membership/`, which makes an already-existing Contact a Member.
+
+### Endpoint: `PATCH /api/v1/people/{person_id}/`
+
+Edits only `first_name`, `last_name`, `primary_email`, `mobile`, `location`, `age_range`, and `gender` for an active `BUSINESS` Person. Unknown and server-managed fields are rejected. Archived Persons return `409`; TECHNICAL and missing Persons return `404`.
+
+When email or mobile changes, duplicate detection excludes the current Person but includes archived BUSINESS candidates. Real changes emit one `PERSON_UPDATED` event containing only changed Person fields. A true no-op PATCH returns `200 OK` without saving or emitting audit noise.
+
+### Endpoint: `POST /api/v1/people/{person_id}/archive/`
+
+Archives an active `BUSINESS` Person by setting `archived_at`; it requires an empty request body and returns the canonical Person representation. An already archived Person returns `409`; TECHNICAL and missing Persons return `404`. `PERSON_ARCHIVED` is emitted in the same transaction.
+
+Archive does not disable a User, end Membership, change Staff Access, or alter ProfessionalProfile, Skills, Interests, Tags, Notes, or existing AuditEvents.
+
+### Endpoint: `POST /api/v1/people/{person_id}/restore/`
+
+Restores an archived `BUSINESS` Person by clearing `archived_at`; it requires an empty request body and returns the canonical Person representation. An already active Person returns `409`; TECHNICAL and missing Persons return `404`. `PERSON_RESTORED` is emitted in the same transaction and does not recreate or alter related domain state.
+
+### Transactions and duplicate limits
+
+Edits, archives, and restores lock the resolved Person with `select_for_update()` inside `transaction.atomic()`. Creation checks and all authoritative writes/audits run transactionally. `primary_email` and `mobile` deliberately have no database uniqueness constraint because historical CRM identity ambiguity is allowed. Therefore application-level duplicate detection is a strong operational guard, not an absolute guarantee against every simultaneous create race.
+
 ## Endpoint: `POST /api/v1/people/{person_id}/membership/`
 Purpose:
 - Execute the explicit business action `Make Member` for an existing CRM-visible `BUSINESS` Person.
@@ -1792,6 +1855,7 @@ Description behavior:
 
 - `description` is generated server-side from the audit action
 - current Person-scoped actions use stable human-readable labels such as `Membership created`, `Tag assigned`, and `Internal note archived`
+- Person lifecycle actions are also represented as `Person created`, `Person updated`, `Person archived`, and `Person restored`; their safe changes expose only approved Person-owned fields or lifecycle flags
 - if a future supported action becomes Person-scoped without an explicit override, the API falls back to a deterministic label rather than crashing
 
 ## Endpoint: `GET /api/v1/people/{person_id}/notes/`

@@ -1,4 +1,5 @@
 from django.contrib.admin.sites import AdminSite
+from unittest import mock
 from django.test import override_settings
 from django.test import RequestFactory
 from django.utils import timezone
@@ -6,6 +7,7 @@ from django.utils import timezone
 from django.test import TestCase
 
 from accounts.models import User
+from audit.models import AuditEvent
 from interests.models import Interest, PersonInterest
 from memberships.models import Membership
 from people.admin import PersonAdmin
@@ -1012,3 +1014,148 @@ class PersonOverviewApiTests(TestCase):
             response = self.client.get(self.get_url(self.active_member_person.id))
 
         self.assertEqual(response.status_code, 200)
+
+
+@override_settings(ROOT_URLCONF="config.urls")
+class PersonWriteLifecycleApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.create_url = "/api/v1/people/"
+        self.member_create_url = "/api/v1/people/members/"
+        self.admin_user = User.objects.create_user(
+            email="person-write-admin@example.com", password="testpass123",
+            person_first_name="Admin", person_last_name="Writer",
+        )
+        self.manager_user = User.objects.create_user(
+            email="person-write-manager@example.com", password="testpass123",
+            person_first_name="Manager", person_last_name="Writer",
+        )
+        self.viewer_user = User.objects.create_user(
+            email="person-write-viewer@example.com", password="testpass123",
+            person_first_name="Viewer", person_last_name="Writer",
+        )
+        self.nonstaff_user = User.objects.create_user(
+            email="person-write-nonstaff@example.com", password="testpass123",
+            person_first_name="Nonstaff", person_last_name="Writer",
+        )
+        for user, code in (
+            (self.admin_user, StaffRole.CRM_ADMIN),
+            (self.manager_user, StaffRole.CRM_MANAGER),
+            (self.viewer_user, StaffRole.CRM_VIEWER),
+        ):
+            StaffRoleAssignment.objects.assign_role(user=user, role=StaffRole.objects.get(code=code))
+
+    def authenticate(self, user):
+        self.client.force_authenticate(user=user)
+
+    def person_payload(self, **overrides):
+        payload = {"first_name": "Amina", "last_name": "Zulu", "primary_email": "amina@example.com"}
+        payload.update(overrides)
+        return payload
+
+    def detail_url(self, person_id):
+        return f"/api/v1/people/{person_id}/"
+
+    def archive_url(self, person_id):
+        return f"/api/v1/people/{person_id}/archive/"
+
+    def restore_url(self, person_id):
+        return f"/api/v1/people/{person_id}/restore/"
+
+    def test_contact_create_is_authorized_and_creates_business_person_with_audit(self):
+        self.authenticate(self.admin_user)
+        response = self.client.post(self.create_url, self.person_payload(), format="json")
+
+        self.assertEqual(response.status_code, 201)
+        person = Person.objects.get(pk=response.data["id"])
+        self.assertEqual(person.record_type, Person.RecordType.BUSINESS)
+        self.assertIsNone(person.archived_at)
+        self.assertFalse(Membership.objects.filter(person=person).exists())
+        event = AuditEvent.objects.get(action=AuditEvent.Action.PERSON_CREATED, entity_id=str(person.id))
+        self.assertEqual(event.actor_user, self.admin_user)
+        self.assertEqual(event.metadata, {"person_id": str(person.id)})
+
+    def test_manager_can_create_contact_and_viewer_nonstaff_and_anonymous_are_denied(self):
+        self.authenticate(self.manager_user)
+        self.assertEqual(self.client.post(self.create_url, self.person_payload(), format="json").status_code, 201)
+        self.client.force_authenticate(user=self.viewer_user)
+        self.assertEqual(self.client.post(self.create_url, self.person_payload(primary_email="viewer@example.com"), format="json").status_code, 403)
+        self.client.force_authenticate(user=self.nonstaff_user)
+        self.assertEqual(self.client.post(self.create_url, self.person_payload(primary_email="nonstaff@example.com"), format="json").status_code, 403)
+        self.client.force_authenticate(user=None)
+        self.assertEqual(self.client.post(self.create_url, self.person_payload(primary_email="anonymous@example.com"), format="json").status_code, 401)
+
+    def test_create_rejects_server_managed_fields_and_duplicate_business_identity(self):
+        Person.objects.create(first_name="Existing", last_name="Person", primary_email="Existing@Example.com", mobile="99 100-0001", archived_at=timezone.now())
+        Person.objects.create(first_name="Technical", last_name="Only", primary_email="technical@example.com", record_type=Person.RecordType.TECHNICAL)
+        self.authenticate(self.admin_user)
+        rejected = self.client.post(self.create_url, self.person_payload(record_type="TECHNICAL"), format="json")
+        email_duplicate = self.client.post(self.create_url, self.person_payload(primary_email=" existing@example.COM "), format="json")
+        mobile_duplicate = self.client.post(self.create_url, self.person_payload(primary_email="new@example.com", mobile="991000001"), format="json")
+        technical_allowed = self.client.post(self.create_url, self.person_payload(primary_email="technical@example.com"), format="json")
+
+        self.assertEqual(rejected.status_code, 400)
+        self.assertEqual(email_duplicate.status_code, 409)
+        self.assertEqual(email_duplicate.data["code"], "duplicate_person")
+        self.assertEqual(mobile_duplicate.status_code, 409)
+        self.assertEqual(technical_allowed.status_code, 201)
+
+    def test_create_member_is_atomic_and_emits_both_events(self):
+        self.authenticate(self.manager_user)
+        payload = self.person_payload(joined_at="2026-08-31", membership_source="STAFF")
+        response = self.client.post(self.member_create_url, payload, format="json")
+
+        self.assertEqual(response.status_code, 201)
+        person = Person.objects.get(pk=response.data["id"])
+        self.assertEqual(person.membership.status, Membership.Status.ACTIVE)
+        self.assertEqual(person.membership.membership_source, Membership.Source.STAFF)
+        self.assertTrue(AuditEvent.objects.filter(action=AuditEvent.Action.PERSON_CREATED, entity_id=str(person.id)).exists())
+        self.assertTrue(AuditEvent.objects.filter(action=AuditEvent.Action.MEMBERSHIP_CREATED, metadata__person_id=str(person.id)).exists())
+
+    def test_create_member_rolls_back_when_required_audit_write_fails(self):
+        self.authenticate(self.admin_user)
+        with mock.patch("people.views.record_audit_event", side_effect=RuntimeError("audit down")):
+            response = self.client.post(self.member_create_url, self.person_payload(joined_at="2026-08-31", membership_source="STAFF"), format="json")
+
+        self.assertEqual(response.status_code, 500)
+        self.assertFalse(Person.objects.filter(primary_email="amina@example.com").exists())
+        self.assertFalse(Membership.objects.exists())
+
+    def test_patch_updates_only_changed_fields_and_noop_is_not_audited(self):
+        person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")
+        self.authenticate(self.admin_user)
+        changed = self.client.patch(self.detail_url(person.id), {"location": "Lilongwe"}, format="json")
+        noop = self.client.patch(self.detail_url(person.id), {"location": "Lilongwe"}, format="json")
+
+        self.assertEqual(changed.status_code, 200)
+        update = AuditEvent.objects.get(action=AuditEvent.Action.PERSON_UPDATED)
+        self.assertEqual(update.changes, {"location": {"from": "", "to": "Lilongwe"}})
+        self.assertEqual(noop.status_code, 200)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.PERSON_UPDATED).count(), 1)
+
+    def test_patch_rejects_archived_duplicate_and_technical_people(self):
+        active = Person.objects.create(first_name="Active", last_name="Person", primary_email="active@example.com")
+        Person.objects.create(first_name="Archived", last_name="Candidate", primary_email="duplicate@example.com", archived_at=timezone.now())
+        technical = Person.objects.create(first_name="Technical", last_name="Person", record_type=Person.RecordType.TECHNICAL)
+        active.archived_at = timezone.now()
+        active.save(update_fields=["archived_at", "updated_at"])
+        self.authenticate(self.admin_user)
+        archived = self.client.patch(self.detail_url(active.id), {"location": "Lilongwe"}, format="json")
+        technical_response = self.client.patch(self.detail_url(technical.id), {"location": "Lilongwe"}, format="json")
+
+        self.assertEqual(archived.status_code, 409)
+        self.assertEqual(technical_response.status_code, 404)
+
+    def test_archive_and_restore_preserve_membership_and_emit_lifecycle_events(self):
+        person = Person.objects.create(first_name="Amina", last_name="Zulu")
+        membership = Membership.objects.create(person=person, status=Membership.Status.ACTIVE, joined_at="2025-01-01", membership_source=Membership.Source.STAFF)
+        self.authenticate(self.admin_user)
+        archive = self.client.post(self.archive_url(person.id), {}, format="json")
+        restore = self.client.post(self.restore_url(person.id), {}, format="json")
+
+        self.assertEqual(archive.status_code, 200)
+        self.assertEqual(restore.status_code, 200)
+        membership.refresh_from_db()
+        self.assertEqual(membership.status, Membership.Status.ACTIVE)
+        self.assertTrue(AuditEvent.objects.filter(action=AuditEvent.Action.PERSON_ARCHIVED, entity_id=str(person.id)).exists())
+        self.assertTrue(AuditEvent.objects.filter(action=AuditEvent.Action.PERSON_RESTORED, entity_id=str(person.id)).exists())
