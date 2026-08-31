@@ -734,6 +734,7 @@ Currently implemented rules:
 - assignments belong to `User`, not `Person`
 - a user may hold multiple different roles
 - duplicate rows for the same `user` + `role` pair are prevented
+- current Django Admin lifecycle writes immutable audit history for successful grant, reactivation, and revocation
 
 ## Django-Managed Framework Tables
 Current project features imply framework-managed tables such as:
@@ -817,6 +818,9 @@ Current successful business audit capture:
 - `SKILL_REMOVED` for successful `PersonSkill` deletion
 - `INTEREST_ASSIGNED` for successful `PersonInterest` creation
 - `INTEREST_REMOVED` for successful `PersonInterest` deletion
+- `STAFF_ROLE_ASSIGNED` for successful new `StaffRoleAssignment` creation
+- `STAFF_ROLE_REACTIVATED` for successful reuse of an existing revoked `StaffRoleAssignment` row
+- `STAFF_ROLE_REVOKED` for successful `StaffRoleAssignment` revocation
 - `TAG_ASSIGNED` for first-time active `PersonTag` creation
 - `TAG_REACTIVATED` for reusing an existing inactive `PersonTag`
 - `TAG_REMOVED` for active -> inactive `PersonTag` removal
@@ -824,15 +828,18 @@ Current successful business audit capture:
 Current conventions:
 
 - `Membership`, `ProfessionalProfile`, `PersonSkill`, `PersonInterest`, and `PersonTag` remain authoritative for current state
-- `AuditEvent.entity_type` uses the mutated resource: `Membership`, `ProfessionalProfile`, `PersonSkill`, `PersonInterest`, or `PersonTag`
+- `StaffRoleAssignment` also remains authoritative for current operational access state
+- `AuditEvent.entity_type` uses the mutated resource: `Membership`, `ProfessionalProfile`, `PersonSkill`, `PersonInterest`, `StaffRoleAssignment`, or `PersonTag`
 - `AuditEvent.entity_id` stores that mutated row's primary key as a string
 - `metadata.person_id` stores the related Person primary key as a string for future cross-domain Person audit history
 - Skill lifecycle events also store `metadata.skill_id` as the canonical Skill primary key string
 - Interest lifecycle events also store `metadata.interest_id` as the canonical Interest primary key string
+- Staff Access lifecycle events store `metadata.target_user_id` and `metadata.staff_role_id`, and may also include stable `metadata.staff_role_code`
 - Tag lifecycle events also store `metadata.tag_id` as the canonical Tag primary key string
 - ProfessionalProfile create events store only the persisted writable business fields using compact before/after values
 - ProfessionalProfile update events store only fields that actually changed after persistence; no-op PATCH produces no update event
 - Skill and Interest removal events may continue to reference a deleted historical relationship row through `AuditEvent.entity_id`
+- Staff Access audit `actor_user` is the administrator performing the mutation, not the target user whose access changed
 - `changes` remains compact and records only the business transition that occurred
 - required audit persistence failure rolls back the same authoritative mutation transaction instead of silently dropping audit history
-- no historical membership, professional profile, skill, interest, or tag events are fabricated for mutations that predated audit deployment
+- no historical membership, professional profile, skill, interest, staff access, or tag events are fabricated for mutations that predated audit deployment

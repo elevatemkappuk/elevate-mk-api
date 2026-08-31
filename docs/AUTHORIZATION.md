@@ -44,6 +44,8 @@ Current lifecycle behavior:
 - revocation may record `revoked_by`
 - reactivation reuses the same assignment row
 - reactivation clears revocation fields and restores `is_active=True`
+- successful Django Admin grant, reactivation, and revocation also append immutable `AuditEvent` history rows
+- `actor_user` in those audit rows is the administrator performing the mutation, not the target user receiving or losing access
 
 No hard-delete lifecycle is implemented as the normal authorization path.
 
@@ -107,6 +109,7 @@ Current clarification:
 - read-only inspection of `audit.AuditEvent` in Django Admin is a technical administration capability, not a CRM role grant
 - future CRM Audit History access should be implemented separately with explicit operational authorization rules
 - Django `is_staff` and `is_superuser` still do not become Elevate CRM roles
+- recording Staff Access audit history does not make Django `is_staff` or `is_superuser` an operational CRM role
 
 Planned, not yet implemented:
 

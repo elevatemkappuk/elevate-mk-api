@@ -41,6 +41,7 @@ class AuditEvent(models.Model):
         NOTE_ARCHIVED = "NOTE_ARCHIVED", "Note archived"
         NOTE_RESTORED = "NOTE_RESTORED", "Note restored"
         STAFF_ROLE_ASSIGNED = "STAFF_ROLE_ASSIGNED", "Staff role assigned"
+        STAFF_ROLE_REACTIVATED = "STAFF_ROLE_REACTIVATED", "Staff role reactivated"
         STAFF_ROLE_REVOKED = "STAFF_ROLE_REVOKED", "Staff role revoked"
         ACCOUNT_DISABLED = "ACCOUNT_DISABLED", "Account disabled"
         ACCOUNT_REENABLED = "ACCOUNT_REENABLED", "Account reenabled"
@@ -98,4 +99,3 @@ class AuditEvent(models.Model):
 
     def __str__(self):
         return f"{self.action} {self.entity_type} {self.entity_id or '-'}"
-

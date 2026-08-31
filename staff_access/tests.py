@@ -6,8 +6,10 @@ from django.http import HttpRequest
 from django.test import RequestFactory
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
+from unittest.mock import patch
 
 from accounts.models import User
+from audit.models import AuditEvent
 from people.models import Person
 from staff_access.admin import StaffRoleAdmin, StaffRoleAssignmentAdmin
 from staff_access.models import StaffRole, StaffRoleAssignment
@@ -238,6 +240,19 @@ class StaffAdminTests(TestCase):
         self.assertEqual(assignment.assigned_by, self.admin_user)
         self.assertTrue(assignment.is_active)
         self.assertIsNotNone(assignment.assigned_at)
+        event = AuditEvent.objects.get(action=AuditEvent.Action.STAFF_ROLE_ASSIGNED)
+        self.assertEqual(event.actor_user, self.admin_user)
+        self.assertEqual(event.entity_type, "StaffRoleAssignment")
+        self.assertEqual(event.entity_id, str(assignment.id))
+        self.assertEqual(
+            event.metadata,
+            {
+                "target_user_id": str(self.target_user.id),
+                "staff_role_id": str(self.crm_admin_role.id),
+                "staff_role_code": self.crm_admin_role.code,
+            },
+        )
+        self.assertEqual(event.changes, {"is_active": {"from": None, "to": True}})
 
     def test_staff_role_assignment_admin_revokes_selected_assignments(self):
         request = self.build_request()
@@ -249,6 +264,19 @@ class StaffAdminTests(TestCase):
         self.assertFalse(assignment.is_active)
         self.assertIsNotNone(assignment.revoked_at)
         self.assertEqual(assignment.revoked_by, self.admin_user)
+        event = AuditEvent.objects.get(action=AuditEvent.Action.STAFF_ROLE_REVOKED)
+        self.assertEqual(event.actor_user, self.admin_user)
+        self.assertEqual(event.entity_type, "StaffRoleAssignment")
+        self.assertEqual(event.entity_id, str(assignment.id))
+        self.assertEqual(
+            event.metadata,
+            {
+                "target_user_id": str(self.target_user.id),
+                "staff_role_id": str(self.crm_admin_role.id),
+                "staff_role_code": self.crm_admin_role.code,
+            },
+        )
+        self.assertEqual(event.changes, {"is_active": {"from": True, "to": False}})
 
     def test_staff_role_assignment_admin_reactivates_selected_assignments(self):
         request = self.build_request()
@@ -261,6 +289,19 @@ class StaffAdminTests(TestCase):
         self.assertTrue(assignment.is_active)
         self.assertIsNone(assignment.revoked_at)
         self.assertIsNone(assignment.revoked_by)
+        event = AuditEvent.objects.get(action=AuditEvent.Action.STAFF_ROLE_REACTIVATED)
+        self.assertEqual(event.actor_user, self.admin_user)
+        self.assertEqual(event.entity_type, "StaffRoleAssignment")
+        self.assertEqual(event.entity_id, str(assignment.id))
+        self.assertEqual(
+            event.metadata,
+            {
+                "target_user_id": str(self.target_user.id),
+                "staff_role_id": str(self.crm_admin_role.id),
+                "staff_role_code": self.crm_admin_role.code,
+            },
+        )
+        self.assertEqual(event.changes, {"is_active": {"from": False, "to": True}})
 
     def test_staff_role_assignment_admin_reuses_existing_row_for_reactivation(self):
         request = self.build_request()
@@ -275,3 +316,82 @@ class StaffAdminTests(TestCase):
         self.assertEqual(assignment.id, original_id)
         self.assertTrue(assignment.is_active)
         self.assertEqual(StaffRoleAssignment.objects.filter(user=self.target_user, role=self.crm_viewer_role).count(), 1)
+        self.assertEqual(
+            AuditEvent.objects.filter(action=AuditEvent.Action.STAFF_ROLE_ASSIGNED).count(),
+            0,
+        )
+        event = AuditEvent.objects.get(action=AuditEvent.Action.STAFF_ROLE_REACTIVATED)
+        self.assertEqual(event.entity_id, str(original_id))
+        self.assertEqual(
+            event.metadata,
+            {
+                "target_user_id": str(self.target_user.id),
+                "staff_role_id": str(self.crm_viewer_role.id),
+                "staff_role_code": self.crm_viewer_role.code,
+            },
+        )
+
+    def test_staff_role_assignment_admin_duplicate_active_assignment_writes_no_audit_event(self):
+        request = self.build_request()
+        existing = StaffRoleAssignment.objects.assign_role(
+            user=self.target_user,
+            role=self.crm_admin_role,
+            assigned_by=self.admin_user,
+        )
+
+        duplicate_attempt = StaffRoleAssignment(user=self.target_user, role=self.crm_admin_role)
+        self.assignment_admin.save_model(request, duplicate_attempt, form=None, change=False)
+
+        self.assertEqual(StaffRoleAssignment.objects.filter(user=self.target_user, role=self.crm_admin_role).count(), 1)
+        self.assertEqual(duplicate_attempt.pk, existing.pk)
+        self.assertEqual(AuditEvent.objects.count(), 0)
+
+    def test_staff_role_assignment_admin_grant_rolls_back_when_audit_write_fails(self):
+        request = self.build_request()
+        assignment = StaffRoleAssignment(user=self.target_user, role=self.crm_admin_role)
+
+        with patch("staff_access.admin.record_audit_event", side_effect=RuntimeError("audit down")):
+            with self.assertRaises(RuntimeError):
+                self.assignment_admin.save_model(request, assignment, form=None, change=False)
+
+        self.assertFalse(
+            StaffRoleAssignment.objects.filter(user=self.target_user, role=self.crm_admin_role).exists()
+        )
+        self.assertEqual(AuditEvent.objects.count(), 0)
+
+    def test_staff_role_assignment_admin_reactivation_rolls_back_when_audit_write_fails(self):
+        request = self.build_request()
+        assignment = StaffRoleAssignment.objects.assign_role(user=self.target_user, role=self.crm_admin_role)
+        assignment.revoke(revoked_by=self.admin_user)
+        revoked_at = assignment.revoked_at
+        revoked_by = assignment.revoked_by
+
+        with patch("staff_access.admin.record_audit_event", side_effect=RuntimeError("audit down")):
+            with self.assertRaises(RuntimeError):
+                self.assignment_admin.reactivate_selected_assignments(
+                    request,
+                    StaffRoleAssignment.objects.filter(pk=assignment.pk),
+                )
+
+        assignment.refresh_from_db()
+        self.assertFalse(assignment.is_active)
+        self.assertEqual(assignment.revoked_at, revoked_at)
+        self.assertEqual(assignment.revoked_by, revoked_by)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.STAFF_ROLE_REACTIVATED).count(), 0)
+
+    def test_staff_role_assignment_admin_revoke_rolls_back_when_audit_write_fails(self):
+        request = self.build_request()
+        assignment = StaffRoleAssignment.objects.assign_role(user=self.target_user, role=self.crm_admin_role)
+
+        with patch("staff_access.admin.record_audit_event", side_effect=RuntimeError("audit down")):
+            with self.assertRaises(RuntimeError):
+                self.assignment_admin.revoke_selected_assignments(
+                    request,
+                    StaffRoleAssignment.objects.filter(pk=assignment.pk),
+                )
+
+        assignment.refresh_from_db()
+        self.assertTrue(assignment.is_active)
+        self.assertIsNone(assignment.revoked_at)
+        self.assertIsNone(assignment.revoked_by)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.STAFF_ROLE_REVOKED).count(), 0)

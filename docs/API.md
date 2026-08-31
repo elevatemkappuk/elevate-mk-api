@@ -392,6 +392,15 @@ Staff authorization note:
 - their `staff_roles` value is an empty list
 - no Staff CRUD endpoints are currently implemented
 
+Staff access lifecycle note:
+
+- the current Staff role grant, reactivation, and revocation workflows are managed through Django Admin rather than a public CRM API endpoint
+- successful new role grant now writes immutable `AuditEvent` action `STAFF_ROLE_ASSIGNED`
+- successful reactivation of an existing revoked assignment row writes immutable `AuditEvent` action `STAFF_ROLE_REACTIVATED`
+- successful revocation writes immutable `AuditEvent` action `STAFF_ROLE_REVOKED`
+- rejected or no-op lifecycle attempts do not emit successful Staff Access audit events
+- `/api/v1/auth/me/` response shape is unchanged
+
 ## Endpoint: `GET /api/v1/people/`
 Purpose:
 - Return the first read-only Staff CRM People directory listing.

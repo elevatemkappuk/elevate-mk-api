@@ -1,8 +1,31 @@
 from django.contrib import admin
 from django.contrib import messages
+from django.db import transaction
 from django.utils.translation import ngettext
 
+from audit.models import AuditEvent
+from audit.services import record_audit_event
 from staff_access.models import StaffRole, StaffRoleAssignment
+
+
+def record_staff_role_audit_event(*, action, actor_user, assignment):
+    record_audit_event(
+        action=action,
+        actor_user=actor_user,
+        entity_type="StaffRoleAssignment",
+        entity_id=assignment.id,
+        changes={
+            "is_active": {
+                "from": None if action == AuditEvent.Action.STAFF_ROLE_ASSIGNED else False,
+                "to": False if action == AuditEvent.Action.STAFF_ROLE_REVOKED else True,
+            }
+        },
+        metadata={
+            "target_user_id": str(assignment.user_id),
+            "staff_role_id": str(assignment.role_id),
+            "staff_role_code": assignment.role.code,
+        },
+    )
 
 
 @admin.register(StaffRole)
@@ -77,21 +100,39 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
             super().save_model(request, obj, form, change)
             return
 
-        existing = StaffRoleAssignment.objects.filter(user=obj.user, role=obj.role).first()
-        if existing:
-            if not existing.is_active:
-                existing.reactivate()
-                self.message_user(request, "Existing assignment reactivated.", level=messages.SUCCESS)
-            else:
-                self.message_user(request, "Assignment already exists and remains active.", level=messages.WARNING)
-            obj.pk = existing.pk
-            return
+        with transaction.atomic():
+            existing = (
+                StaffRoleAssignment.objects.select_for_update()
+                .select_related("role")
+                .filter(user=obj.user, role=obj.role)
+                .first()
+            )
+            if existing:
+                if not existing.is_active:
+                    existing.reactivate()
+                    record_staff_role_audit_event(
+                        action=AuditEvent.Action.STAFF_ROLE_REACTIVATED,
+                        actor_user=request.user,
+                        assignment=existing,
+                    )
+                    self.message_user(request, "Existing assignment reactivated.", level=messages.SUCCESS)
+                else:
+                    self.message_user(request, "Assignment already exists and remains active.", level=messages.WARNING)
+                obj.pk = existing.pk
+                return
 
-        assignment = StaffRoleAssignment.objects.create(
-            user=obj.user,
-            role=obj.role,
-            assigned_by=request.user,
-        )
+            assignment = StaffRoleAssignment.objects.create(
+                user=obj.user,
+                role=obj.role,
+                assigned_by=request.user,
+            )
+            assignment = StaffRoleAssignment.objects.select_related("role").get(pk=assignment.pk)
+            record_staff_role_audit_event(
+                action=AuditEvent.Action.STAFF_ROLE_ASSIGNED,
+                actor_user=request.user,
+                assignment=assignment,
+            )
+
         obj.pk = assignment.pk
         obj.assigned_at = assignment.assigned_at
         obj.assigned_by = assignment.assigned_by
@@ -100,9 +141,20 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
     @admin.action(description="Revoke selected staff role assignments")
     def revoke_selected_assignments(self, request, queryset):
         updated = 0
-        for assignment in queryset.filter(is_active=True):
-            assignment.revoke(revoked_by=request.user)
-            updated += 1
+        with transaction.atomic():
+            assignments = list(
+                queryset.select_for_update()
+                .select_related("role")
+                .filter(is_active=True)
+            )
+            for assignment in assignments:
+                assignment.revoke(revoked_by=request.user)
+                record_staff_role_audit_event(
+                    action=AuditEvent.Action.STAFF_ROLE_REVOKED,
+                    actor_user=request.user,
+                    assignment=assignment,
+                )
+                updated += 1
         self.message_user(
             request,
             ngettext(
@@ -117,9 +169,20 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
     @admin.action(description="Reactivate selected staff role assignments")
     def reactivate_selected_assignments(self, request, queryset):
         updated = 0
-        for assignment in queryset.filter(is_active=False):
-            assignment.reactivate()
-            updated += 1
+        with transaction.atomic():
+            assignments = list(
+                queryset.select_for_update()
+                .select_related("role")
+                .filter(is_active=False)
+            )
+            for assignment in assignments:
+                assignment.reactivate()
+                record_staff_role_audit_event(
+                    action=AuditEvent.Action.STAFF_ROLE_REACTIVATED,
+                    actor_user=request.user,
+                    assignment=assignment,
+                )
+                updated += 1
         self.message_user(
             request,
             ngettext(
