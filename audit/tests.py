@@ -1,3 +1,4 @@
+from django.contrib import admin
 from django.contrib.admin.sites import AdminSite
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
@@ -151,7 +152,7 @@ class AuditEventAdminTests(TestCase):
         self.assertFalse(self.admin.has_delete_permission(request))
 
     def test_audit_event_is_registered(self):
-        self.assertIs(self.site._registry[AuditEvent].__class__, AuditEventAdmin)
+        self.assertIs(admin.site._registry[AuditEvent].__class__, AuditEventAdmin)
 
 
 @override_settings(ROOT_URLCONF="config.urls")

@@ -68,7 +68,8 @@ class LoginView(APIView):
         summary="Log in with email and password",
         description=(
             "Authenticates a user with the custom email-based account model and establishes "
-            "a normal Django server-side session. This endpoint is CSRF-protected."
+            "a normal Django server-side session. This endpoint is CSRF-protected. "
+            "Successful and rejected credential-authentication attempts are recorded in the internal audit store."
         ),
         request=LoginSerializer,
         responses={
@@ -94,10 +95,7 @@ class LoginView(APIView):
                     entity_id=None,
                 )
             except AuditPersistenceError:
-                return Response(
-                    {"detail": ["Authentication could not be completed right now."]},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
+                raise AuditPersistenceError
             raise
 
         user = serializer.validated_data["user"]
@@ -112,10 +110,7 @@ class LoginView(APIView):
             )
         except AuditPersistenceError:
             logout(request)
-            return Response(
-                {"detail": ["Authentication could not be completed right now."]},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+            raise
 
         return Response(CurrentUserSerializer(user).data, status=status.HTTP_200_OK)
 
@@ -129,7 +124,8 @@ class LogoutView(APIView):
         summary="Log out the current session",
         description=(
             "Logs out the currently authenticated Django session and invalidates its "
-            "server-side authenticated state. This endpoint is CSRF-protected."
+            "server-side authenticated state. This endpoint is CSRF-protected. "
+            "Successful authenticated logout is recorded in the internal audit store."
         ),
         request=None,
         responses={
@@ -148,10 +144,7 @@ class LogoutView(APIView):
                 entity_id=user.id,
             )
         except AuditPersistenceError:
-            return Response(
-                {"detail": "Logout could not be completed right now."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+            raise
 
         logout(request)
         return Response(status=status.HTTP_204_NO_CONTENT)
