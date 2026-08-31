@@ -860,9 +860,12 @@ Current conventions:
  - `AuditEvent.entity_type` uses the mutated resource: `Membership`, `ProfessionalProfile`, `PersonSkill`, `PersonInterest`, `InternalNote`, `StaffRoleAssignment`, or `PersonTag`
 - `AuditEvent.entity_id` stores that mutated row's primary key as a string
 - `metadata.person_id` stores the related Person primary key as a string for future cross-domain Person audit history
+- the Person Audit History API scopes history to one Person using `metadata.person_id` and also allows direct `entity_type = "Person"` / `entity_id = "{person_id}"` rows when present
 - Skill lifecycle events also store `metadata.skill_id` as the canonical Skill primary key string
 - Interest lifecycle events also store `metadata.interest_id` as the canonical Interest primary key string
 - Internal Note lifecycle events store only compact note-state context such as `person_id` and body-changed markers
+- Person Audit History is a safe read projection over immutable `AuditEvent` rows, not a new authoritative model or table
+- `CRM_VIEWER` Person Audit History excludes Internal Note audit rows before pagination/count so note activity cannot be inferred from totals
 - Staff Access lifecycle events store `metadata.target_user_id` and `metadata.staff_role_id`, and may also include stable `metadata.staff_role_code`
 - Tag lifecycle events also store `metadata.tag_id` as the canonical Tag primary key string
 - ProfessionalProfile create events store only the persisted writable business fields using compact before/after values

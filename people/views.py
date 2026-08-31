@@ -3,9 +3,17 @@ from django.db.models import Prefetch, Q, Value
 from django.db.models.functions import Concat
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import generics
+from rest_framework.exceptions import NotFound
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 
+from audit.models import AuditEvent
+from audit.policies import build_person_audit_scope_q, filter_person_audit_visibility_for_user
+from audit.serializers import (
+    PaginatedPersonAuditHistorySerializer,
+    PersonAuditHistoryEventSerializer,
+    PersonAuditHistoryQuerySerializer,
+)
 from people.models import Person
 from people.serializers import (
     PaginatedPersonListSerializer,
@@ -40,6 +48,12 @@ class HasPeopleAccess(HasActiveStaffRoleCodes):
 class BusinessPersonQuerysetMixin:
     def get_business_people_queryset(self):
         return Person.objects.business()
+
+    def get_business_person_or_404(self):
+        person = self.get_business_people_queryset().filter(pk=self.kwargs["person_id"]).first()
+        if person is None:
+            raise NotFound("Not found.")
+        return person
 
 
 class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
@@ -321,3 +335,107 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
             Prefetch("person_interests", queryset=active_person_interests, to_attr="active_person_interests"),
             Prefetch("person_tags", queryset=active_person_tags, to_attr="active_person_tags"),
         )
+
+
+class PersonAuditHistoryPagination(PageNumberPagination):
+    page_size = 25
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+    def get_page_size(self, request):
+        params = getattr(request, "_validated_person_audit_history_query_params", {})
+        return params.get("page_size", self.page_size)
+
+
+class PersonAuditHistoryView(BusinessPersonQuerysetMixin, generics.GenericAPIView):
+    serializer_class = PersonAuditHistoryEventSerializer
+    permission_classes = [IsAuthenticated, HasPeopleAccess]
+    pagination_class = PersonAuditHistoryPagination
+
+    @extend_schema(
+        operation_id="people_audit_history_list",
+        summary="List CRM Person audit history",
+        description=(
+            "Returns a paginated, newest-first audit history projection for a single CRM-visible BUSINESS Person. "
+            "The endpoint reads existing immutable AuditEvent rows already scoped to that Person through metadata.person_id "
+            "or direct Person entity linkage. Archived BUSINESS people remain readable by direct ID. "
+            "CRM_ADMIN, CRM_MANAGER, and CRM_VIEWER may access the endpoint, but CRM_VIEWER receives a permission-filtered queryset: "
+            "Internal Note audit events are excluded before count and pagination so note activity cannot be inferred from totals or page gaps. "
+            "The response is a safe operational projection, not a raw AuditEvent dump, and it never exposes metadata, request_id, ip_address, note body, or archive_reason."
+        ),
+        parameters=[
+            OpenApiParameter(
+                name="person_id",
+                type=int,
+                location=OpenApiParameter.PATH,
+                description="Primary key of a CRM-visible BUSINESS Person.",
+                required=True,
+            ),
+            PersonAuditHistoryQuerySerializer,
+        ],
+        responses={
+            200: PaginatedPersonAuditHistorySerializer,
+            400: OpenApiResponse(description="Invalid pagination query parameter value."),
+            401: OpenApiResponse(description="Authentication credentials were not provided."),
+            403: OpenApiResponse(description="You do not have a permitted active staff role."),
+            404: OpenApiResponse(
+                description="No BUSINESS Person matches the supplied ID within the CRM People domain."
+            ),
+        },
+        tags=["People", "Audit History"],
+        examples=[
+            OpenApiExample(
+                "Person audit history page",
+                value={
+                    "count": 2,
+                    "next": None,
+                    "previous": None,
+                    "results": [
+                        {
+                            "id": 19,
+                            "action": "TAG_ASSIGNED",
+                            "description": "Tag assigned",
+                            "actor": {"id": 3, "email": "manager@example.com"},
+                            "occurred_at": "2026-08-31T16:10:00Z",
+                            "entity_type": "PersonTag",
+                            "entity_id": "11",
+                            "changes": {"is_active": {"from": None, "to": True}},
+                        },
+                        {
+                            "id": 18,
+                            "action": "MEMBERSHIP_CREATED",
+                            "description": "Membership created",
+                            "actor": {"id": 2, "email": "admin@example.com"},
+                            "occurred_at": "2026-08-31T16:00:00Z",
+                            "entity_type": "Membership",
+                            "entity_id": "7",
+                            "changes": {
+                                "status": {"from": None, "to": "ACTIVE"},
+                                "joined_at": {"from": None, "to": "2026-08-31"},
+                                "membership_source": {"from": None, "to": "STAFF"},
+                            },
+                        },
+                    ],
+                },
+                response_only=True,
+            )
+        ],
+    )
+    def get(self, request, *args, **kwargs):
+        self.validated_query_params = self.get_validated_query_params()
+        request._validated_person_audit_history_query_params = self.validated_query_params
+        person = self.get_business_person_or_404()
+        queryset = self.get_queryset_for_person(person.id)
+        page = self.paginate_queryset(queryset)
+        serializer = self.get_serializer(page, many=True)
+        return self.get_paginated_response(serializer.data)
+
+    def get_queryset_for_person(self, person_id):
+        queryset = AuditEvent.objects.select_related("actor_user").filter(build_person_audit_scope_q(person_id))
+        queryset = filter_person_audit_visibility_for_user(queryset, self.request.user)
+        return queryset.order_by("-occurred_at", "-id")
+
+    def get_validated_query_params(self):
+        serializer = PersonAuditHistoryQuerySerializer(data=self.request.query_params)
+        serializer.is_valid(raise_exception=True)
+        return serializer.validated_data

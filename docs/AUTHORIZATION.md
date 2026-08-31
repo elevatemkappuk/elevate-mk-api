@@ -1,6 +1,6 @@
 # Elevate MK Authorization
 Status: Living Documentation
-Last Updated: 2026-08-29
+Last Updated: 2026-08-31
 
 ## Scope
 This document describes the currently implemented staff authorization foundation for the Elevate MK Django API.
@@ -101,8 +101,24 @@ Currently implemented:
 - active-role evaluation helpers
 - reusable DRF permission classes
 - `/api/v1/auth/me/` role exposure
+- `/api/v1/people/{person_id}/audit-history/` read access for `CRM_ADMIN`, `CRM_MANAGER`, and permission-filtered `CRM_VIEWER`
 - Internal Notes are restricted to `CRM_ADMIN` and `CRM_MANAGER`
 - `CRM_VIEWER` has no Internal Notes read or write access
+
+## Person Audit History Visibility
+Current backend rule:
+
+- `GET /api/v1/people/{person_id}/audit-history/` is read-only operational CRM history for one `BUSINESS` Person
+- `CRM_ADMIN` may view full permitted Person Audit History, including Internal Note lifecycle events
+- `CRM_MANAGER` may view full permitted Person Audit History, including Internal Note lifecycle events
+- `CRM_VIEWER` may view Person Audit History, but cannot see Internal Notes and therefore cannot see Internal Note `AuditEvent` rows
+- audit visibility cannot bypass the access rules of the underlying domain
+
+Current filtering rule:
+
+- Person-scoped audit rows are filtered at the queryset level before pagination and count
+- forbidden Internal Note audit rows are excluded for `CRM_VIEWER` before totals and pages are calculated
+- Viewer responses therefore do not leak hidden note activity through `count`, `next`, `previous`, or page gaps
 
 ## Django Admin and Audit Inspection
 Current clarification:

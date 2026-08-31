@@ -1725,6 +1725,76 @@ Fields intentionally not exposed:
 - Django `is_superuser`
 - staff role-assignment internals
 
+## Endpoint: `GET /api/v1/people/{person_id}/audit-history/`
+Purpose:
+- Return a read-only, paginated audit history projection for a single CRM-visible `BUSINESS` Person.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` required
+- Anonymous requests return `401 Unauthorized`
+- Authenticated users without one of those active CRM roles return `403 Forbidden`
+
+People visibility rule:
+
+- The endpoint operates only within the CRM `BUSINESS` Person domain
+- Active and archived `BUSINESS` records are both retrievable by direct ID
+- `TECHNICAL` Person records are never returned
+- Requesting a `TECHNICAL` Person ID returns `404 Not Found`
+- A missing Person ID also returns `404 Not Found`
+
+Scoping rule:
+
+- the endpoint returns only existing immutable `AuditEvent` rows deliberately scoped to the requested Person
+- primary cross-domain linkage uses `metadata.person_id = "{person_id}"`
+- direct Person events are also included when `entity_type = "Person"` and `entity_id = "{person_id}"`
+- unrelated authentication events are excluded unless they were explicitly recorded against the Person using one of those conventions
+- unrelated `StaffRoleAssignment` events are excluded unless they were explicitly recorded against the Person using one of those conventions
+- actor identity does not determine ownership of Person audit history
+
+Viewer filtering rule:
+
+- `CRM_VIEWER` may access Person Audit History
+- `CRM_VIEWER` must not see Internal Note audit events
+- Internal Note audit rows are excluded before pagination and count, not merely hidden in serialization
+- a Viewer therefore cannot infer hidden note activity from `count`, `next`, `previous`, or result gaps
+
+Pagination and ordering:
+
+- default page size: `25`
+- supported `page_size` values: `25`, `50`, `100`
+- standard paginated response shape: `count`, `next`, `previous`, `results`
+- ordering is newest first: `occurred_at DESC`, then `id DESC`
+
+Response projection per event:
+
+- `id`
+- `action`
+- `description`
+- `actor`: `null` or `{ "id", "email" }`
+- `occurred_at`
+- `entity_type`
+- `entity_id`
+- `changes`
+
+Safe projection rules:
+
+- the response is not a raw `AuditEvent` dump
+- `metadata` is not returned
+- `request_id` is not returned
+- `ip_address` is not returned
+- `changes` is allowlist-projected by audited domain
+- unrecognized or unsafe change keys are omitted
+- Person Audit History never reconstructs Internal Note body history
+- Internal Note events never expose note body or `archive_reason`
+- no historical rows are synthesized or backfilled from current resource state
+
+Description behavior:
+
+- `description` is generated server-side from the audit action
+- current Person-scoped actions use stable human-readable labels such as `Membership created`, `Tag assigned`, and `Internal note archived`
+- if a future supported action becomes Person-scoped without an explicit override, the API falls back to a deterministic label rather than crashing
+
 ## Endpoint: `GET /api/v1/people/{person_id}/notes/`
 Purpose:
 - Return a paginated collection of sensitive internal notes for a single CRM-visible `BUSINESS` Person.
