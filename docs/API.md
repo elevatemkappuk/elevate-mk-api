@@ -1676,6 +1676,12 @@ Returned `tags` items when present:
 - `name`
 - `slug`
 
+Notes behavior:
+
+- Notes are intentionally excluded from this overview projection
+- sensitive Internal Notes remain a separate paginated CRM domain
+- `/api/v1/people/{person_id}/overview/` does not expose note bodies, note lifecycle state, or note audit data
+
 Professional-profile behavior:
 
 - `professional_profile` is `null` when no ProfessionalProfile exists
@@ -1718,6 +1724,119 @@ Fields intentionally not exposed:
 - Django `is_staff`
 - Django `is_superuser`
 - staff role-assignment internals
+
+## Endpoint: `GET /api/v1/people/{person_id}/notes/`
+Purpose:
+- Return a paginated collection of sensitive internal notes for a single CRM-visible `BUSINESS` Person.
+
+Authentication and authorization:
+- Authenticated Django session required
+- Active `CRM_ADMIN` or `CRM_MANAGER` required
+- `CRM_VIEWER` receives `403 Forbidden`
+- Anonymous requests return `401 Unauthorized`
+- Authenticated nonstaff users return `403 Forbidden`
+
+Visibility and filtering:
+
+- active and archived `BUSINESS` Persons are readable by direct ID
+- `TECHNICAL` Person records return `404 Not Found`
+- nonexistent Person IDs return `404 Not Found`
+- default `record_state=active`
+- supported `record_state` values:
+  - `active`
+  - `archived`
+  - `all`
+- unsupported `record_state` values return `400 Bad Request`
+- default ordering is newest first: `created_at DESC`, then `id DESC`
+- standard paginated response shape: `count`, `next`, `previous`, `results`
+
+Returned note fields:
+
+- `id`
+- `body`
+- `created_by` with `id` and `email`
+- `created_at`
+- `updated_at`
+- `archived_at`
+- `archived_by` with `id` and `email`, or `null`
+- `archive_reason`
+
+## Endpoint: `POST /api/v1/people/{person_id}/notes/`
+Purpose:
+- Create a new active internal note for an active CRM-visible `BUSINESS` Person.
+
+Rules:
+
+- accepts only `{ "body": "..." }`
+- `created_by`, lifecycle fields, timestamps, and unknown fields are rejected
+- blank or whitespace-only body returns `400 Bad Request`
+- archived `BUSINESS` Person returns `409 Conflict`
+- `TECHNICAL` or missing Person IDs return `404 Not Found`
+- successful create writes immutable audit action `NOTE_CREATED`
+- AuditEvent does not store note body
+
+Successful response:
+
+- Status: `201 Created`
+- returns the serialized note
+
+## Endpoint: `PATCH /api/v1/people/{person_id}/notes/{note_id}/`
+Purpose:
+- Edit the plain-text body of an existing active internal note.
+
+Rules:
+
+- only `body` is editable
+- lifecycle fields use dedicated archive/restore endpoints
+- archived note returns `409 Conflict`
+- archived `BUSINESS` Person returns `409 Conflict`
+- cross-Person note access returns `404 Not Found`
+- a real body change writes `NOTE_UPDATED`
+- no-op body PATCH remains successful but emits no `NOTE_UPDATED`
+- AuditEvent does not store old or new note body; it records only that body changed
+
+## Endpoint: `POST /api/v1/people/{person_id}/notes/{note_id}/archive/`
+Purpose:
+- Archive an active internal note without deleting it.
+
+Rules:
+
+- optional request body: `{ "archive_reason": "..." }`
+- unrelated fields are rejected
+- archived `BUSINESS` Person returns `409 Conflict`
+- already archived note returns `409 Conflict`
+- successful archive writes `NOTE_ARCHIVED`
+- AuditEvent does not store note body or archive_reason
+
+Successful response:
+
+- Status: `200 OK`
+- returns the serialized archived note
+
+## Endpoint: `POST /api/v1/people/{person_id}/notes/{note_id}/restore/`
+Purpose:
+- Restore an archived internal note to active state.
+
+Rules:
+
+- request body should be empty
+- unexpected fields return `400 Bad Request`
+- archived `BUSINESS` Person returns `409 Conflict`
+- already active note returns `409 Conflict`
+- successful restore clears `archived_at`, `archived_by`, and `archive_reason`
+- successful restore writes `NOTE_RESTORED`
+- AuditEvent does not store note body or archive_reason
+
+Successful response:
+
+- Status: `200 OK`
+- returns the serialized active note
+
+Notes domain guardrails:
+
+- there is no DELETE note endpoint
+- Notes are not included in `/api/v1/people/{person_id}/overview/`
+- rejected or conflicting note operations do not emit successful note audit events
 - speculative future Person Overview domain keys
 
 Example response for a contact:

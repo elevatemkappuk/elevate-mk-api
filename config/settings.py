@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'skills',
     'interests',
     'tags',
+    'notes',
     'corsheaders',
     'rest_framework',
     'drf_spectacular',

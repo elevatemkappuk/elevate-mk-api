@@ -230,6 +230,30 @@ Current rules:
 - removing a `PersonInterest` deletes only the relationship row, not the canonical `Interest`
 - successful PersonInterest assignment and removal mutations are audited separately from the authoritative relationship row
 
+## Internal Note Relationship
+Current relationship:
+
+```text
+Person 0..* InternalNote *..1 User(created_by)
+Person 0..* InternalNote 0..1 User(archived_by)
+```
+
+Current rules:
+
+- InternalNote is sensitive internal CRM context authored by staff about a Person
+- InternalNote belongs directly to `Person`
+- InternalNote does not require Membership, ProfessionalProfile, or a linked User on the Person
+- body is plain text only in V1
+- body remains authoritative on `InternalNote` and is never copied into `AuditEvent`
+- `created_by` preserves original authorship
+- normal lifecycle is active, archive, and restore; no hard delete
+- archived state is derived from `archived_at`
+- restore clears `archived_at`, `archived_by`, and `archive_reason`
+- `archive_reason` remains authoritative on `InternalNote` and is not copied to generic audit payloads
+- Notes are a separate sensitive domain and are intentionally excluded from Person Overview
+- only `CRM_ADMIN` and `CRM_MANAGER` may access CRM Notes endpoints
+- note mutations and their required audit rows share one transaction
+
 ## Tag Relationship
 Current relationship:
 
@@ -818,6 +842,10 @@ Current successful business audit capture:
 - `SKILL_REMOVED` for successful `PersonSkill` deletion
 - `INTEREST_ASSIGNED` for successful `PersonInterest` creation
 - `INTEREST_REMOVED` for successful `PersonInterest` deletion
+- `NOTE_CREATED` for successful `InternalNote` creation
+- `NOTE_UPDATED` for successful `InternalNote` body edits that persist a real change
+- `NOTE_ARCHIVED` for successful `InternalNote` archive
+- `NOTE_RESTORED` for successful `InternalNote` restore
 - `STAFF_ROLE_ASSIGNED` for successful new `StaffRoleAssignment` creation
 - `STAFF_ROLE_REACTIVATED` for successful reuse of an existing revoked `StaffRoleAssignment` row
 - `STAFF_ROLE_REVOKED` for successful `StaffRoleAssignment` revocation
@@ -827,19 +855,54 @@ Current successful business audit capture:
 
 Current conventions:
 
-- `Membership`, `ProfessionalProfile`, `PersonSkill`, `PersonInterest`, and `PersonTag` remain authoritative for current state
+ - `Membership`, `ProfessionalProfile`, `PersonSkill`, `PersonInterest`, `InternalNote`, and `PersonTag` remain authoritative for current state
 - `StaffRoleAssignment` also remains authoritative for current operational access state
-- `AuditEvent.entity_type` uses the mutated resource: `Membership`, `ProfessionalProfile`, `PersonSkill`, `PersonInterest`, `StaffRoleAssignment`, or `PersonTag`
+ - `AuditEvent.entity_type` uses the mutated resource: `Membership`, `ProfessionalProfile`, `PersonSkill`, `PersonInterest`, `InternalNote`, `StaffRoleAssignment`, or `PersonTag`
 - `AuditEvent.entity_id` stores that mutated row's primary key as a string
 - `metadata.person_id` stores the related Person primary key as a string for future cross-domain Person audit history
 - Skill lifecycle events also store `metadata.skill_id` as the canonical Skill primary key string
 - Interest lifecycle events also store `metadata.interest_id` as the canonical Interest primary key string
+- Internal Note lifecycle events store only compact note-state context such as `person_id` and body-changed markers
 - Staff Access lifecycle events store `metadata.target_user_id` and `metadata.staff_role_id`, and may also include stable `metadata.staff_role_code`
 - Tag lifecycle events also store `metadata.tag_id` as the canonical Tag primary key string
 - ProfessionalProfile create events store only the persisted writable business fields using compact before/after values
 - ProfessionalProfile update events store only fields that actually changed after persistence; no-op PATCH produces no update event
+- Internal Note events must never store note body or archive_reason in `changes` or `metadata`
 - Skill and Interest removal events may continue to reference a deleted historical relationship row through `AuditEvent.entity_id`
 - Staff Access audit `actor_user` is the administrator performing the mutation, not the target user whose access changed
 - `changes` remains compact and records only the business transition that occurred
 - required audit persistence failure rolls back the same authoritative mutation transaction instead of silently dropping audit history
-- no historical membership, professional profile, skill, interest, staff access, or tag events are fabricated for mutations that predated audit deployment
+- no historical membership, professional profile, skill, interest, note, staff access, or tag events are fabricated for mutations that predated audit deployment
+
+## Model: `notes.InternalNote`
+Database table: `notes_internalnote`
+
+Purpose:
+- Stores sensitive internal staff-authored free-text context about a Person inside the CRM domain.
+
+### Fields
+| Field | Type | Null / Blank | Default / Automatic | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
+| `person` | `ForeignKey(people.Person)` | not null, `blank=False` | none | Required Person target |
+| `body` | `TextField` | not null, `blank=False` | none | Required plain-text note body |
+| `created_by` | `ForeignKey(accounts.User)` | not null, `blank=False` | none | Required original author |
+| `archived_at` | `DateTimeField` | `null=True`, `blank=True` | none | Archive marker |
+| `archived_by` | `ForeignKey(accounts.User)` | `null=True`, `blank=True` | none | Actor who archived the note |
+| `archive_reason` | `TextField` | not null, `blank=True` | empty string | Optional archive explanation retained on InternalNote |
+| `created_at` | `DateTimeField` | not null | `auto_now_add=True` | Set automatically on create |
+| `updated_at` | `DateTimeField` | not null | `auto_now=True` | Updated automatically on save |
+
+### Constraints and Behavior
+Current implementation:
+
+- default ordering is newest first: `created_at DESC`, then `id DESC`
+- `person` uses `PROTECT`
+- `created_by` uses `PROTECT`
+- `archived_by` uses `PROTECT`
+- body must not be blank or whitespace-only
+- active note requires `archived_at = null` and `archived_by = null`
+- active note also clears `archive_reason`
+- archived note requires `archived_by`
+- normal application hard-delete is blocked at model and queryset level
+- no revision table exists in V1

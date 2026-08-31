@@ -101,6 +101,8 @@ Currently implemented:
 - active-role evaluation helpers
 - reusable DRF permission classes
 - `/api/v1/auth/me/` role exposure
+- Internal Notes are restricted to `CRM_ADMIN` and `CRM_MANAGER`
+- `CRM_VIEWER` has no Internal Notes read or write access
 
 ## Django Admin and Audit Inspection
 Current clarification:
