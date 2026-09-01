@@ -67,7 +67,8 @@ class MembershipFormImportServiceTests(TestCase):
         self.assertEqual(person.age_range, Person.AgeRange.AGE_25_29)
         self.assertEqual(person.gender, Person.Gender.FEMALE)
         self.assertEqual(person.membership.status, Membership.Status.ACTIVE)
-        self.assertEqual(person.membership.membership_source, Membership.Source.OTHER)
+        self.assertEqual(person.membership.membership_source, Membership.Source.MEMBERSHIP_FORM)
+        self.assertNotEqual(person.membership.membership_source, Membership.Source.OTHER)
         self.assertEqual(str(person.membership.joined_at), "2024-04-12")
         self.assertEqual(person.professional_profile.industry, industry)
         self.assertEqual(record.status, ImportRecord.Status.COMMITTED)
@@ -102,7 +103,7 @@ class MembershipFormImportServiceTests(TestCase):
             person=auto_person,
             status=Membership.Status.ACTIVE,
             joined_at="2020-01-01",
-            membership_source=Membership.Source.STAFF,
+            membership_source=Membership.Source.OTHER,
         )
         auto_record = self.record(
             ImportRecord.ResolutionMethod.AUTO_MATCH,
@@ -121,6 +122,7 @@ class MembershipFormImportServiceTests(TestCase):
         self.assertEqual(auto_person.location, "Kumasi")
         self.assertEqual(auto_person.mobile, "0711111111")
         self.assertEqual(existing_membership.joined_at.isoformat(), "2020-01-01")
+        self.assertEqual(existing_membership.membership_source, Membership.Source.OTHER)
         self.assertEqual(staff_person.primary_email, "amina@example.com")
         self.assertIsNotNone(staff_person.archived_at)
         self.assertEqual(result.memberships_reused, 1)
@@ -148,6 +150,7 @@ class MembershipFormImportServiceTests(TestCase):
         former_membership.refresh_from_db()
         self.assertFalse(Person.objects.filter(primary_email="amina@example.com").exists())
         self.assertEqual(former_membership.status, Membership.Status.FORMER)
+        self.assertEqual(former_membership.membership_source, Membership.Source.STAFF)
         self.assertEqual(first.status, ImportRecord.Status.RESOLVED)
         self.assertEqual(self.batch.status, ImportBatch.Status.READY_FOR_IMPORT)
 

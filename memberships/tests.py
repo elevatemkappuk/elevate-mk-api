@@ -76,8 +76,9 @@ class MembershipModelTests(TestCase):
     def test_allowed_sources_are_supported(self):
         self.assertEqual(
             {choice for choice, _label in Membership.Source.choices},
-            {"WEBSITE_FORM", "STAFF", "COMMUNITY_PLATFORM", "OTHER"},
+            {"WEBSITE_FORM", "MEMBERSHIP_FORM", "STAFF", "COMMUNITY_PLATFORM", "OTHER"},
         )
+        self.assertEqual(Membership.Source.MEMBERSHIP_FORM.label, "Membership Form")
 
     def test_invalid_status_is_rejected(self):
         membership = Membership(

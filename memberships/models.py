@@ -11,6 +11,7 @@ class Membership(models.Model):
 
     class Source(models.TextChoices):
         WEBSITE_FORM = "WEBSITE_FORM", "Website form"
+        MEMBERSHIP_FORM = "MEMBERSHIP_FORM", "Membership Form"
         STAFF = "STAFF", "Staff"
         COMMUNITY_PLATFORM = "COMMUNITY_PLATFORM", "Community platform"
         OTHER = "OTHER", "Other"

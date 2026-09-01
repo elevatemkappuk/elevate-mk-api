@@ -308,7 +308,7 @@ def _create_or_reuse_membership(person, joined_at):
         person=person,
         status=Membership.Status.ACTIVE,
         joined_at=joined_at,
-        membership_source=Membership.Source.OTHER,
+        membership_source=Membership.Source.MEMBERSHIP_FORM,
     )
     _save_validated(membership)
     return True

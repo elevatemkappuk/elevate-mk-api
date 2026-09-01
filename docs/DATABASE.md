@@ -79,7 +79,7 @@ The backend-only Membership Form import service is the first authoritative histo
 
 - `AUTO_MATCH` and `STAFF_MATCH` reuse the resolved Person; only missing Person and ProfessionalProfile values are filled, and current nonblank CRM values are never overwritten.
 - `NO_MATCH` and `STAFF_CREATE_NEW` create a normal `BUSINESS` Person from normalized canonical data.
-- a new Membership is `ACTIVE`, uses `membership_source=OTHER` for historical form origin, and uses the source submission timestamp as `joined_at`.
+- a new Membership is `ACTIVE`, uses `membership_source=MEMBERSHIP_FORM` to record its Membership Form business origin, and uses the source submission timestamp as `joined_at`. `ImportRecord` remains the authoritative provenance for the specific historical batch and row.
 - an existing `ACTIVE` Membership is reused unchanged; an existing `FORMER` Membership blocks the entire batch and is never reactivated.
 - active Industry definitions are matched safely by exact name or canonical slug. Unmapped spreadsheet industry text neither creates an Industry nor blocks the batch.
 - `INVALID` ImportRecords remain invalid and are marked with the existing `SKIPPED` outcome without CRM mutation.
@@ -613,7 +613,7 @@ Purpose:
 | `status` | `CharField(max_length=20)` | not null, `blank=False` | none | Allowed values: `ACTIVE`, `FORMER` |
 | `joined_at` | `DateField` | not null, `blank=False` | none | Historical business join date |
 | `ended_at` | `DateField` | `null=True`, `blank=True` | none | End-of-membership business date for former members |
-| `membership_source` | `CharField(max_length=30)` | not null, `blank=False` | none | Allowed values: `WEBSITE_FORM`, `STAFF`, `COMMUNITY_PLATFORM`, `OTHER` |
+| `membership_source` | `CharField(max_length=30)` | not null, `blank=False` | none | Allowed values: `WEBSITE_FORM`, `MEMBERSHIP_FORM`, `STAFF`, `COMMUNITY_PLATFORM`, `OTHER` |
 | `created_at` | `DateTimeField` | not null | `auto_now_add=True` | Set automatically on create |
 | `updated_at` | `DateTimeField` | not null | `auto_now=True` | Updated automatically on each save |
 
@@ -638,6 +638,7 @@ Current implementation:
   - `FORMER`
 - `membership_source` choices:
   - `WEBSITE_FORM`
+  - `MEMBERSHIP_FORM`
   - `STAFF`
   - `COMMUNITY_PLATFORM`
   - `OTHER`

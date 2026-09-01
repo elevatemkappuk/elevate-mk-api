@@ -1345,7 +1345,7 @@ Request body:
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `joined_at` | date (`YYYY-MM-DD`) | yes | Historical membership join date; no backend default |
-| `membership_source` | string | yes | One of `WEBSITE_FORM`, `STAFF`, `COMMUNITY_PLATFORM`, `OTHER` |
+| `membership_source` | string | yes | One of `WEBSITE_FORM`, `MEMBERSHIP_FORM`, `STAFF`, `COMMUNITY_PLATFORM`, `OTHER` |
 
 Backend-controlled fields:
 
