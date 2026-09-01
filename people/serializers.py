@@ -104,8 +104,16 @@ class StrictPersonWriteSerializer(serializers.Serializer):
     primary_email = serializers.EmailField(required=False, allow_blank=True, allow_null=True)
     mobile = serializers.CharField(max_length=50, required=False, allow_blank=True)
     location = serializers.CharField(max_length=255, required=False, allow_blank=True)
-    age_range = serializers.CharField(max_length=100, required=False, allow_blank=True)
-    gender = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    age_range = serializers.ChoiceField(
+        choices=Person.AgeRange.choices,
+        required=False,
+        allow_blank=True,
+    )
+    gender = serializers.ChoiceField(
+        choices=Person.Gender.choices,
+        required=False,
+        allow_blank=True,
+    )
 
     def validate(self, attrs):
         unknown_fields = set(self.initial_data.keys()) - set(self.fields.keys())

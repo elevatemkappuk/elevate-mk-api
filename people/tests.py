@@ -67,6 +67,29 @@ class PersonModelTests(TestCase):
         self.assertEqual(person.record_type, Person.RecordType.TECHNICAL)
         self.assertEqual(person.archived_at, archived_at)
 
+    def test_person_exposes_canonical_demographic_choices(self):
+        self.assertEqual(
+            Person.AgeRange.choices,
+            [
+                ("UNDER_25", "Under 25"),
+                ("25_29", "25 - 29"),
+                ("30_34", "30 - 34"),
+                ("35_39", "35 - 39"),
+                ("40_45", "40 - 45"),
+                ("OVER_45", "Over 45"),
+            ],
+        )
+        self.assertEqual(
+            Person.Gender.choices,
+            [
+                ("MALE", "Male"),
+                ("FEMALE", "Female"),
+                ("NON_BINARY", "Non-Binary"),
+                ("TRANSGENDER", "Transgender"),
+                ("OTHER", "Other"),
+            ],
+        )
+
 
 class PersonAdminTests(TestCase):
     def setUp(self):
@@ -1099,6 +1122,46 @@ class PersonWriteLifecycleApiTests(TestCase):
         self.assertEqual(email_duplicate.data["code"], "duplicate_person")
         self.assertEqual(mobile_duplicate.status_code, 409)
         self.assertEqual(technical_allowed.status_code, 201)
+
+    def test_create_accepts_each_canonical_age_range_and_rejects_unsupported_value(self):
+        self.authenticate(self.admin_user)
+        for index, age_range in enumerate(Person.AgeRange.values):
+            with self.subTest(age_range=age_range):
+                response = self.client.post(
+                    self.create_url,
+                    self.person_payload(primary_email=f"age-{index}@example.com", age_range=age_range),
+                    format="json",
+                )
+                self.assertEqual(response.status_code, 201)
+                self.assertEqual(response.data["age_range"], age_range)
+
+        response = self.client.post(
+            self.create_url,
+            self.person_payload(primary_email="unsupported-age@example.com", age_range="18_24"),
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("age_range", response.data)
+
+    def test_create_accepts_each_canonical_gender_and_rejects_unsupported_value(self):
+        self.authenticate(self.admin_user)
+        for index, gender in enumerate(Person.Gender.values):
+            with self.subTest(gender=gender):
+                response = self.client.post(
+                    self.create_url,
+                    self.person_payload(primary_email=f"gender-{index}@example.com", gender=gender),
+                    format="json",
+                )
+                self.assertEqual(response.status_code, 201)
+                self.assertEqual(response.data["gender"], gender)
+
+        response = self.client.post(
+            self.create_url,
+            self.person_payload(primary_email="unsupported-gender@example.com", gender="PREFER_NOT_TO_SAY"),
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("gender", response.data)
 
     def test_create_member_is_atomic_and_emits_both_events(self):
         self.authenticate(self.manager_user)

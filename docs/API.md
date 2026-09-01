@@ -1279,7 +1279,7 @@ Only CRM-visible `BUSINESS` Persons are created or mutated. `record_type`, ident
 
 ### Endpoint: `POST /api/v1/people/`
 
-Creates an active `BUSINESS` Contact with no Membership. Required fields are `first_name` and `last_name`; optional Person-owned fields are `primary_email`, `mobile`, `location`, `age_range`, and `gender`. The response is `201 Created` with the standard Person representation.
+Creates an active `BUSINESS` Contact with no Membership. Required fields are `first_name` and `last_name`; optional Person-owned fields are `primary_email`, `mobile`, `location`, `age_range`, and `gender`. `age_range` accepts `UNDER_25`, `25_29`, `30_34`, `35_39`, `40_45`, or `OVER_45`; `gender` accepts `MALE`, `FEMALE`, `NON_BINARY`, `TRANSGENDER`, or `OTHER`. The response is `201 Created` with the standard Person representation.
 
 Before persistence, the API checks existing `BUSINESS` records, including archived records, for an exact normalized email (trimmed, lowercase) and a conservatively normalized mobile (trimmed with spaces, hyphens, and parentheses removed). Name alone never blocks creation. A match returns `409 Conflict`:
 
@@ -1303,7 +1303,7 @@ This is distinct from `POST /api/v1/people/{person_id}/membership/`, which makes
 
 ### Endpoint: `PATCH /api/v1/people/{person_id}/`
 
-Edits only `first_name`, `last_name`, `primary_email`, `mobile`, `location`, `age_range`, and `gender` for an active `BUSINESS` Person. Unknown and server-managed fields are rejected. Archived Persons return `409`; TECHNICAL and missing Persons return `404`.
+Edits only `first_name`, `last_name`, `primary_email`, `mobile`, `location`, `age_range`, and `gender` for an active `BUSINESS` Person. Unknown and server-managed fields are rejected. `age_range` accepts `UNDER_25`, `25_29`, `30_34`, `35_39`, `40_45`, or `OVER_45`; `gender` accepts `MALE`, `FEMALE`, `NON_BINARY`, `TRANSGENDER`, or `OTHER`. Both remain optional. Archived Persons return `409`; TECHNICAL and missing Persons return `404`.
 
 When email or mobile changes, duplicate detection excludes the current Person but includes archived BUSINESS candidates. Real changes emit one `PERSON_UPDATED` event containing only changed Person fields. A true no-op PATCH returns `200 OK` without saving or emitting audit noise.
 

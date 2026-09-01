@@ -6,6 +6,7 @@ from openpyxl import Workbook
 
 from data_imports.adapters.membership_form import REQUIRED_HEADERS, SHEET_NAME, MembershipFormStructureError
 from data_imports.models import ImportBatch, ImportRecord
+from data_imports.services.identity_analysis import analyze_import_batch
 from data_imports.services.membership_ingestion import ingest_membership_form
 from memberships.models import Membership
 from people.models import Person
@@ -43,7 +44,8 @@ class MembershipFormIngestionTests(TestCase):
         self.assertEqual(record.raw_data["Timestamp"], "2026-02-23T20:20:41.097000")
         self.assertEqual(record.normalized_data["email"], "amina@example.com")
         self.assertEqual(record.normalized_data["mobile"], "0791234567")
-        self.assertEqual(record.normalized_data["age_range"], "25 - 29")
+        self.assertEqual(record.normalized_data["age_range"], Person.AgeRange.AGE_25_29)
+        self.assertEqual(record.normalized_data["gender"], Person.Gender.FEMALE)
         self.assertEqual(record.status, ImportRecord.Status.STAGED)
         self.assertEqual(Person.objects.count(), 0)
         self.assertEqual(Membership.objects.count(), 0)
@@ -62,6 +64,58 @@ class MembershipFormIngestionTests(TestCase):
         self.assertEqual(record.status, ImportRecord.Status.INVALID)
         self.assertEqual({error["code"] for error in record.validation_errors}, {"invalid_email", "invalid_url"})
         self.assertEqual(record.raw_data["Email (preferably your personal email)"], "invalid")
+
+    def test_unknown_age_range_marks_row_invalid_without_replacing_it_with_null(self):
+        batch = ingest_membership_form(
+            workbook_bytes=workbook_bytes(rows=[self.sample_row(**{"Age ": "18-24"})]),
+            source_filename="unknown-age.xlsx",
+        )
+        record = batch.records.get()
+
+        self.assertEqual(record.status, ImportRecord.Status.INVALID)
+        self.assertIn(
+            {"field": "age_range", "code": "unsupported_age_range", "message": "Age range value is not supported."},
+            record.validation_errors,
+        )
+        self.assertIsNone(record.normalized_data["age_range"])
+        self.assertEqual(record.raw_data["Age "], "18-24")
+        self.assertEqual(Person.objects.count(), 0)
+        self.assertEqual(Membership.objects.count(), 0)
+
+    def test_unknown_gender_marks_row_invalid_without_converting_to_other(self):
+        batch = ingest_membership_form(
+            workbook_bytes=workbook_bytes(rows=[self.sample_row(**{"Gender": "Prefer not to say"})]),
+            source_filename="unknown-gender.xlsx",
+        )
+        record = batch.records.get()
+
+        self.assertEqual(record.status, ImportRecord.Status.INVALID)
+        self.assertIn(
+            {"field": "gender", "code": "unsupported_gender", "message": "Gender value is not supported."},
+            record.validation_errors,
+        )
+        self.assertIsNone(record.normalized_data["gender"])
+        self.assertNotEqual(record.normalized_data["gender"], Person.Gender.OTHER)
+        self.assertEqual(record.raw_data["Gender"], "Prefer not to say")
+        self.assertEqual(Person.objects.count(), 0)
+        self.assertEqual(Membership.objects.count(), 0)
+
+    def test_identity_analysis_consumes_a_canonically_normalized_staged_row_without_crm_mutation(self):
+        batch = ingest_membership_form(
+            workbook_bytes=workbook_bytes(rows=[self.sample_row(**{"Age ": "25-29", "Gender": "Non Binary"})]),
+            source_filename="normalized-row.xlsx",
+        )
+
+        analyze_import_batch(batch)
+        record = batch.records.get()
+        batch.refresh_from_db()
+
+        self.assertEqual(record.normalized_data["age_range"], Person.AgeRange.AGE_25_29)
+        self.assertEqual(record.normalized_data["gender"], Person.Gender.NON_BINARY)
+        self.assertEqual(record.status, ImportRecord.Status.RESOLVED)
+        self.assertEqual(batch.status, ImportBatch.Status.ANALYZED)
+        self.assertEqual(Person.objects.count(), 0)
+        self.assertEqual(Membership.objects.count(), 0)
 
     def test_extra_columns_are_preserved_and_empty_rows_are_ignored(self):
         headers = REQUIRED_HEADERS + ("Extra source field",)

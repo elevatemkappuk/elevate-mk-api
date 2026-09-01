@@ -164,8 +164,8 @@ Purpose:
 | `primary_email` | `EmailField` | `null=True`, `blank=True` | none | Optional, not unique |
 | `mobile` | `CharField(max_length=50)` | not null, `blank=True` | empty string if left blank through forms/model defaults | Optional |
 | `location` | `CharField(max_length=255)` | not null, `blank=True` | empty string if left blank through forms/model defaults | Optional free text |
-| `age_range` | `CharField(max_length=100)` | not null, `blank=True` | empty string if left blank through forms/model defaults | Optional, no controlled choices yet |
-| `gender` | `CharField(max_length=100)` | not null, `blank=True` | empty string if left blank through forms/model defaults | Optional, no controlled choices yet |
+| `age_range` | `CharField(max_length=100)` | not null, `blank=True` | empty string if left blank through forms/model defaults | Optional controlled demographic band: `UNDER_25`, `25_29`, `30_34`, `35_39`, `40_45`, `OVER_45` |
+| `gender` | `CharField(max_length=100)` | not null, `blank=True` | empty string if left blank through forms/model defaults | Optional controlled value: `MALE`, `FEMALE`, `NON_BINARY`, `TRANSGENDER`, `OTHER` |
 | `archived_at` | `DateTimeField` | `null=True`, `blank=True` | none | Optional archive marker |
 | `created_at` | `DateTimeField` | not null | `auto_now_add=True` | Set automatically on create |
 | `updated_at` | `DateTimeField` | not null | `auto_now=True` | Updated automatically on each save |
@@ -196,6 +196,8 @@ Currently implemented rules:
 - `record_type=BUSINESS` is the default for newly created people.
 - `record_type=TECHNICAL` is available for bootstrap or technical identities that still need a `Person`.
 - `record_type` and `archived_at` are independent.
+- `Person` owns the canonical demographic vocabulary. `age_range` records the supplied demographic band and is not an exact age or a value recalculated over time.
+- Membership Form ingestion maps its display labels and safe spacing/dash variants to Person's canonical demographic values. Unsupported nonblank values remain uncommitted staging evidence and make the import row invalid.
 - `record_type` does not determine whether a person has a `User`, future `Membership`, or `StaffRoleAssignment`.
 - No hard-delete behavior is implemented at the application level.
 - Archiving is represented only by the optional `archived_at` field. No automatic archive workflow exists.
