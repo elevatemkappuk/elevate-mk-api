@@ -3,6 +3,7 @@ from django.urls import path
 from data_imports.views import (
     ImportBatchDetailView,
     ImportBatchListView,
+    MembershipFormUploadView,
     ImportReviewDetailView,
     ImportReviewQueueView,
     ImportReviewResolveView,
@@ -10,6 +11,7 @@ from data_imports.views import (
 
 
 urlpatterns = [
+    path("imports/membership-form/", MembershipFormUploadView.as_view(), name="import-membership-form-upload"),
     path("imports/", ImportBatchListView.as_view(), name="import-batch-list"),
     path("imports/<int:batch_id>/", ImportBatchDetailView.as_view(), name="import-batch-detail"),
     path("imports/<int:batch_id>/review/", ImportReviewQueueView.as_view(), name="import-review-queue"),

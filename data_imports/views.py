@@ -1,7 +1,12 @@
+import logging
+from zipfile import BadZipFile
+
 from django.db.models import QuerySet
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
+from openpyxl.utils.exceptions import InvalidFileException
 from rest_framework import generics, serializers, status
 from rest_framework.exceptions import APIException, NotFound
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -13,6 +18,7 @@ from data_imports.serializers import (
     ImportRecordResolutionSerializer,
     ImportReviewDetailSerializer,
     ImportReviewRecordSerializer,
+    MembershipFormUploadSerializer,
     PaginatedImportReviewQueueSerializer,
     candidate_people_for_records,
 )
@@ -21,8 +27,16 @@ from data_imports.services.reconciliation import (
     ReconciliationValidationError,
     resolve_import_record,
 )
+from data_imports.services.membership_form_upload import (
+    MembershipFormAnalysisError,
+    ingest_and_analyze_membership_form,
+)
+from data_imports.adapters.membership_form import MembershipFormStructureError
 from staff_access.models import StaffRole
 from staff_access.permissions import HasActiveStaffRoleCodes
+
+
+logger = logging.getLogger(__name__)
 
 
 class HasImportReconciliationAccess(HasActiveStaffRoleCodes):
@@ -70,6 +84,57 @@ class ImportBatchListView(ImportBatchQuerysetMixin, generics.ListAPIView):
     )
     def get_queryset(self):
         return self.get_batch_queryset()
+
+
+class MembershipFormUploadView(ImportBatchQuerysetMixin, generics.GenericAPIView):
+    permission_classes = [IsAuthenticated, HasImportReconciliationAccess]
+    parser_classes = [MultiPartParser, FormParser]
+
+    @extend_schema(
+        operation_id="imports_membership_form_upload",
+        summary="Upload and analyze a Membership Form workbook",
+        description=(
+            "Accepts one .xlsx Membership Form workbook up to 10 MiB, stages it through the existing import service, "
+            "and runs existing deterministic identity analysis. Only CRM_ADMIN may upload. "
+            "This never creates or updates authoritative CRM records."
+        ),
+        request=MembershipFormUploadSerializer,
+        responses={
+            201: ImportBatchSerializer,
+            400: OpenApiResponse(description="Missing, invalid, empty, oversized, corrupt, or structurally invalid workbook."),
+            401: OpenApiResponse(description="Authentication credentials were not provided."),
+            403: OpenApiResponse(description="You do not have the CRM_ADMIN staff role."),
+            500: OpenApiResponse(description="The workbook could not be staged or analyzed."),
+        },
+        tags=["Historical Imports"],
+    )
+    def post(self, request, *args, **kwargs):
+        input_serializer = MembershipFormUploadSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+        uploaded_file = input_serializer.validated_data["file"]
+
+        try:
+            batch = ingest_and_analyze_membership_form(uploaded_file=uploaded_file, created_by=request.user)
+        except MembershipFormStructureError:
+            raise serializers.ValidationError({"file": ["The workbook does not have the required Membership Form structure."]})
+        except (BadZipFile, InvalidFileException, OSError, ValueError):
+            raise serializers.ValidationError({"file": ["The uploaded file is not a readable .xlsx workbook."]})
+        except MembershipFormAnalysisError:
+            logger.error("Membership Form analysis failed after staging.")
+            raise APIException("The workbook could not be analyzed safely.")
+        except Exception:
+            logger.error("Membership Form staging failed.")
+            raise APIException("The workbook could not be staged safely.")
+
+        batch = self.get_batch_queryset().get(pk=batch.pk)
+        logger.info(
+            "Membership Form import staged and analyzed: batch_id=%s size=%s status=%s total_count=%s",
+            batch.id,
+            uploaded_file.size,
+            batch.status,
+            batch.total_count,
+        )
+        return Response(ImportBatchSerializer(batch).data, status=status.HTTP_201_CREATED)
 
 
 class ImportBatchDetailView(ImportBatchQuerysetMixin, generics.GenericAPIView):

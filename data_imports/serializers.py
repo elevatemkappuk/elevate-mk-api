@@ -56,6 +56,25 @@ class ImportBatchSerializer(serializers.ModelSerializer):
         )
 
 
+class MembershipFormUploadSerializer(serializers.Serializer):
+    max_upload_bytes = 10 * 1024 * 1024
+
+    file = serializers.FileField(write_only=True)
+
+    def validate_file(self, uploaded_file):
+        filename = _safe_upload_filename(uploaded_file.name)
+        if not filename:
+            raise serializers.ValidationError("A filename is required.")
+        if not filename.lower().endswith(".xlsx"):
+            raise serializers.ValidationError("Only .xlsx Membership Form workbooks are supported.")
+        if uploaded_file.size <= 0:
+            raise serializers.ValidationError("The uploaded workbook is empty.")
+        if uploaded_file.size > self.max_upload_bytes:
+            raise serializers.ValidationError("The uploaded workbook exceeds the 10 MiB limit.")
+        uploaded_file.name = filename
+        return uploaded_file
+
+
 class ImportCandidateSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     first_name = serializers.CharField()
@@ -213,3 +232,7 @@ def candidate_people_for_records(records):
         if isinstance(candidate, dict) and isinstance(candidate.get("person_id"), int)
     }
     return Person.objects.business().in_bulk(candidate_ids)
+
+
+def _safe_upload_filename(filename):
+    return str(filename or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
