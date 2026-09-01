@@ -71,7 +71,21 @@ PROCESSING ImportBatch / STAGED ImportRecord -> identity analyzer
 - job title, industry, location, age, gender, and LinkedIn drift are not identity contradictions
 - analysis does not mutate Person, Membership, or ProfessionalProfile
 - CRM_ADMIN reconciliation transitions a batch from `READY_FOR_REVIEW` to `READY_FOR_IMPORT` only after the final required identity decision
-- no current operation transitions a batch to `IMPORTED`
+- no current API endpoint transitions a batch to `IMPORTED`; the backend-only authoritative import service does so only after a successful whole-batch import
+
+### Authoritative Membership Form Import Service
+
+The backend-only Membership Form import service is the first authoritative historical import operation. It accepts only a `READY_FOR_IMPORT` Membership Form batch and performs one whole-batch transaction under an `ImportBatch` row lock.
+
+- `AUTO_MATCH` and `STAFF_MATCH` reuse the resolved Person; only missing Person and ProfessionalProfile values are filled, and current nonblank CRM values are never overwritten.
+- `NO_MATCH` and `STAFF_CREATE_NEW` create a normal `BUSINESS` Person from normalized canonical data.
+- a new Membership is `ACTIVE`, uses `membership_source=OTHER` for historical form origin, and uses the source submission timestamp as `joined_at`.
+- an existing `ACTIVE` Membership is reused unchanged; an existing `FORMER` Membership blocks the entire batch and is never reactivated.
+- active Industry definitions are matched safely by exact name or canonical slug. Unmapped spreadsheet industry text neither creates an Industry nor blocks the batch.
+- `INVALID` ImportRecords remain invalid and are marked with the existing `SKIPPED` outcome without CRM mutation.
+- successful valid records become `COMMITTED` with their final Person, outcome, and timestamp; the batch transitions `READY_FOR_IMPORT` to `IMPORTED` only after every record succeeds.
+- existing audit actions record Person, Membership, and ProfessionalProfile mutation with identifier-only import provenance; `IMPORT_BATCH_IMPORTED` records batch completion.
+- the service is idempotent by batch status: an `IMPORTED` batch is not importable again.
 
 Django-managed framework tables also exist because this project uses Django authentication, permissions, content types, admin, and server-side sessions. Those framework tables are not documented field-by-field here.
 
