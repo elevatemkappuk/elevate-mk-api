@@ -18,6 +18,8 @@ from data_imports.serializers import (
     ImportRecordResolutionSerializer,
     ImportReviewDetailSerializer,
     ImportReviewRecordSerializer,
+    ImportRecordPreviewSerializer,
+    PaginatedImportRecordPreviewSerializer,
     MembershipFormUploadSerializer,
     PaginatedImportReviewQueueSerializer,
     candidate_people_for_records,
@@ -182,6 +184,51 @@ class ImportReviewQueueView(ImportBatchQuerysetMixin, generics.GenericAPIView):
         page = self.paginate_queryset(queryset)
         records = list(page) if page is not None else list(queryset)
         serializer = self.get_serializer(records, many=True, context={"candidate_people": candidate_people_for_records(records)})
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
+
+    @property
+    def paginator(self):
+        if not hasattr(self, "_paginator"):
+            self._paginator = self.pagination_class()
+        return self._paginator
+
+    def paginate_queryset(self, queryset):
+        return self.paginator.paginate_queryset(queryset, self.request, view=self)
+
+    def get_paginated_response(self, data):
+        return self.paginator.get_paginated_response(data)
+
+
+class ImportRecordListView(ImportBatchQuerysetMixin, generics.GenericAPIView):
+    serializer_class = ImportRecordPreviewSerializer
+    permission_classes = [IsAuthenticated, HasImportReconciliationAccess]
+    pagination_class = ImportReviewPagination
+
+    @extend_schema(
+        operation_id="imports_records_list",
+        summary="Preview staged import record resolutions",
+        description=(
+            "Returns a paginated, read-only preview of every staged record in an import batch. "
+            "Resolution method and status remain authoritative; this endpoint never commits or mutates CRM data. "
+            "Only CRM_ADMIN may access it."
+        ),
+        parameters=[OpenApiParameter(name="batch_id", type=int, location=OpenApiParameter.PATH, required=True)],
+        responses={
+            200: PaginatedImportRecordPreviewSerializer,
+            401: OpenApiResponse(description="Authentication credentials were not provided."),
+            403: OpenApiResponse(description="You do not have the CRM_ADMIN staff role."),
+            404: OpenApiResponse(description="Import batch was not found."),
+        },
+        tags=["Historical Imports"],
+    )
+    def get(self, request, *args, **kwargs):
+        batch = self.get_batch_or_404()
+        queryset = batch.records.select_related("resolved_person").order_by("source_row_identifier", "id")
+        page = self.paginate_queryset(queryset)
+        records = page if page is not None else queryset
+        serializer = self.get_serializer(records, many=True)
         if page is not None:
             return self.get_paginated_response(serializer.data)
         return Response(serializer.data)

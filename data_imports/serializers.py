@@ -28,6 +28,26 @@ IMPORT_BATCH_COUNT_ANNOTATIONS = {
         filter=Q(records__status=ImportRecord.Status.COMMITTED),
         distinct=True,
     ),
+    "auto_match_count": Count(
+        "records",
+        filter=Q(
+            records__resolution_method__in=(
+                ImportRecord.ResolutionMethod.AUTO_MATCH,
+                ImportRecord.ResolutionMethod.STAFF_MATCH,
+            )
+        ),
+        distinct=True,
+    ),
+    "new_person_count": Count(
+        "records",
+        filter=Q(
+            records__resolution_method__in=(
+                ImportRecord.ResolutionMethod.NO_MATCH,
+                ImportRecord.ResolutionMethod.STAFF_CREATE_NEW,
+            )
+        ),
+        distinct=True,
+    ),
 }
 
 
@@ -37,6 +57,8 @@ class ImportBatchSerializer(serializers.ModelSerializer):
     resolved_count = serializers.IntegerField(read_only=True)
     invalid_count = serializers.IntegerField(read_only=True)
     committed_count = serializers.IntegerField(read_only=True)
+    auto_match_count = serializers.IntegerField(read_only=True)
+    new_person_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = ImportBatch
@@ -53,6 +75,8 @@ class ImportBatchSerializer(serializers.ModelSerializer):
             "resolved_count",
             "invalid_count",
             "committed_count",
+            "auto_match_count",
+            "new_person_count",
         )
 
 
@@ -187,6 +211,46 @@ class ImportReviewDetailSerializer(ImportReviewRecordSerializer):
         }
 
 
+class ImportResolvedPersonSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    first_name = serializers.CharField()
+    last_name = serializers.CharField()
+    primary_email = serializers.CharField(allow_blank=True, allow_null=True)
+    mobile = serializers.CharField(allow_blank=True)
+    record_state = serializers.ChoiceField(choices=("active", "archived"))
+
+
+class ImportRecordPreviewSerializer(ImportReviewRecordSerializer):
+    resolved_person = serializers.SerializerMethodField()
+
+    class Meta(ImportReviewRecordSerializer.Meta):
+        fields = (
+            "id",
+            "source_row_identifier",
+            "status",
+            "resolution_method",
+            "resolution_reason",
+            "resolved_person",
+            "source",
+            "reviewed_at",
+            "committed_at",
+        )
+
+    @extend_schema_field(ImportResolvedPersonSerializer(allow_null=True))
+    def get_resolved_person(self, record) -> dict | None:
+        person = record.resolved_person
+        if person is None:
+            return None
+        return {
+            "id": person.id,
+            "first_name": person.first_name,
+            "last_name": person.last_name,
+            "primary_email": person.primary_email,
+            "mobile": person.mobile,
+            "record_state": "archived" if person.archived_at else "active",
+        }
+
+
 class StrictSerializer(serializers.Serializer):
     def validate(self, attrs):
         unknown_fields = set(self.initial_data.keys()) - set(self.fields.keys())
@@ -218,6 +282,13 @@ class PaginatedImportReviewQueueSerializer(serializers.Serializer):
     next = serializers.URLField(allow_null=True)
     previous = serializers.URLField(allow_null=True)
     results = ImportReviewRecordSerializer(many=True)
+
+
+class PaginatedImportRecordPreviewSerializer(serializers.Serializer):
+    count = serializers.IntegerField()
+    next = serializers.URLField(allow_null=True)
+    previous = serializers.URLField(allow_null=True)
+    results = ImportRecordPreviewSerializer(many=True)
 
 
 def _evidence_code(value):
