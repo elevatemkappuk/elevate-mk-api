@@ -27,7 +27,7 @@ The current Elevate-owned models are:
 
 ## Historical Import Staging
 
-Historical migration is a durable, staged subsystem:
+Historical migration is a durable, staged subsystem with a staff-facing batch lifecycle:
 
 ```text
 Historical source -> ImportBatch -> ImportRecord staging -> normalization
@@ -36,11 +36,16 @@ Historical source -> ImportBatch -> ImportRecord staging -> normalization
 
 - `raw_data` preserves source evidence; `normalized_data` is a separate future-adapter projection
 - staging does not create or modify `Person`, `Membership`, or other authoritative CRM data
-- matching, review decisions, and explicit CRM commit are later phases
+- batch statuses are `PROCESSING`, `READY_FOR_REVIEW`, `READY_FOR_IMPORT`, `IMPORTED`, and `FAILED`
+- identity analysis is internal processing, not a staff-actionable resting state
+- `READY_FOR_REVIEW` means unresolved identity decisions need CRM_ADMIN action
+- `READY_FOR_IMPORT` means all identity decisions are resolved and the batch is eligible for the future authoritative import operation
+- `IMPORTED` is reserved for the future terminal success state after that authoritative import operation completes
+- matching, review decisions, and the future authoritative import are separate phases
 - future operational API/UI access will require `CRM_ADMIN`; Django Admin remains technical administration
 - future commit actions, rather than staging, will explicitly write relevant audit history
 
-Membership Form ingestion currently stops at staging:
+Membership Form ingestion currently stops after normalization and identity analysis:
 
 ```text
 Membership workbook -> MembershipForm adapter -> raw row preservation
@@ -50,12 +55,13 @@ Membership workbook -> MembershipForm adapter -> raw row preservation
 - `source_timestamp` is preserved but is not applied to `Membership.joined_at`
 - Industry remains source text and is not resolved to the CRM Industry taxonomy
 - staging does not create or update `Person` or `Membership`
-- identity matching is the next phase; repeated file ingestion deliberately creates a new staging batch
+- batches with unresolved identity decisions finish `READY_FOR_REVIEW`; all others finish `READY_FOR_IMPORT`
+- repeated file ingestion deliberately creates a new batch
 
 Identity analysis now classifies staged rows without committing CRM changes:
 
 ```text
-STAGED ImportRecord -> identity analyzer
+PROCESSING ImportBatch / STAGED ImportRecord -> identity analyzer
   -> unique exact email without contradiction: AUTO_MATCH
   -> ambiguous or contradictory strong evidence: REVIEW_REQUIRED
   -> no strong candidate: NO_MATCH
@@ -64,7 +70,8 @@ STAGED ImportRecord -> identity analyzer
 - names alone never produce candidates; mobile-only candidates require review in V1
 - job title, industry, location, age, gender, and LinkedIn drift are not identity contradictions
 - analysis does not mutate Person, Membership, or ProfessionalProfile
-- CRM_ADMIN manual reconciliation is the next phase
+- CRM_ADMIN reconciliation transitions a batch from `READY_FOR_REVIEW` to `READY_FOR_IMPORT` only after the final required identity decision
+- no current operation transitions a batch to `IMPORTED`
 
 Django-managed framework tables also exist because this project uses Django authentication, permissions, content types, admin, and server-side sessions. Those framework tables are not documented field-by-field here.
 

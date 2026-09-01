@@ -171,7 +171,7 @@ class ImportReconciliationApiTests(APITestCase):
         self.batch.refresh_from_db()
         self.assertEqual(record.resolution_method, ImportRecord.ResolutionMethod.STAFF_CREATE_NEW)
         self.assertIsNone(record.resolved_person)
-        self.assertEqual(self.batch.status, ImportBatch.Status.READY_TO_COMMIT)
+        self.assertEqual(self.batch.status, ImportBatch.Status.READY_FOR_IMPORT)
         self.assertEqual(Person.objects.count(), person_count)
         self.assertEqual(self.client.post(url, {"resolution": "DIFFERENT_PERSON"}, format="json").status_code, status.HTTP_409_CONFLICT)
 
@@ -187,3 +187,13 @@ class ImportReconciliationApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.batch.refresh_from_db()
         self.assertEqual(self.batch.status, ImportBatch.Status.READY_FOR_REVIEW)
+
+    def test_batch_api_exposes_ready_for_import_after_identity_decisions(self):
+        self.batch.status = ImportBatch.Status.READY_FOR_IMPORT
+        self.batch.save(update_fields=["status", "updated_at"])
+        self.authenticate_as(self.admin)
+
+        response = self.client.get(f"/api/v1/imports/{self.batch.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], ImportBatch.Status.READY_FOR_IMPORT)

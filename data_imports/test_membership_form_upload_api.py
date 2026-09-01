@@ -1,4 +1,5 @@
 from io import BytesIO
+from unittest import mock
 
 from django.urls import resolve
 from openpyxl import Workbook
@@ -8,6 +9,10 @@ from rest_framework.test import APITestCase
 from accounts.models import User
 from data_imports.adapters.membership_form import REQUIRED_HEADERS, SHEET_NAME
 from data_imports.models import ImportBatch, ImportRecord
+from data_imports.services.membership_form_upload import (
+    MembershipFormAnalysisError,
+    ingest_and_analyze_membership_form,
+)
 from memberships.models import Membership
 from people.models import Person
 from professional_profiles.models import ProfessionalProfile
@@ -101,7 +106,7 @@ class MembershipFormUploadApiTests(APITestCase):
         record = batch.records.get()
         self.assertEqual(batch.source_type, ImportBatch.SourceType.MEMBERSHIP_FORM)
         self.assertEqual(batch.source_filename, "membership.xlsx")
-        self.assertEqual(batch.status, ImportBatch.Status.ANALYZED)
+        self.assertEqual(batch.status, ImportBatch.Status.READY_FOR_IMPORT)
         self.assertEqual(record.status, ImportRecord.Status.RESOLVED)
         self.assertEqual(record.resolved_person, existing_person)
         self.assertEqual(record.resolution_method, ImportRecord.ResolutionMethod.AUTO_MATCH)
@@ -126,6 +131,19 @@ class MembershipFormUploadApiTests(APITestCase):
         self.assertEqual(batch.status, ImportBatch.Status.READY_FOR_REVIEW)
         self.assertEqual(batch.records.filter(status=ImportRecord.Status.INVALID).count(), 1)
         self.assertEqual(batch.records.filter(status=ImportRecord.Status.REVIEW_REQUIRED).count(), 1)
+
+    def test_analysis_failure_marks_the_staged_batch_failed(self):
+        with mock.patch(
+            "data_imports.services.membership_form_upload.analyze_import_batch",
+            side_effect=RuntimeError("analysis failed"),
+        ):
+            with self.assertRaises(MembershipFormAnalysisError):
+                ingest_and_analyze_membership_form(
+                    uploaded_file=self.workbook_file(rows=[self.membership_row()]),
+                    created_by=self.admin,
+                )
+
+        self.assertEqual(ImportBatch.objects.latest("id").status, ImportBatch.Status.FAILED)
 
     def test_repeated_upload_creates_a_new_batch(self):
         self.client.force_authenticate(user=self.admin)

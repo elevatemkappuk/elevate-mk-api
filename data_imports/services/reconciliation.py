@@ -62,7 +62,7 @@ def resolve_import_record(*, batch_id, record_id, action, person_id, reviewed_by
         if batch.records.filter(status=ImportRecord.Status.REVIEW_REQUIRED).exists():
             next_status = ImportBatch.Status.READY_FOR_REVIEW
         else:
-            next_status = ImportBatch.Status.READY_TO_COMMIT
+            next_status = ImportBatch.Status.READY_FOR_IMPORT
         if batch.status != next_status:
             batch.status = next_status
             batch.save(update_fields=["status", "updated_at"])

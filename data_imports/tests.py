@@ -29,7 +29,7 @@ class ImportStagingModelTests(TestCase):
             source_fingerprint=fingerprint_source_row({"email": "person@example.com"}),
         )
 
-        self.assertEqual(self.batch.status, ImportBatch.Status.PENDING)
+        self.assertEqual(self.batch.status, ImportBatch.Status.PROCESSING)
         self.assertEqual(record.status, ImportRecord.Status.STAGED)
         self.assertIsNone(record.outcome)
         self.assertIsNone(record.resolved_person)

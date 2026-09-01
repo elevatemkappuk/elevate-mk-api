@@ -10,7 +10,11 @@ def analyze_import_batch(batch):
     """Analyze staged identity evidence without mutating authoritative CRM records."""
     with transaction.atomic():
         batch = ImportBatch.objects.select_for_update().get(pk=batch.pk)
-        if batch.status not in (ImportBatch.Status.STAGED, ImportBatch.Status.ANALYZED, ImportBatch.Status.READY_FOR_REVIEW):
+        if batch.status not in (
+            ImportBatch.Status.PROCESSING,
+            ImportBatch.Status.READY_FOR_REVIEW,
+            ImportBatch.Status.READY_FOR_IMPORT,
+        ):
             raise ValueError("Import batch is not eligible for identity analysis.")
         records = batch.records.filter(status__in=[ImportRecord.Status.STAGED, ImportRecord.Status.RESOLVED, ImportRecord.Status.REVIEW_REQUIRED]).exclude(
             status=ImportRecord.Status.COMMITTED
@@ -22,7 +26,11 @@ def analyze_import_batch(batch):
         for record in records:
             classification = analyze_import_record(record)
             review_required = review_required or classification == ImportRecord.Status.REVIEW_REQUIRED
-        batch.status = ImportBatch.Status.READY_FOR_REVIEW if review_required else ImportBatch.Status.ANALYZED
+        batch.status = (
+            ImportBatch.Status.READY_FOR_REVIEW
+            if review_required
+            else ImportBatch.Status.READY_FOR_IMPORT
+        )
         batch.save(update_fields=["status", "updated_at"])
     return batch
 

@@ -29,8 +29,8 @@ def ingest_membership_form(*, workbook_bytes, source_filename, created_by=None):
                     validation_errors=validation_errors,
                     status=ImportRecord.Status.INVALID if validation_errors else ImportRecord.Status.STAGED,
                 )
-            batch.status = ImportBatch.Status.STAGED
-            batch.save(update_fields=["status", "updated_at"])
+            # Orchestration retains PROCESSING until identity analysis completes.
+            batch.save(update_fields=["updated_at"])
     except Exception:
         batch.status = ImportBatch.Status.FAILED
         batch.save(update_fields=["status", "updated_at"])

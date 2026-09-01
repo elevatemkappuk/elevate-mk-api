@@ -7,7 +7,7 @@ from people.models import Person
 
 class IdentityAnalysisTests(TestCase):
     def setUp(self):
-        self.batch = ImportBatch.objects.create(source_type="MEMBERSHIP_FORM", source_filename="source.xlsx", source_fingerprint="a" * 64, status=ImportBatch.Status.STAGED)
+        self.batch = ImportBatch.objects.create(source_type="MEMBERSHIP_FORM", source_filename="source.xlsx", source_fingerprint="a" * 64, status=ImportBatch.Status.PROCESSING)
 
     def record(self, **data):
         return ImportRecord.objects.create(batch=self.batch, source_row_identifier=f"row-{ImportRecord.objects.count()}", source_fingerprint=str(ImportRecord.objects.count()).zfill(64), normalized_data=data)
@@ -47,7 +47,7 @@ class IdentityAnalysisTests(TestCase):
         self.assertEqual(record.resolution_method, ImportRecord.ResolutionMethod.NO_MATCH)
         self.assertEqual(record.match_candidates, [])
         self.batch.refresh_from_db()
-        self.assertEqual(self.batch.status, ImportBatch.Status.ANALYZED)
+        self.assertEqual(self.batch.status, ImportBatch.Status.READY_FOR_IMPORT)
 
     def test_profile_drift_does_not_block_email_auto_match_and_analysis_is_repeatable(self):
         self.person()

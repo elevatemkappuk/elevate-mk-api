@@ -38,7 +38,7 @@ class MembershipFormIngestionTests(TestCase):
     def test_stages_actual_headers_raw_evidence_and_normalized_values(self):
         batch = ingest_membership_form(workbook_bytes=workbook_bytes(rows=[self.sample_row()]), source_filename="membership.xlsx")
         record = batch.records.get()
-        self.assertEqual(batch.status, ImportBatch.Status.STAGED)
+        self.assertEqual(batch.status, ImportBatch.Status.PROCESSING)
         self.assertEqual(record.source_row_identifier, "sheet:Form Responses 1:row:2")
         self.assertEqual(record.raw_data["First Name "], " Amina ")
         self.assertEqual(record.raw_data["Timestamp"], "2026-02-23T20:20:41.097000")
@@ -113,7 +113,7 @@ class MembershipFormIngestionTests(TestCase):
         self.assertEqual(record.normalized_data["age_range"], Person.AgeRange.AGE_25_29)
         self.assertEqual(record.normalized_data["gender"], Person.Gender.NON_BINARY)
         self.assertEqual(record.status, ImportRecord.Status.RESOLVED)
-        self.assertEqual(batch.status, ImportBatch.Status.ANALYZED)
+        self.assertEqual(batch.status, ImportBatch.Status.READY_FOR_IMPORT)
         self.assertEqual(Person.objects.count(), 0)
         self.assertEqual(Membership.objects.count(), 0)
 

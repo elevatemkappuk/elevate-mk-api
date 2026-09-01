@@ -2030,6 +2030,17 @@ Example response for a contact:
 }
 ```
 
+## Historical Import Batch Lifecycle
+`GET /api/v1/imports/` and `GET /api/v1/imports/{batch_id}/` expose these staff-facing batch statuses:
+
+- `PROCESSING`: workbook normalization and internal identity analysis are in progress.
+- `READY_FOR_REVIEW`: CRM_ADMIN must resolve one or more identity decisions.
+- `READY_FOR_IMPORT`: all identity decisions are resolved; the batch is eligible for the future authoritative import operation.
+- `IMPORTED`: reserved terminal state for a future successful authoritative import.
+- `FAILED`: structural ingestion or post-staging analysis failed safely.
+
+Identity analysis is internal processing. A successful zero-review batch returns `READY_FOR_IMPORT`; a review batch transitions there after its final reconciliation decision. No current API operation performs the authoritative import or transitions a batch to `IMPORTED`.
+
 ## Endpoint: `POST /api/v1/auth/password-reset/`
 Purpose: request password-reset instructions for an eligible account.
 

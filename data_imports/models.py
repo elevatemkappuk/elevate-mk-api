@@ -9,20 +9,16 @@ class ImportBatch(models.Model):
         EVENTBRITE = "EVENTBRITE", "Eventbrite"
 
     class Status(models.TextChoices):
-        PENDING = "PENDING", "Pending"
         PROCESSING = "PROCESSING", "Processing"
-        STAGED = "STAGED", "Staged"
-        ANALYZED = "ANALYZED", "Analyzed"
         READY_FOR_REVIEW = "READY_FOR_REVIEW", "Ready for review"
-        READY_TO_COMMIT = "READY_TO_COMMIT", "Ready to commit"
-        COMMITTING = "COMMITTING", "Committing"
-        COMPLETED = "COMPLETED", "Completed"
+        READY_FOR_IMPORT = "READY_FOR_IMPORT", "Ready for import"
+        IMPORTED = "IMPORTED", "Imported"
         FAILED = "FAILED", "Failed"
 
     source_type = models.CharField(max_length=32, choices=SourceType.choices)
     source_filename = models.CharField(max_length=255)
     source_fingerprint = models.CharField(max_length=64, db_index=True)
-    status = models.CharField(max_length=32, choices=Status.choices, default=Status.PENDING)
+    status = models.CharField(max_length=32, choices=Status.choices, default=Status.PROCESSING)
     started_at = models.DateTimeField(default=timezone.now)
     completed_at = models.DateTimeField(null=True, blank=True)
     created_by = models.ForeignKey(
