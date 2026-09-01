@@ -14,6 +14,7 @@ class ImportBatch(models.Model):
         STAGED = "STAGED", "Staged"
         ANALYZED = "ANALYZED", "Analyzed"
         READY_FOR_REVIEW = "READY_FOR_REVIEW", "Ready for review"
+        READY_TO_COMMIT = "READY_TO_COMMIT", "Ready to commit"
         COMMITTING = "COMMITTING", "Committing"
         COMPLETED = "COMPLETED", "Completed"
         FAILED = "FAILED", "Failed"

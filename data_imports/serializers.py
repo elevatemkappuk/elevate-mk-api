@@ -1,0 +1,215 @@
+from django.db.models import Count, Q
+from drf_spectacular.utils import extend_schema_field
+from rest_framework import serializers
+
+from data_imports.models import ImportBatch, ImportRecord
+from people.models import Person
+
+
+IMPORT_BATCH_COUNT_ANNOTATIONS = {
+    "total_count": Count("records", distinct=True),
+    "review_required_count": Count(
+        "records",
+        filter=Q(records__status=ImportRecord.Status.REVIEW_REQUIRED),
+        distinct=True,
+    ),
+    "resolved_count": Count(
+        "records",
+        filter=Q(records__status=ImportRecord.Status.RESOLVED),
+        distinct=True,
+    ),
+    "invalid_count": Count(
+        "records",
+        filter=Q(records__status=ImportRecord.Status.INVALID),
+        distinct=True,
+    ),
+    "committed_count": Count(
+        "records",
+        filter=Q(records__status=ImportRecord.Status.COMMITTED),
+        distinct=True,
+    ),
+}
+
+
+class ImportBatchSerializer(serializers.ModelSerializer):
+    total_count = serializers.IntegerField(read_only=True)
+    review_required_count = serializers.IntegerField(read_only=True)
+    resolved_count = serializers.IntegerField(read_only=True)
+    invalid_count = serializers.IntegerField(read_only=True)
+    committed_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = ImportBatch
+        fields = (
+            "id",
+            "source_type",
+            "source_filename",
+            "status",
+            "created_at",
+            "started_at",
+            "completed_at",
+            "total_count",
+            "review_required_count",
+            "resolved_count",
+            "invalid_count",
+            "committed_count",
+        )
+
+
+class ImportCandidateSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    first_name = serializers.CharField()
+    last_name = serializers.CharField()
+    primary_email = serializers.CharField(allow_blank=True, allow_null=True)
+    mobile = serializers.CharField(allow_blank=True)
+    record_state = serializers.ChoiceField(choices=("active", "archived"))
+    matched_on = serializers.ListField(child=serializers.CharField())
+    email_agreement = serializers.BooleanField(allow_null=True)
+    mobile_agreement = serializers.BooleanField(allow_null=True)
+    name_agreement = serializers.BooleanField(allow_null=True)
+    contradiction_codes = serializers.ListField(child=serializers.CharField())
+
+
+class ImportSourceSerializer(serializers.Serializer):
+    first_name = serializers.CharField(allow_null=True)
+    last_name = serializers.CharField(allow_null=True)
+    email = serializers.CharField(allow_null=True)
+    mobile = serializers.CharField(allow_null=True)
+    location = serializers.CharField(allow_null=True)
+    industry = serializers.CharField(allow_null=True)
+    job_title = serializers.CharField(allow_null=True)
+    linkedin_url = serializers.CharField(allow_null=True)
+
+
+class ImportReviewBatchContextSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    source_type = serializers.CharField()
+    source_filename = serializers.CharField()
+    status = serializers.CharField()
+
+
+class ImportReviewRecordSerializer(serializers.ModelSerializer):
+    source = serializers.SerializerMethodField()
+    candidates = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ImportRecord
+        fields = (
+            "id",
+            "batch_id",
+            "source_row_identifier",
+            "status",
+            "resolution_reason",
+            "source",
+            "candidates",
+            "validation_errors",
+        )
+
+    @extend_schema_field(ImportSourceSerializer)
+    def get_source(self, record) -> dict:
+        source = record.normalized_data or {}
+        return {
+            field: source.get(field)
+            for field in (
+                "first_name",
+                "last_name",
+                "email",
+                "mobile",
+                "location",
+                "industry",
+                "job_title",
+                "linkedin_url",
+            )
+        }
+
+    @extend_schema_field(ImportCandidateSerializer(many=True))
+    def get_candidates(self, record) -> list[dict]:
+        candidate_snapshots = [candidate for candidate in record.match_candidates if isinstance(candidate, dict)]
+        candidate_ids = [candidate.get("person_id") for candidate in candidate_snapshots if isinstance(candidate.get("person_id"), int)]
+        people_by_id = self.context.get("candidate_people")
+        if people_by_id is None:
+            people_by_id = Person.objects.business().in_bulk(candidate_ids)
+        candidates = []
+        for snapshot in candidate_snapshots:
+            person = people_by_id.get(snapshot.get("person_id"))
+            if person is None:
+                continue
+            candidates.append(
+                {
+                    "id": person.id,
+                    "first_name": person.first_name,
+                    "last_name": person.last_name,
+                    "primary_email": person.primary_email,
+                    "mobile": person.mobile,
+                    "record_state": "archived" if person.archived_at else "active",
+                    "matched_on": [_evidence_code(value) for value in snapshot.get("matched_on", [])],
+                    "email_agreement": snapshot.get("email_agreement"),
+                    "mobile_agreement": snapshot.get("mobile_agreement"),
+                    "name_agreement": snapshot.get("name_agreement"),
+                    "contradiction_codes": snapshot.get("contradiction_codes", []),
+                }
+            )
+        return candidates
+
+
+class ImportReviewDetailSerializer(ImportReviewRecordSerializer):
+    batch = serializers.SerializerMethodField()
+
+    class Meta(ImportReviewRecordSerializer.Meta):
+        fields = ("batch",) + ImportReviewRecordSerializer.Meta.fields
+
+    @extend_schema_field(ImportReviewBatchContextSerializer)
+    def get_batch(self, record) -> dict:
+        return {
+            "id": record.batch_id,
+            "source_type": record.batch.source_type,
+            "source_filename": record.batch.source_filename,
+            "status": record.batch.status,
+        }
+
+
+class StrictSerializer(serializers.Serializer):
+    def validate(self, attrs):
+        unknown_fields = set(self.initial_data.keys()) - set(self.fields.keys())
+        if unknown_fields:
+            raise serializers.ValidationError(
+                {field: ["This field is not allowed."] for field in sorted(unknown_fields)}
+            )
+        return attrs
+
+
+class ImportRecordResolutionSerializer(StrictSerializer):
+    SAME_PERSON = "SAME_PERSON"
+    DIFFERENT_PERSON = "DIFFERENT_PERSON"
+
+    resolution = serializers.ChoiceField(choices=(SAME_PERSON, DIFFERENT_PERSON))
+    person_id = serializers.IntegerField(required=False, min_value=1)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if attrs["resolution"] == self.SAME_PERSON and "person_id" not in attrs:
+            raise serializers.ValidationError({"person_id": ["This field is required for SAME_PERSON."]})
+        if attrs["resolution"] == self.DIFFERENT_PERSON and "person_id" in attrs:
+            raise serializers.ValidationError({"person_id": ["This field is not allowed for DIFFERENT_PERSON."]})
+        return attrs
+
+
+class PaginatedImportReviewQueueSerializer(serializers.Serializer):
+    count = serializers.IntegerField()
+    next = serializers.URLField(allow_null=True)
+    previous = serializers.URLField(allow_null=True)
+    results = ImportReviewRecordSerializer(many=True)
+
+
+def _evidence_code(value):
+    return {"email": "EXACT_EMAIL", "mobile": "EXACT_MOBILE"}.get(value, value)
+
+
+def candidate_people_for_records(records):
+    candidate_ids = {
+        candidate.get("person_id")
+        for record in records
+        for candidate in record.match_candidates
+        if isinstance(candidate, dict) and isinstance(candidate.get("person_id"), int)
+    }
+    return Person.objects.business().in_bulk(candidate_ids)

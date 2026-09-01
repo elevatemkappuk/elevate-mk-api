@@ -169,6 +169,10 @@ SPECTACULAR_SETTINGS = {
     "TITLE": "Elevate MK API",
     "DESCRIPTION": "Backend API for the Elevate MK digital ecosystem.",
     "VERSION": "1.0.0",
+    "ENUM_NAME_OVERRIDES": {
+        "ImportBatchStatusEnum": "data_imports.models.ImportBatch.Status",
+        "ImportRecordStatusEnum": "data_imports.models.ImportRecord.Status",
+    },
 }
 
 

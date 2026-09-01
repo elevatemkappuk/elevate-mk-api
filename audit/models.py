@@ -51,6 +51,8 @@ class AuditEvent(models.Model):
         ACCOUNT_REENABLED = "ACCOUNT_REENABLED", "Account reenabled"
         PASSWORD_CHANGED = "PASSWORD_CHANGED", "Password changed"
         PASSWORD_RESET = "PASSWORD_RESET", "Password reset"
+        IMPORT_RECORD_MATCH_CONFIRMED = "IMPORT_RECORD_MATCH_CONFIRMED", "Import record match confirmed"
+        IMPORT_RECORD_CREATE_NEW_CONFIRMED = "IMPORT_RECORD_CREATE_NEW_CONFIRMED", "Import record create-new confirmed"
 
     actor_user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
