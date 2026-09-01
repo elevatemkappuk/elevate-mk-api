@@ -80,6 +80,23 @@ class ImportBatchSerializer(serializers.ModelSerializer):
         )
 
 
+class ImportResultSummarySerializer(serializers.Serializer):
+    processed_count = serializers.IntegerField(source="valid_processed", read_only=True)
+    people_created_count = serializers.IntegerField(source="people_created", read_only=True)
+    people_matched_count = serializers.IntegerField(source="people_matched", read_only=True)
+    people_enriched_count = serializers.IntegerField(source="people_enriched", read_only=True)
+    memberships_created_count = serializers.IntegerField(source="memberships_created", read_only=True)
+    memberships_reused_count = serializers.IntegerField(source="memberships_reused", read_only=True)
+    profiles_created_count = serializers.IntegerField(source="profiles_created", read_only=True)
+    profiles_enriched_count = serializers.IntegerField(source="profiles_enriched", read_only=True)
+    skipped_count = serializers.IntegerField(source="invalid_skipped", read_only=True)
+
+
+class ImportBatchImportResponseSerializer(serializers.Serializer):
+    batch = ImportBatchSerializer(read_only=True)
+    result = ImportResultSummarySerializer(read_only=True)
+
+
 class MembershipFormUploadSerializer(serializers.Serializer):
     max_upload_bytes = 10 * 1024 * 1024
 

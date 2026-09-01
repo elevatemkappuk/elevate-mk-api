@@ -2035,11 +2035,25 @@ Example response for a contact:
 
 - `PROCESSING`: workbook normalization and internal identity analysis are in progress.
 - `READY_FOR_REVIEW`: CRM_ADMIN must resolve one or more identity decisions.
-- `READY_FOR_IMPORT`: all identity decisions are resolved; the batch is eligible for the future authoritative import operation.
-- `IMPORTED`: reserved terminal state for a future successful authoritative import.
+- `READY_FOR_IMPORT`: all identity decisions are resolved; the batch is eligible for authoritative import.
+- `IMPORTED`: terminal state after a successful authoritative import.
 - `FAILED`: structural ingestion or post-staging analysis failed safely.
 
-Identity analysis is internal processing. A successful zero-review batch returns `READY_FOR_IMPORT`; a review batch transitions there after its final reconciliation decision. No current API operation performs the authoritative import or transitions a batch to `IMPORTED`.
+Identity analysis is internal processing. A successful zero-review batch returns `READY_FOR_IMPORT`; a review batch transitions there after its final reconciliation decision.
+
+## Endpoint: `POST /api/v1/imports/{batch_id}/import/`
+Purpose:
+- Synchronously perform the authoritative Membership Form import for one `READY_FOR_IMPORT` batch.
+
+Authentication and authorization:
+- Authenticated Django session and normal CSRF protection are required.
+- Active operational `CRM_ADMIN` is required. `CRM_MANAGER`, `CRM_VIEWER`, and Django superuser or staff flags alone do not grant access.
+
+Behavior:
+- The endpoint delegates all mutation, locking, preflight, provenance, and audit behavior to the authoritative import service.
+- A successful import returns `200 OK`, transitions the batch to `IMPORTED`, and returns the existing canonical batch DTO plus a summary of processed, created, matched, enriched, reused, and skipped counts.
+- The summary does not contain raw staged rows, normalized source data, or source-row PII.
+- A missing batch returns `404 Not Found`. A non-ready, already imported, unresolved, inconsistent, or conflicting membership state returns a safe `409 Conflict` response.
 
 ## Endpoint: `POST /api/v1/auth/password-reset/`
 Purpose: request password-reset instructions for an eligible account.

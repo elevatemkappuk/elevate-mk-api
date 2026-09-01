@@ -14,6 +14,7 @@ from rest_framework.response import Response
 from data_imports.models import ImportBatch, ImportRecord
 from data_imports.serializers import (
     IMPORT_BATCH_COUNT_ANNOTATIONS,
+    ImportBatchImportResponseSerializer,
     ImportBatchSerializer,
     ImportRecordResolutionSerializer,
     ImportReviewDetailSerializer,
@@ -32,6 +33,11 @@ from data_imports.services.reconciliation import (
 from data_imports.services.membership_form_upload import (
     MembershipFormAnalysisError,
     ingest_and_analyze_membership_form,
+)
+from data_imports.services.membership_form_import import (
+    ImportBatchNotImportable,
+    ImportBatchPreflightError,
+    import_membership_form_batch,
 )
 from data_imports.adapters.membership_form import MembershipFormStructureError
 from staff_access.models import StaffRole
@@ -55,6 +61,12 @@ class ImportReconciliationConflict(APIException):
     status_code = status.HTTP_409_CONFLICT
     default_detail = "Import record reconciliation cannot be completed."
     default_code = "import_reconciliation_conflict"
+
+
+class ImportBatchImportConflict(APIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "Import batch cannot be imported in its current state."
+    default_code = "import_batch_import_conflict"
 
 
 class ImportBatchQuerysetMixin:
@@ -158,6 +170,46 @@ class ImportBatchDetailView(ImportBatchQuerysetMixin, generics.GenericAPIView):
     )
     def get(self, request, *args, **kwargs):
         return Response(self.get_serializer(self.get_batch_or_404()).data)
+
+
+class ImportBatchImportView(ImportBatchQuerysetMixin, generics.GenericAPIView):
+    serializer_class = ImportBatchImportResponseSerializer
+    permission_classes = [IsAuthenticated, HasImportReconciliationAccess]
+
+    @extend_schema(
+        operation_id="imports_membership_form_import",
+        summary="Import a ready Membership Form batch",
+        description=(
+            "Synchronously performs the authoritative Membership Form import for a READY_FOR_IMPORT batch. "
+            "Only CRM_ADMIN may invoke it. The response contains the canonical imported batch and a mutation summary; "
+            "it never exposes staged source rows."
+        ),
+        parameters=[OpenApiParameter(name="batch_id", type=int, location=OpenApiParameter.PATH, required=True)],
+        responses={
+            200: ImportBatchImportResponseSerializer,
+            401: OpenApiResponse(description="Authentication credentials were not provided."),
+            403: OpenApiResponse(description="You do not have the CRM_ADMIN staff role."),
+            404: OpenApiResponse(description="Import batch was not found."),
+            409: OpenApiResponse(description="Import batch cannot be imported in its current state."),
+        },
+        tags=["Historical Imports"],
+    )
+    def post(self, request, *args, **kwargs):
+        try:
+            result = import_membership_form_batch(
+                batch_id=self.kwargs["batch_id"],
+                imported_by=request.user,
+            )
+        except ImportBatch.DoesNotExist:
+            raise NotFound("Not found.")
+        except (ImportBatchNotImportable, ImportBatchPreflightError):
+            raise ImportBatchImportConflict
+
+        batch = self.get_batch_queryset().get(pk=result.batch_id)
+        return Response(
+            self.get_serializer({"batch": batch, "result": result}).data,
+            status=status.HTTP_200_OK,
+        )
 
 
 class ImportReviewQueueView(ImportBatchQuerysetMixin, generics.GenericAPIView):
