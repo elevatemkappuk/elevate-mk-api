@@ -21,7 +21,7 @@ from data_imports.services.membership_form_import import (
     _value,
 )
 from data_imports.services.source_data import person_identity_source
-from events.models import Event, EventParticipation
+from events.models import Event, EventParticipation, ExternalEventReference
 from events.services import get_or_create_event_from_reference, get_or_create_event_participation
 from people.models import Person
 from people.services import normalize_email, normalize_mobile
@@ -129,6 +129,7 @@ def _preflight_records(records):
         person_source = _person_source(record)
         event_source = _event_source(record)
         _validate_event_source(event_source)
+        _validate_existing_event_reference(event_source)
         if record.resolution_method in MATCH_METHODS:
             if record.resolved_person_id is None:
                 raise ImportBatchPreflightError("A matched record has no resolved Person.")
@@ -148,6 +149,8 @@ def _preflight_records(records):
             }
             if len(existing_plans) > 1:
                 raise ImportBatchPreflightError("The batch contains inconsistent duplicate create-new identity signals.")
+            if existing_plans and _has_conflicting_identity(next(iter(existing_plans.values())).person_source, person_source):
+                raise ImportBatchPreflightError("The batch contains conflicting duplicate create-new identity signals.")
             _validate_new_person_identity(
                 record,
                 person_source,
@@ -176,6 +179,18 @@ def _identity_keys(source):
     keys.discard(("email", ""))
     keys.discard(("mobile", ""))
     return keys
+
+
+def _has_conflicting_identity(first_source, second_source):
+    """Only coalesce duplicate buyers when all populated strong signals agree."""
+    first_email = normalize_email(first_source.get("email"))
+    second_email = normalize_email(second_source.get("email"))
+    first_mobile = normalize_mobile(first_source.get("mobile"))
+    second_mobile = normalize_mobile(second_source.get("mobile"))
+    return (
+        (first_email and second_email and first_email != second_email)
+        or (first_mobile and second_mobile and first_mobile != second_mobile)
+    )
 
 
 def _person_source(record):
@@ -210,6 +225,16 @@ def _validate_event_source(source):
         ZoneInfo(timezone_name)
     except ZoneInfoNotFoundError as error:
         raise ImportBatchPreflightError("A record has invalid Eventbrite event data.") from error
+
+
+def _validate_existing_event_reference(source):
+    reference = ExternalEventReference.objects.select_for_update().filter(
+        provider=EVENTBRITE_PROVIDER,
+        reference_type=ExternalEventReference.ReferenceType.EVENT,
+        external_id=_value(source.get("external_event_id")),
+    ).first()
+    if reference is not None and reference.participation_id is not None:
+        raise ImportBatchPreflightError("An Eventbrite Event reference has inconsistent participation data.")
 
 
 def _import_record(plan, batch, imported_by, committed_at, result):
