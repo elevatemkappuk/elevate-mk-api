@@ -20,6 +20,7 @@ from data_imports.serializers import (
     ImportReviewDetailSerializer,
     ImportReviewRecordSerializer,
     ImportRecordPreviewSerializer,
+    EventbriteUploadSerializer,
     PaginatedImportRecordPreviewSerializer,
     MembershipFormUploadSerializer,
     PaginatedImportReviewQueueSerializer,
@@ -41,6 +42,8 @@ from data_imports.services.membership_form_import import (
     import_membership_form_batch,
 )
 from data_imports.adapters.membership_form import MembershipFormStructureError
+from data_imports.adapters.eventbrite import EventbriteStructureError
+from data_imports.services.eventbrite_ingestion import ingest_eventbrite_workbook
 from staff_access.models import StaffRole
 from staff_access.permissions import HasActiveStaffRoleCodes
 
@@ -150,6 +153,58 @@ class MembershipFormUploadView(ImportBatchQuerysetMixin, generics.GenericAPIView
         batch = self.get_batch_queryset().get(pk=batch.pk)
         logger.info(
             "Membership Form import staged and analyzed: batch_id=%s size=%s status=%s total_count=%s",
+            batch.id,
+            uploaded_file.size,
+            batch.status,
+            batch.total_count,
+        )
+        return Response(ImportBatchSerializer(batch).data, status=status.HTTP_201_CREATED)
+
+
+class EventbriteUploadView(ImportBatchQuerysetMixin, generics.GenericAPIView):
+    permission_classes = [IsAuthenticated, HasImportReconciliationAccess]
+    parser_classes = [MultiPartParser, FormParser]
+
+    @extend_schema(
+        operation_id="imports_eventbrite_upload",
+        summary="Upload and stage an Eventbrite workbook",
+        description=(
+            "Accepts one .xlsx Eventbrite workbook up to 10 MiB and stages normalized source rows for later identity analysis. "
+            "Only CRM_ADMIN may upload. This does not create or update Person, Membership, Event, EventParticipation, "
+            "or ExternalEventReference records."
+        ),
+        request=EventbriteUploadSerializer,
+        responses={
+            201: ImportBatchSerializer,
+            400: OpenApiResponse(description="Missing, invalid, empty, oversized, corrupt, or structurally invalid workbook."),
+            401: OpenApiResponse(description="Authentication credentials were not provided."),
+            403: OpenApiResponse(description="You do not have the CRM_ADMIN staff role."),
+            500: OpenApiResponse(description="The workbook could not be staged."),
+        },
+        tags=["Historical Imports"],
+    )
+    def post(self, request, *args, **kwargs):
+        input_serializer = EventbriteUploadSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+        uploaded_file = input_serializer.validated_data["file"]
+
+        try:
+            batch = ingest_eventbrite_workbook(
+                workbook_bytes=uploaded_file.read(),
+                source_filename=uploaded_file.name,
+                created_by=request.user,
+            )
+        except EventbriteStructureError:
+            raise serializers.ValidationError({"file": ["The workbook does not have the required Eventbrite structure."]})
+        except (BadZipFile, InvalidFileException, OSError, ValueError):
+            raise serializers.ValidationError({"file": ["The uploaded file is not a readable .xlsx workbook."]})
+        except Exception:
+            logger.error("Eventbrite workbook staging failed.")
+            raise APIException("The workbook could not be staged safely.")
+
+        batch = self.get_batch_queryset().get(pk=batch.pk)
+        logger.info(
+            "Eventbrite import staged: batch_id=%s size=%s status=%s total_count=%s",
             batch.id,
             uploaded_file.size,
             batch.status,

@@ -5,6 +5,7 @@ from data_imports.views import (
     ImportBatchImportView,
     ImportBatchListView,
     ImportRecordListView,
+    EventbriteUploadView,
     MembershipFormUploadView,
     ImportReviewDetailView,
     ImportReviewQueueView,
@@ -13,6 +14,7 @@ from data_imports.views import (
 
 
 urlpatterns = [
+    path("imports/eventbrite/", EventbriteUploadView.as_view(), name="import-eventbrite-upload"),
     path("imports/membership-form/", MembershipFormUploadView.as_view(), name="import-membership-form-upload"),
     path("imports/", ImportBatchListView.as_view(), name="import-batch-list"),
     path("imports/<int:batch_id>/", ImportBatchDetailView.as_view(), name="import-batch-detail"),

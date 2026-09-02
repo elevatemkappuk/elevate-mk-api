@@ -116,6 +116,21 @@ class MembershipFormUploadSerializer(serializers.Serializer):
         return uploaded_file
 
 
+class EventbriteUploadSerializer(MembershipFormUploadSerializer):
+    def validate_file(self, uploaded_file):
+        filename = _safe_upload_filename(uploaded_file.name)
+        if not filename:
+            raise serializers.ValidationError("A filename is required.")
+        if not filename.lower().endswith(".xlsx"):
+            raise serializers.ValidationError("Only .xlsx Eventbrite workbooks are supported.")
+        if uploaded_file.size <= 0:
+            raise serializers.ValidationError("The uploaded workbook is empty.")
+        if uploaded_file.size > self.max_upload_bytes:
+            raise serializers.ValidationError("The uploaded workbook exceeds the 10 MiB limit.")
+        uploaded_file.name = filename
+        return uploaded_file
+
+
 class ImportCandidateSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     first_name = serializers.CharField()

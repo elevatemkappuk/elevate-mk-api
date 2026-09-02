@@ -2036,13 +2036,30 @@ Example response for a contact:
 ## Historical Import Batch Lifecycle
 `GET /api/v1/imports/` and `GET /api/v1/imports/{batch_id}/` expose these staff-facing batch statuses:
 
-- `PROCESSING`: workbook normalization and internal identity analysis are in progress.
+- `PROCESSING`: workbook normalization and/or internal identity analysis are in progress. Eventbrite E1 batches remain here after staging because Eventbrite identity analysis is not implemented yet.
 - `READY_FOR_REVIEW`: CRM_ADMIN must resolve one or more identity decisions.
 - `READY_FOR_IMPORT`: all identity decisions are resolved; the batch is eligible for authoritative import.
 - `IMPORTED`: terminal state after a successful authoritative import.
 - `FAILED`: structural ingestion or post-staging analysis failed safely.
 
 Identity analysis is internal processing. A successful zero-review batch returns `READY_FOR_IMPORT`; a review batch transitions there after its final reconciliation decision.
+
+## Endpoint: `POST /api/v1/imports/eventbrite/`
+Purpose:
+- Upload and stage a historical Eventbrite `.xlsx` workbook for later identity analysis and authoritative Events import.
+
+Authentication and authorization:
+- Authenticated Django session and normal CSRF protection are required.
+- Active operational `CRM_ADMIN` is required. `CRM_MANAGER`, `CRM_VIEWER`, and Django superuser or staff flags alone do not grant access.
+
+Behavior:
+- Accepts one multipart `file` up to 10 MiB and returns `201 Created` with the standard safe ImportBatch DTO.
+- Valid rows are staged as `EVENTBRITE` ImportRecords with raw source evidence and nested normalized `person`, `event`, and `source` data. Empty and `Totals` aggregate rows are ignored.
+- Buyer email is normalized to lowercase; mobile uses the existing punctuation-normalization rule. Event start time is normalized using the source timezone and is rejected when date, time, or timezone cannot be safely interpreted.
+- Eventbrite Event ID is retained as external Event provenance and Order ID is retained only as source provenance. Order ID is not an attendee, registration, ticket, or EventParticipation identity.
+- This E1 endpoint never matches or creates Persons and never mutates Person, Membership, ProfessionalProfile, Event, EventParticipation, or ExternalEventReference.
+- The current lifecycle has no dedicated staged-awaiting-analysis status, so successful Eventbrite E1 batches intentionally remain `PROCESSING`; they must not be treated as ready for authoritative import.
+- Corrupt or structurally incompatible workbooks return a safe `400`; the created batch is retained with `FAILED` status where staging began.
 
 ## Endpoint: `POST /api/v1/imports/{batch_id}/import/`
 Purpose:
