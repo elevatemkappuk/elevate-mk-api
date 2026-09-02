@@ -80,11 +80,8 @@ def import_membership_form_batch(*, batch_id, imported_by=None) -> ImportResult:
             raise ImportBatch.DoesNotExist
         _validate_batch(batch)
 
-        records = list(
-            batch.records.select_for_update().select_related("resolved_person").order_by(
-                "source_row_identifier", "id"
-            )
-        )
+        # resolved_person is nullable; joining it here would make PostgreSQL reject FOR UPDATE.
+        records = list(batch.records.select_for_update().order_by("source_row_identifier", "id"))
         plans = _preflight_records(batch, records)
         result = ImportResult(batch_id=batch.id, status=ImportBatch.Status.IMPORTED)
         committed_at = timezone.now()

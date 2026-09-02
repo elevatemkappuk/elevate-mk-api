@@ -1,6 +1,8 @@
-from unittest import mock
+from unittest import mock, skipUnless
 
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from audit.models import AuditEvent
@@ -76,6 +78,28 @@ class MembershipFormImportServiceTests(TestCase):
         self.assertIsNotNone(record.committed_at)
         self.assertEqual(self.batch.status, ImportBatch.Status.IMPORTED)
         self.assertIsNotNone(self.batch.completed_at)
+
+    @skipUnless(connection.vendor == "postgresql", "This regression covers PostgreSQL FOR UPDATE query shape.")
+    def test_record_lock_does_not_join_nullable_resolved_person(self):
+        self.record(ImportRecord.ResolutionMethod.NO_MATCH)
+
+        with CaptureQueriesContext(connection) as queries:
+            import_membership_form_batch(batch_id=self.batch.id)
+
+        batch_lock_query = next(
+            query["sql"]
+            for query in queries.captured_queries
+            if 'FROM "data_imports_importbatch"' in query["sql"] and "FOR UPDATE" in query["sql"]
+        )
+        record_lock_query = next(
+            query["sql"]
+            for query in queries.captured_queries
+            if 'FROM "data_imports_importrecord"' in query["sql"] and "FOR UPDATE" in query["sql"]
+        )
+        self.assertIn("FOR UPDATE", batch_lock_query)
+        self.assertIn("FOR UPDATE", record_lock_query)
+        self.assertNotIn("LEFT OUTER JOIN", record_lock_query.upper())
+        self.assertNotIn('"people_person"', record_lock_query)
 
     def test_staff_create_new_uses_the_same_business_person_creation_path(self):
         record = self.record(ImportRecord.ResolutionMethod.STAFF_CREATE_NEW)
