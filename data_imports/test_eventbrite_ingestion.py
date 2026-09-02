@@ -1,4 +1,4 @@
-from datetime import date, time
+from datetime import date, datetime, time
 from io import BytesIO
 
 from django.test import TestCase
@@ -11,7 +11,7 @@ from rest_framework.test import APITestCase
 from accounts.models import User
 from data_imports.adapters.eventbrite import REQUIRED_COLUMN_ALIASES, EventbriteStructureError
 from data_imports.models import ImportBatch, ImportRecord
-from data_imports.services.eventbrite_ingestion import ingest_eventbrite_workbook
+from data_imports.services.eventbrite_ingestion import ingest_eventbrite_workbook, normalize_eventbrite_row
 from data_imports.services.identity_analysis import analyze_import_batch
 from events.models import Event, EventParticipation, ExternalEventReference
 from memberships.models import Membership
@@ -62,6 +62,16 @@ def eventbrite_row(**overrides):
 
 
 class EventbriteIngestionTests(TestCase):
+    def test_normalizes_event_name_using_the_normalized_event_schema(self):
+        row = eventbrite_row()
+        raw_data = dict(zip(HEADERS, row))
+        header_map = {field: aliases[0] for field, aliases in REQUIRED_COLUMN_ALIASES.items()}
+
+        normalized, errors = normalize_eventbrite_row(raw_data, header_map)
+
+        self.assertEqual(normalized["event"]["name"], "MK Professionals Meet Up")
+        self.assertFalse(errors)
+
     def test_stages_canonical_eventbrite_data_and_preserves_financial_columns_only_in_raw_data(self):
         batch = ingest_eventbrite_workbook(
             workbook_bytes=workbook_bytes(rows=[eventbrite_row()]), source_filename="eventbrite.xlsx"
@@ -111,6 +121,20 @@ class EventbriteIngestionTests(TestCase):
             {("person.email", "invalid_email"), ("event.start_date", "invalid_event_date"), ("event.start_time", "invalid_event_time"), ("event.timezone", "invalid_timezone")},
         )
         self.assertIsNone(record.normalized_data["event"]["start_at"])
+
+    def test_supported_excel_datetime_and_time_cells_stage_without_validation_errors(self):
+        batch = ingest_eventbrite_workbook(
+            workbook_bytes=workbook_bytes(rows=[eventbrite_row(**{
+                "Event Start Date": datetime(2024, 8, 31, 0, 0),
+                "Event Start Time": datetime(1900, 1, 1, 18, 30),
+            })]),
+            source_filename="excel-date-time.xlsx",
+        )
+
+        record = batch.records.get()
+        self.assertEqual(batch.status, ImportBatch.Status.STAGED)
+        self.assertEqual(record.status, ImportRecord.Status.STAGED)
+        self.assertEqual(record.normalized_data["event"]["start_at"], "2024-08-31T18:30:00+02:00")
 
     def test_repeated_ingestion_is_deterministic_and_never_mutates_authoritative_models(self):
         before = {
@@ -260,6 +284,19 @@ class EventbriteUploadApiTests(APITestCase):
         response = self.upload(workbook_bytes(headers=("Event ID",)))
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(ImportBatch.objects.latest("id").status, ImportBatch.Status.FAILED)
+
+    def test_malformed_event_timing_stages_an_invalid_record_instead_of_returning_500(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.upload(workbook_bytes(rows=[eventbrite_row(**{
+            "Event Start Date": "not-a-date",
+            "Event Start Time": "not-a-time",
+        })]))
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        batch = ImportBatch.objects.get(pk=response.data["id"])
+        self.assertEqual(batch.status, ImportBatch.Status.STAGED)
+        self.assertEqual(batch.records.get().status, ImportRecord.Status.INVALID)
 
     def test_crm_admin_can_analyze_only_staged_eventbrite_batches(self):
         eventbrite = ImportBatch.objects.create(

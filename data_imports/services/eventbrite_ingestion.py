@@ -76,7 +76,7 @@ def normalize_eventbrite_row(raw_data, headers):
             validate_email(normalized["person"]["email"])
         except ValidationError:
             errors.append(_error("person.email", "invalid_email", "Email address is not valid."))
-    for field, path in (("external_event_id", "event.external_event_id"), ("event_name", "event.name")):
+    for field, path in (("external_event_id", "event.external_event_id"), ("name", "event.name")):
         if not normalized["event"][field]:
             errors.append(_error(path, "required", "This value is required."))
     start_at, start_errors = _normalize_event_start(
@@ -141,7 +141,10 @@ def _parse_time(value):
     try:
         return time.fromisoformat(text)
     except ValueError:
-        return None
+        try:
+            return datetime.fromisoformat(text).time()
+        except ValueError:
+            return None
 
 
 def _normalize_datetime_or_date(value):
