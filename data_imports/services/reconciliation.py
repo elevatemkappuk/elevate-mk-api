@@ -4,6 +4,7 @@ from django.utils import timezone
 from audit.models import AuditEvent
 from audit.services import record_audit_event
 from data_imports.models import ImportBatch, ImportRecord
+from data_imports.services.source_data import person_identity_source
 from people.models import Person
 from people.services import CreateNewIdentityCollision, evaluate_create_new_identity
 
@@ -36,7 +37,7 @@ def resolve_import_record(*, batch_id, record_id, action, person_id, reviewed_by
             record.resolution_reason = "STAFF_CONFIRMED_SAME_PERSON"
             audit_action = AuditEvent.Action.IMPORT_RECORD_MATCH_CONFIRMED
         elif action == "DIFFERENT_PERSON":
-            source = record.normalized_data or {}
+            source = person_identity_source(record)
             identity_policy = evaluate_create_new_identity(
                 primary_email=source.get("email"),
                 mobile=source.get("mobile"),

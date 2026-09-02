@@ -39,8 +39,9 @@ Historical source -> ImportBatch -> ImportRecord staging -> normalization
 
 - `raw_data` preserves source evidence; `normalized_data` is a separate future-adapter projection
 - staging does not create or modify `Person`, `Membership`, or other authoritative CRM data
-- batch statuses are `PROCESSING`, `READY_FOR_REVIEW`, `READY_FOR_IMPORT`, `IMPORTED`, and `FAILED`
+- batch statuses are `PROCESSING`, `STAGED`, `READY_FOR_REVIEW`, `READY_FOR_IMPORT`, `IMPORTED`, and `FAILED`
 - identity analysis is internal processing, not a staff-actionable resting state
+- `STAGED` means source records were parsed and normalized but identity analysis has not completed; Eventbrite uploads use this explicit inspection state
 - `READY_FOR_REVIEW` means unresolved identity decisions need CRM_ADMIN action
 - `READY_FOR_IMPORT` means all identity decisions are resolved and the batch is eligible for the future authoritative import operation
 - `IMPORTED` is reserved for the future terminal success state after that authoritative import operation completes

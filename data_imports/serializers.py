@@ -3,6 +3,7 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from data_imports.models import ImportBatch, ImportRecord
+from data_imports.services.source_data import person_source_display
 from people.models import Person
 
 
@@ -173,6 +174,12 @@ SAFE_VALIDATION_MESSAGES = {
     ("age_range", "unsupported_age_range"): "Age range is not supported.",
     ("gender", "unsupported_gender"): "Gender is not supported.",
     ("email", "invalid_email"): "Email address is not valid.",
+    ("person.email", "invalid_email"): "Email address is not valid.",
+    ("event.start_date", "invalid_event_date"): "Event start date is not valid.",
+    ("event.start_time", "invalid_event_time"): "Event start time is not valid.",
+    ("event.timezone", "invalid_timezone"): "Event timezone is not valid.",
+    ("source.ticket_quantity", "invalid_ticket_quantity"): "Ticket quantity is not valid.",
+    ("source.guest", "invalid_guest"): "Guest value is not valid.",
     ("linkedin_url", "invalid_url"): "LinkedIn URL is not valid.",
 }
 
@@ -197,20 +204,7 @@ class ImportReviewRecordSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(ImportSourceSerializer)
     def get_source(self, record) -> dict:
-        source = record.normalized_data or {}
-        return {
-            field: source.get(field)
-            for field in (
-                "first_name",
-                "last_name",
-                "email",
-                "mobile",
-                "location",
-                "industry",
-                "job_title",
-                "linkedin_url",
-            )
-        }
+        return person_source_display(record)
 
     @extend_schema_field(ImportCandidateSerializer(many=True))
     def get_candidates(self, record) -> list[dict]:

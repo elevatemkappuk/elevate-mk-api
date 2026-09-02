@@ -2036,7 +2036,8 @@ Example response for a contact:
 ## Historical Import Batch Lifecycle
 `GET /api/v1/imports/` and `GET /api/v1/imports/{batch_id}/` expose these staff-facing batch statuses:
 
-- `PROCESSING`: workbook normalization and/or internal identity analysis are in progress. Eventbrite E1 batches remain here after staging because Eventbrite identity analysis is not implemented yet.
+- `PROCESSING`: workbook normalization and/or internal identity analysis are in progress.
+- `STAGED`: source records were parsed and normalized, but identity analysis has not completed. Eventbrite uploads enter this state for staff inspection before E2 analysis.
 - `READY_FOR_REVIEW`: CRM_ADMIN must resolve one or more identity decisions.
 - `READY_FOR_IMPORT`: all identity decisions are resolved; the batch is eligible for authoritative import.
 - `IMPORTED`: terminal state after a successful authoritative import.
@@ -2058,8 +2059,24 @@ Behavior:
 - Buyer email is normalized to lowercase; mobile uses the existing punctuation-normalization rule. Event start time is normalized using the source timezone and is rejected when date, time, or timezone cannot be safely interpreted.
 - Eventbrite Event ID is retained as external Event provenance and Order ID is retained only as source provenance. Order ID is not an attendee, registration, ticket, or EventParticipation identity.
 - This E1 endpoint never matches or creates Persons and never mutates Person, Membership, ProfessionalProfile, Event, EventParticipation, or ExternalEventReference.
-- The current lifecycle has no dedicated staged-awaiting-analysis status, so successful Eventbrite E1 batches intentionally remain `PROCESSING`; they must not be treated as ready for authoritative import.
+- Successful Eventbrite uploads transition to `STAGED`; they must not be treated as ready for authoritative import before explicit buyer identity analysis.
 - Corrupt or structurally incompatible workbooks return a safe `400`; the created batch is retained with `FAILED` status where staging began.
+
+## Endpoint: `POST /api/v1/imports/{batch_id}/analyze/`
+Purpose:
+- Run buyer-to-Person identity analysis for one `STAGED` Eventbrite batch.
+
+Authentication and authorization:
+- Authenticated Django session and normal CSRF protection are required.
+- Active operational `CRM_ADMIN` is required. `CRM_MANAGER`, `CRM_VIEWER`, and Django superuser or staff flags alone do not grant access.
+
+Behavior:
+- The action is valid only for `EVENTBRITE` batches in `STAGED`; an inappropriate source type or lifecycle state returns safe `409 Conflict`.
+- It uses the same canonical historical-import identity engine as Membership Form analysis, reading only normalized buyer first name, last name, email, and mobile data. Event ID/name/location, Order ID, ticket quantity, guest, payment data, and location fields never provide identity evidence.
+- Valid rows become existing `AUTO_MATCH`, `REVIEW_REQUIRED`, or `NO_MATCH` outcomes. Invalid rows remain invalid and are not analyzed.
+- Any review record produces `READY_FOR_REVIEW`; otherwise the batch becomes `READY_FOR_IMPORT`, including batches that also contain invalid rows.
+- Existing reconciliation endpoints remain the authoritative staff decision workflow. A `DIFFERENT_PERSON` decision records only a future create-new decision; it does not create a Person, Membership, Event, EventParticipation, or external reference.
+- This action never creates or updates Person, Membership, ProfessionalProfile, Event, EventParticipation, or ExternalEventReference records.
 
 ## Endpoint: `POST /api/v1/imports/{batch_id}/import/`
 Purpose:

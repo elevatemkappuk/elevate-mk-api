@@ -44,6 +44,7 @@ from data_imports.services.membership_form_import import (
 from data_imports.adapters.membership_form import MembershipFormStructureError
 from data_imports.adapters.eventbrite import EventbriteStructureError
 from data_imports.services.eventbrite_ingestion import ingest_eventbrite_workbook
+from data_imports.services.identity_analysis import analyze_import_batch
 from staff_access.models import StaffRole
 from staff_access.permissions import HasActiveStaffRoleCodes
 
@@ -77,6 +78,12 @@ class ImportBatchImportStaleIdentityConflict(APIException):
     status_code = status.HTTP_409_CONFLICT
     default_detail = "The possible CRM matches have changed since this identity decision was made. Review the record again before adding it to the CRM."
     default_code = "import_batch_import_stale_identity_conflict"
+
+
+class ImportBatchAnalysisConflict(APIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "Import batch is not eligible for identity analysis."
+    default_code = "import_batch_analysis_conflict"
 
 
 class ImportBatchQuerysetMixin:
@@ -211,6 +218,37 @@ class EventbriteUploadView(ImportBatchQuerysetMixin, generics.GenericAPIView):
             batch.total_count,
         )
         return Response(ImportBatchSerializer(batch).data, status=status.HTTP_201_CREATED)
+
+
+class ImportBatchAnalyzeView(ImportBatchQuerysetMixin, generics.GenericAPIView):
+    serializer_class = ImportBatchSerializer
+    permission_classes = [IsAuthenticated, HasImportReconciliationAccess]
+
+    @extend_schema(
+        operation_id="imports_eventbrite_analyze",
+        summary="Analyze a staged Eventbrite batch",
+        description=(
+            "Runs backend-authoritative buyer-to-Person identity analysis for an EVENTBRITE batch in STAGED status. "
+            "It uses only normalized Person identity fields and never creates or updates CRM or Events-domain records."
+        ),
+        parameters=[OpenApiParameter(name="batch_id", type=int, location=OpenApiParameter.PATH, required=True)],
+        responses={
+            200: ImportBatchSerializer,
+            401: OpenApiResponse(description="Authentication credentials were not provided."),
+            403: OpenApiResponse(description="You do not have the CRM_ADMIN staff role."),
+            404: OpenApiResponse(description="Import batch was not found."),
+            409: OpenApiResponse(description="Import batch is not an Eventbrite batch in STAGED status."),
+        },
+        tags=["Historical Imports"],
+    )
+    def post(self, request, *args, **kwargs):
+        batch = self.get_batch_or_404()
+        try:
+            batch = analyze_import_batch(batch)
+        except ValueError:
+            raise ImportBatchAnalysisConflict
+        batch = self.get_batch_queryset().get(pk=batch.pk)
+        return Response(ImportBatchSerializer(batch).data)
 
 
 class ImportBatchDetailView(ImportBatchQuerysetMixin, generics.GenericAPIView):

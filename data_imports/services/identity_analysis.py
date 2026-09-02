@@ -3,6 +3,7 @@ from django.db.models import Q
 
 from data_imports.models import ImportBatch, ImportRecord
 from data_imports.services.normalization import clean_text, normalize_mobile
+from data_imports.services.source_data import person_identity_source
 from people.models import Person
 
 
@@ -10,11 +11,7 @@ def analyze_import_batch(batch):
     """Analyze staged identity evidence without mutating authoritative CRM records."""
     with transaction.atomic():
         batch = ImportBatch.objects.select_for_update().get(pk=batch.pk)
-        if batch.status not in (
-            ImportBatch.Status.PROCESSING,
-            ImportBatch.Status.READY_FOR_REVIEW,
-            ImportBatch.Status.READY_FOR_IMPORT,
-        ):
+        if not _analysis_is_allowed(batch):
             raise ValueError("Import batch is not eligible for identity analysis.")
         records = batch.records.filter(status__in=[ImportRecord.Status.STAGED, ImportRecord.Status.RESOLVED, ImportRecord.Status.REVIEW_REQUIRED]).exclude(
             status=ImportRecord.Status.COMMITTED
@@ -36,7 +33,7 @@ def analyze_import_batch(batch):
 
 
 def analyze_import_record(record):
-    data = record.normalized_data
+    data = person_identity_source(record)
     email = data.get("email")
     mobile = data.get("mobile")
     candidates = Person.objects.business()
@@ -72,6 +69,18 @@ def analyze_import_record(record):
         record.status = ImportRecord.Status.RESOLVED
     record.save(update_fields=["match_candidates", "match_evidence", "outcome", "resolved_person", "resolution_method", "resolution_reason", "status", "updated_at"])
     return record.status
+
+
+def _analysis_is_allowed(batch):
+    if batch.source_type == ImportBatch.SourceType.EVENTBRITE:
+        return batch.status == ImportBatch.Status.STAGED
+    if batch.source_type == ImportBatch.SourceType.MEMBERSHIP_FORM:
+        return batch.status in (
+            ImportBatch.Status.PROCESSING,
+            ImportBatch.Status.READY_FOR_REVIEW,
+            ImportBatch.Status.READY_FOR_IMPORT,
+        )
+    return False
 
 
 def _set_review(record, reason):

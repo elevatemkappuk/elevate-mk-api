@@ -37,6 +37,8 @@ def ingest_eventbrite_workbook(*, workbook_bytes, source_filename, created_by=No
         batch.status = ImportBatch.Status.FAILED
         batch.save(update_fields=["status", "updated_at"])
         raise
+    batch.status = ImportBatch.Status.STAGED
+    batch.save(update_fields=["status", "updated_at"])
     return batch
 
 

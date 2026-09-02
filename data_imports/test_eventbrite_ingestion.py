@@ -3,6 +3,7 @@ from io import BytesIO
 
 from django.test import TestCase
 from django.urls import resolve
+from django.utils import timezone
 from openpyxl import Workbook
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -11,6 +12,7 @@ from accounts.models import User
 from data_imports.adapters.eventbrite import REQUIRED_COLUMN_ALIASES, EventbriteStructureError
 from data_imports.models import ImportBatch, ImportRecord
 from data_imports.services.eventbrite_ingestion import ingest_eventbrite_workbook
+from data_imports.services.identity_analysis import analyze_import_batch
 from events.models import Event, EventParticipation, ExternalEventReference
 from memberships.models import Membership
 from people.models import Person
@@ -67,7 +69,7 @@ class EventbriteIngestionTests(TestCase):
         record = batch.records.get()
 
         self.assertEqual(batch.source_type, ImportBatch.SourceType.EVENTBRITE)
-        self.assertEqual(batch.status, ImportBatch.Status.PROCESSING)
+        self.assertEqual(batch.status, ImportBatch.Status.STAGED)
         self.assertEqual(record.source_row_identifier, "sheet:2")
         self.assertEqual(record.status, ImportRecord.Status.STAGED)
         self.assertEqual(record.normalized_data["person"], {
@@ -140,6 +142,84 @@ class EventbriteIngestionTests(TestCase):
         self.assertFalse(batch.records.exists())
 
 
+class EventbriteIdentityAnalysisTests(TestCase):
+    def setUp(self):
+        self.batch = ImportBatch.objects.create(
+            source_type=ImportBatch.SourceType.EVENTBRITE,
+            source_filename="eventbrite.xlsx",
+            source_fingerprint="e" * 64,
+            status=ImportBatch.Status.STAGED,
+        )
+
+    def record(self, person=None, status=ImportRecord.Status.STAGED, **event_source):
+        return ImportRecord.objects.create(
+            batch=self.batch,
+            source_row_identifier=f"row-{ImportRecord.objects.count()}",
+            source_fingerprint=str(ImportRecord.objects.count()).zfill(64),
+            status=status,
+            normalized_data={
+                "person": person or {},
+                "event": {"external_event_id": event_source.get("external_event_id", "event-1"), "name": event_source.get("name", "Event")},
+                "source": {"external_order_id": event_source.get("external_order_id", "order-1")},
+            },
+        )
+
+    def person(self, **overrides):
+        values = {"first_name": "Amina", "last_name": "Zulu", "primary_email": "amina@example.com", "mobile": "0791234567"}
+        values.update(overrides)
+        return Person.objects.create(**values)
+
+    def test_eventbrite_uses_shared_identity_rules_without_event_or_membership_mutations(self):
+        matched = self.person()
+        archived = self.person(first_name="Archived", last_name="Person", primary_email="archived@example.com", mobile="", archived_at=timezone.now())
+        email_match = self.record(person={"first_name": "Amina", "last_name": "Zulu", "email": "amina@example.com", "mobile": "0791234567"})
+        archived_match = self.record(person={"email": "archived@example.com"})
+        mobile_only = self.record(person={"mobile": "0791234567"})
+        no_match = self.record(person={"first_name": "Amina", "last_name": "Zulu"}, external_event_id="event-name-only", external_order_id="order-name-only")
+        invalid = self.record(person={"email": "invalid"}, status=ImportRecord.Status.INVALID)
+        before = (Membership.objects.count(), ProfessionalProfile.objects.count(), Event.objects.count(), EventParticipation.objects.count(), ExternalEventReference.objects.count())
+
+        analyze_import_batch(self.batch)
+
+        email_match.refresh_from_db(); archived_match.refresh_from_db(); mobile_only.refresh_from_db(); no_match.refresh_from_db(); invalid.refresh_from_db(); self.batch.refresh_from_db()
+        self.assertEqual(email_match.resolution_method, ImportRecord.ResolutionMethod.AUTO_MATCH)
+        self.assertEqual(email_match.resolved_person, matched)
+        self.assertEqual(archived_match.resolution_method, ImportRecord.ResolutionMethod.AUTO_MATCH)
+        self.assertEqual(archived_match.resolved_person, archived)
+        self.assertEqual(mobile_only.status, ImportRecord.Status.REVIEW_REQUIRED)
+        self.assertEqual(no_match.resolution_method, ImportRecord.ResolutionMethod.NO_MATCH)
+        self.assertEqual(no_match.match_candidates, [])
+        self.assertEqual(invalid.status, ImportRecord.Status.INVALID)
+        self.assertEqual(self.batch.status, ImportBatch.Status.READY_FOR_REVIEW)
+        self.assertEqual(before, (Membership.objects.count(), ProfessionalProfile.objects.count(), Event.objects.count(), EventParticipation.objects.count(), ExternalEventReference.objects.count()))
+
+    def test_conflicting_and_multiple_strong_evidence_requires_review_and_no_review_reaches_ready_for_import(self):
+        self.person()
+        conflicting = self.record(person={"first_name": "Other", "last_name": "Name", "email": "amina@example.com", "mobile": "different"})
+        self.person(first_name="Other", last_name="Email", primary_email="amina@example.com", mobile="")
+
+        analyze_import_batch(self.batch)
+
+        conflicting.refresh_from_db(); self.batch.refresh_from_db()
+        self.assertEqual(conflicting.status, ImportRecord.Status.REVIEW_REQUIRED)
+        self.assertEqual(self.batch.status, ImportBatch.Status.READY_FOR_REVIEW)
+
+        ready_batch = ImportBatch.objects.create(source_type=ImportBatch.SourceType.EVENTBRITE, source_filename="ready.xlsx", source_fingerprint="r" * 64, status=ImportBatch.Status.STAGED)
+        ImportRecord.objects.create(batch=ready_batch, source_row_identifier="no-match", source_fingerprint="n" * 64, normalized_data={"person": {"first_name": "No", "last_name": "Match"}, "event": {}, "source": {}})
+        ImportRecord.objects.create(batch=ready_batch, source_row_identifier="invalid", source_fingerprint="i" * 64, status=ImportRecord.Status.INVALID, normalized_data={"person": {}, "event": {}, "source": {}})
+        analyze_import_batch(ready_batch)
+        ready_batch.refresh_from_db()
+        self.assertEqual(ready_batch.status, ImportBatch.Status.READY_FOR_IMPORT)
+
+    def test_eventbrite_analysis_accepts_only_staged_batches(self):
+        for state in (ImportBatch.Status.PROCESSING, ImportBatch.Status.READY_FOR_REVIEW, ImportBatch.Status.READY_FOR_IMPORT, ImportBatch.Status.IMPORTED, ImportBatch.Status.FAILED):
+            with self.subTest(state=state):
+                self.batch.status = state
+                self.batch.save(update_fields=["status"])
+                with self.assertRaises(ValueError):
+                    analyze_import_batch(self.batch)
+
+
 class EventbriteUploadApiTests(APITestCase):
     def setUp(self):
         self.admin = self.create_user("event-admin@example.com")
@@ -180,3 +260,32 @@ class EventbriteUploadApiTests(APITestCase):
         response = self.upload(workbook_bytes(headers=("Event ID",)))
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(ImportBatch.objects.latest("id").status, ImportBatch.Status.FAILED)
+
+    def test_crm_admin_can_analyze_only_staged_eventbrite_batches(self):
+        eventbrite = ImportBatch.objects.create(
+            source_type=ImportBatch.SourceType.EVENTBRITE,
+            source_filename="staged.xlsx",
+            source_fingerprint="s" * 64,
+            status=ImportBatch.Status.STAGED,
+        )
+        ImportRecord.objects.create(
+            batch=eventbrite,
+            source_row_identifier="row-1",
+            source_fingerprint="1" * 64,
+            normalized_data={"person": {"first_name": "No", "last_name": "Match"}, "event": {}, "source": {}},
+        )
+        self.client.force_authenticate(user=self.manager)
+        self.assertEqual(self.client.post(f"/api/v1/imports/{eventbrite.id}/analyze/", {}, format="json").status_code, status.HTTP_403_FORBIDDEN)
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post(f"/api/v1/imports/{eventbrite.id}/analyze/", {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], ImportBatch.Status.READY_FOR_IMPORT)
+        self.assertEqual(self.client.post(f"/api/v1/imports/{eventbrite.id}/analyze/", {}, format="json").status_code, status.HTTP_409_CONFLICT)
+
+        membership_batch = ImportBatch.objects.create(
+            source_type=ImportBatch.SourceType.MEMBERSHIP_FORM,
+            source_filename="membership.xlsx",
+            source_fingerprint="m" * 64,
+            status=ImportBatch.Status.STAGED,
+        )
+        self.assertEqual(self.client.post(f"/api/v1/imports/{membership_batch.id}/analyze/", {}, format="json").status_code, status.HTTP_409_CONFLICT)

@@ -10,6 +10,7 @@ class ImportBatch(models.Model):
 
     class Status(models.TextChoices):
         PROCESSING = "PROCESSING", "Processing"
+        STAGED = "STAGED", "Staged"
         READY_FOR_REVIEW = "READY_FOR_REVIEW", "Ready for review"
         READY_FOR_IMPORT = "READY_FOR_IMPORT", "Ready for import"
         IMPORTED = "IMPORTED", "Imported"
