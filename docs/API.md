@@ -2080,17 +2080,20 @@ Behavior:
 
 ## Endpoint: `POST /api/v1/imports/{batch_id}/import/`
 Purpose:
-- Synchronously perform the authoritative Membership Form import for one `READY_FOR_IMPORT` batch.
+- Synchronously perform the source-specific authoritative import for one `READY_FOR_IMPORT` batch.
 
 Authentication and authorization:
 - Authenticated Django session and normal CSRF protection are required.
 - Active operational `CRM_ADMIN` is required. `CRM_MANAGER`, `CRM_VIEWER`, and Django superuser or staff flags alone do not grant access.
 
 Behavior:
-- The endpoint delegates all mutation, locking, preflight, provenance, and audit behavior to the authoritative import service.
-- A successful import returns `200 OK`, transitions the batch to `IMPORTED`, and returns the existing canonical batch DTO plus a summary of processed, created, matched, enriched, reused, and skipped counts.
+- Membership Form batches continue to use the Membership Form importer, including its Membership and Professional Profile rules.
+- Eventbrite batches use the Events importer. It creates or reuses BUSINESS People, provider-neutral Events, one `EVENTBRITE`/`EVENT` external reference per Eventbrite Event ID, and one EventParticipation per buyer and Event. It never creates, changes, reactivates, or ends Membership.
+- Eventbrite Event IDs are the only Event identity. Equal event names with different Eventbrite Event IDs remain separate Events. Order ID and ticket quantity remain source provenance only: ticket quantity never creates additional participations, and Order ID never creates a participation external reference.
+- Existing EventParticipation rows are never downgraded or reactivated: `REGISTERED` is reused, while `ATTENDED` and `CANCELLED` are preserved. New participations are `REGISTERED`.
+- A successful import returns `200 OK`, transitions the batch to `IMPORTED`, and returns the existing canonical batch DTO plus a source-appropriate safe summary. Eventbrite summaries include Event and participation created/reused/preserved counts; Membership Form summaries retain their existing Membership/Profile counts.
 - The summary does not contain raw staged rows, normalized source data, or source-row PII.
-- A missing batch returns `404 Not Found`. A non-ready, already imported, unresolved, inconsistent, or conflicting membership state returns a safe `409 Conflict` response.
+- A missing batch returns `404 Not Found`. A non-ready, already imported, unresolved, inconsistent, stale identity, or source-specific preflight conflict returns a safe `409 Conflict` response.
 
 ## Endpoint: `POST /api/v1/auth/password-reset/`
 Purpose: request password-reset instructions for an eligible account.

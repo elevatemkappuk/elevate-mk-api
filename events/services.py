@@ -37,11 +37,20 @@ def get_or_create_event_from_reference(*, provider, external_event_id, event_def
 @transaction.atomic
 def get_or_create_event_participation(*, event, person, participation_defaults=None):
     """Return the single authoritative participation for a Person and Event."""
-    return EventParticipation.objects.get_or_create(
-        event=event,
-        person=person,
-        defaults=participation_defaults or {},
-    )
+    try:
+        with transaction.atomic():
+            return EventParticipation.objects.get_or_create(
+                event=event,
+                person=person,
+                defaults=participation_defaults or {},
+            )
+    except IntegrityError:
+        # A concurrent provider import may have created the same Person/Event
+        # participation after the initial lookup. Reuse that authoritative row.
+        return (
+            EventParticipation.objects.select_for_update().get(event=event, person=person),
+            False,
+        )
 
 
 @transaction.atomic

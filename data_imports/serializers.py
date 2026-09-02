@@ -90,6 +90,11 @@ class ImportResultSummarySerializer(serializers.Serializer):
     memberships_reused_count = serializers.IntegerField(source="memberships_reused", read_only=True)
     profiles_created_count = serializers.IntegerField(source="profiles_created", read_only=True)
     profiles_enriched_count = serializers.IntegerField(source="profiles_enriched", read_only=True)
+    events_created_count = serializers.IntegerField(source="events_created", read_only=True, required=False)
+    events_reused_count = serializers.IntegerField(source="events_reused", read_only=True, required=False)
+    participations_created_count = serializers.IntegerField(source="participations_created", read_only=True, required=False)
+    participations_reused_count = serializers.IntegerField(source="participations_reused", read_only=True, required=False)
+    participations_preserved_count = serializers.IntegerField(source="participations_preserved", read_only=True, required=False)
     skipped_count = serializers.IntegerField(source="invalid_skipped", read_only=True)
 
 

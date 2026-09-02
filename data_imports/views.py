@@ -41,6 +41,7 @@ from data_imports.services.membership_form_import import (
     StaleCreateNewIdentityReview,
     import_membership_form_batch,
 )
+from data_imports.services.eventbrite_import import import_eventbrite_batch
 from data_imports.adapters.membership_form import MembershipFormStructureError
 from data_imports.adapters.eventbrite import EventbriteStructureError
 from data_imports.services.eventbrite_ingestion import ingest_eventbrite_workbook
@@ -277,12 +278,12 @@ class ImportBatchImportView(ImportBatchQuerysetMixin, generics.GenericAPIView):
     permission_classes = [IsAuthenticated, HasImportReconciliationAccess]
 
     @extend_schema(
-        operation_id="imports_membership_form_import",
-        summary="Import a ready Membership Form batch",
+        operation_id="imports_authoritative_import",
+        summary="Import a ready historical import batch",
         description=(
-            "Synchronously performs the authoritative Membership Form import for a READY_FOR_IMPORT batch. "
-            "Only CRM_ADMIN may invoke it. The response contains the canonical imported batch and a mutation summary; "
-            "it never exposes staged source rows."
+            "Synchronously performs the source-specific authoritative import for a READY_FOR_IMPORT Membership Form "
+            "or Eventbrite batch. Eventbrite imports create or reuse only People, Events, EventParticipation, and "
+            "Event external references; they never mutate Membership. Only CRM_ADMIN may invoke it."
         ),
         parameters=[OpenApiParameter(name="batch_id", type=int, location=OpenApiParameter.PATH, required=True)],
         responses={
@@ -296,10 +297,13 @@ class ImportBatchImportView(ImportBatchQuerysetMixin, generics.GenericAPIView):
     )
     def post(self, request, *args, **kwargs):
         try:
-            result = import_membership_form_batch(
-                batch_id=self.kwargs["batch_id"],
-                imported_by=request.user,
-            )
+            batch = ImportBatch.objects.only("source_type").filter(pk=self.kwargs["batch_id"]).first()
+            if batch is None:
+                raise ImportBatch.DoesNotExist
+            if batch.source_type == ImportBatch.SourceType.EVENTBRITE:
+                result = import_eventbrite_batch(batch_id=batch.id, imported_by=request.user)
+            else:
+                result = import_membership_form_batch(batch_id=batch.id, imported_by=request.user)
         except ImportBatch.DoesNotExist:
             raise NotFound("Not found.")
         except StaleCreateNewIdentityReview:

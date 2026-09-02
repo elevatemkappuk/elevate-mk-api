@@ -91,6 +91,17 @@ The backend-only Membership Form import service is the first authoritative histo
 - existing audit actions record Person, Membership, and ProfessionalProfile mutation with identifier-only import provenance; `IMPORT_BATCH_IMPORTED` records batch completion.
 - the service is idempotent by batch status: an `IMPORTED` batch is not importable again.
 
+### Authoritative Eventbrite Import Service
+
+The Eventbrite importer accepts only a fully reconciled `READY_FOR_IMPORT` Eventbrite batch and uses the same whole-batch transaction, row-locking, create-new collision revalidation, and Person fill-missing policy as the Membership Form importer.
+
+- matched buyers reuse their resolved BUSINESS Person; create-new buyers create a BUSINESS Person. Existing nonblank Person fields are not overwritten.
+- Eventbrite imports never create, change, reactivate, end, or otherwise inspect Membership lifecycle as an eligibility condition.
+- Eventbrite Event ID creates or reuses one provider-neutral `Event` through `ExternalEventReference(provider="EVENTBRITE", reference_type="EVENT")`. Event names are not identity, and existing Event fields are only filled when blank.
+- each buyer produces at most one `EventParticipation` for an Event. New rows are `REGISTERED`; existing `REGISTERED`, `ATTENDED`, and `CANCELLED` rows are retained unchanged.
+- ticket quantity and Order ID are source provenance only. They neither create additional participations nor create an `ExternalEventReference` with `reference_type="PARTICIPATION"`.
+- successful valid records are committed and invalid rows are marked skipped. The batch becomes `IMPORTED` only after the complete transaction succeeds; the existing `IMPORT_BATCH_IMPORTED` audit action records safe aggregate counts without source PII, order, payment, or workbook data.
+
 ## Events Domain
 
 The Events domain is provider-neutral. External providers and future Elevate MK Community ticketing feed authoritative `Event` and `EventParticipation` records through provider adapters; Eventbrite is not part of the core schema.
@@ -108,7 +119,7 @@ External provider or Community platform
 - Event identity and registration/order/participation identity use separate typed references; `external_id` is never overloaded without its `reference_type`
 - `provider` is an extensible string, not an Eventbrite-only enum. Current and future adapters may use values such as `EVENTBRITE` and `COMMUNITY`.
 - `ImportRecord` may be retained as optional provenance on an external reference without adding provider-specific columns to Event or EventParticipation
-- an EventParticipation is one Person's participation in one Event. A provider adapter must use an attendee/registration-specific identifier when a provider order covers more than one person.
+- an EventParticipation is one Person's participation in one Event. The Eventbrite historical buyer import creates one participation per buyer/Event even when an order has multiple tickets; it intentionally does not infer guests or individual registrations from Order ID.
 - EventParticipation is fully isolated from Membership: it never creates, changes, reactivates, ends, or otherwise mutates Membership. A contact, ACTIVE Member, FORMER Member, or archived Person may be referenced without lifecycle changes.
 - no Events API or Staff CRM Events UI exists in V1; Django Admin is technical inspection only.
 
