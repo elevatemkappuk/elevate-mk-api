@@ -12,7 +12,7 @@ from audit.services import record_audit_event
 from data_imports.models import ImportBatch, ImportRecord
 from memberships.models import Membership
 from people.models import Person
-from people.services import find_business_duplicate_people, normalize_email, normalize_mobile
+from people.services import evaluate_create_new_identity, normalize_email, normalize_mobile
 from professional_profiles.models import Industry, ProfessionalProfile
 
 
@@ -154,7 +154,11 @@ def _preflight_records(batch, records):
             if record.resolved_person_id is not None:
                 raise ImportBatchPreflightError("A create-new record already has a resolved Person.")
             _validate_new_person_source(source)
-            _validate_new_person_identity(source, create_identity_keys)
+            _validate_new_person_identity(
+                source,
+                create_identity_keys,
+                staff_confirmed_different=method == ImportRecord.ResolutionMethod.STAFF_CREATE_NEW,
+            )
             plans.append(ImportPlan(record, source, None, joined_at, _match_industry(source), True))
         else:
             raise ImportBatchPreflightError("The batch contains an inconsistent resolution decision.")
@@ -172,11 +176,16 @@ def _validate_new_person_source(source):
         raise ImportBatchPreflightError("A create-new record requires first_name and last_name.")
 
 
-def _validate_new_person_identity(source, create_identity_keys):
+def _validate_new_person_identity(source, create_identity_keys, *, staff_confirmed_different):
     email = _value(source.get("email"))
     mobile = _value(source.get("mobile"))
-    if find_business_duplicate_people(primary_email=email, mobile=mobile):
-        raise ImportBatchPreflightError("A create-new record now matches an existing Business Person.")
+    identity_policy = evaluate_create_new_identity(
+        primary_email=email,
+        mobile=mobile,
+        staff_confirmed_different=staff_confirmed_different,
+    )
+    if not identity_policy.is_safe_to_create:
+        raise ImportBatchPreflightError("A create-new record now has a blocking CRM identity collision.")
     keys = {
         ("email", normalize_email(email)),
         ("mobile", normalize_mobile(mobile)),

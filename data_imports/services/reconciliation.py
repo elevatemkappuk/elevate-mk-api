@@ -5,6 +5,7 @@ from audit.models import AuditEvent
 from audit.services import record_audit_event
 from data_imports.models import ImportBatch, ImportRecord
 from people.models import Person
+from people.services import CreateNewIdentityCollision, evaluate_create_new_identity
 
 
 class ReconciliationConflict(Exception):
@@ -35,6 +36,16 @@ def resolve_import_record(*, batch_id, record_id, action, person_id, reviewed_by
             record.resolution_reason = "STAFF_CONFIRMED_SAME_PERSON"
             audit_action = AuditEvent.Action.IMPORT_RECORD_MATCH_CONFIRMED
         elif action == "DIFFERENT_PERSON":
+            source = record.normalized_data or {}
+            identity_policy = evaluate_create_new_identity(
+                primary_email=source.get("email"),
+                mobile=source.get("mobile"),
+                staff_confirmed_different=True,
+            )
+            if not identity_policy.is_safe_to_create:
+                raise ReconciliationConflict(
+                    "This record uses an email address already assigned to an existing CRM Person and cannot be created as a separate Person."
+                )
             record.resolved_person = None
             record.resolution_method = ImportRecord.ResolutionMethod.STAFF_CREATE_NEW
             record.resolution_reason = "STAFF_CONFIRMED_DIFFERENT_PERSON"
@@ -74,6 +85,9 @@ def resolve_import_record(*, batch_id, record_id, action, person_id, reviewed_by
         }
         if record.resolved_person_id is not None:
             metadata["resolved_person_id"] = str(record.resolved_person_id)
+        if action == "DIFFERENT_PERSON" and identity_policy.collision == CreateNewIdentityCollision.MOBILE_COLLISION:
+            metadata["identity_collision"] = identity_policy.collision.value
+            metadata["identity_collision_person_ids"] = [str(person_id) for person_id in identity_policy.matched_person_ids]
         record_audit_event(
             action=audit_action,
             actor_user=reviewed_by,

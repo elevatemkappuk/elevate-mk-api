@@ -44,22 +44,24 @@ class ImportReconciliationApiTests(APITestCase):
             **extra_fields,
         )
 
-    def create_review_record(self, *, candidate_id=None):
+    def create_review_record(self, *, candidate_id=None, source_overrides=None):
         candidate_id = self.person.id if candidate_id is None else candidate_id
+        source = {
+            "first_name": "Source",
+            "last_name": "Record",
+            "email": "source@example.com",
+            "mobile": "0799999999",
+            "location": "Milton Keynes",
+            "industry": "Technology",
+            "job_title": "Engineer",
+            "linkedin_url": "https://www.linkedin.com/in/source",
+        }
+        source.update(source_overrides or {})
         return ImportRecord.objects.create(
             batch=self.batch,
             source_row_identifier=f"row-{ImportRecord.objects.count()}",
             source_fingerprint=str(ImportRecord.objects.count()).zfill(64),
-            normalized_data={
-                "first_name": "Source",
-                "last_name": "Record",
-                "email": "source@example.com",
-                "mobile": "0799999999",
-                "location": "Milton Keynes",
-                "industry": "Technology",
-                "job_title": "Engineer",
-                "linkedin_url": "https://www.linkedin.com/in/source",
-            },
+            normalized_data=source,
             raw_data={"private_spreadsheet_column": "must never be returned"},
             status=ImportRecord.Status.REVIEW_REQUIRED,
             resolution_reason="UNIQUE_EMAIL_WITH_CONTRADICTION",
@@ -174,6 +176,48 @@ class ImportReconciliationApiTests(APITestCase):
         self.assertEqual(self.batch.status, ImportBatch.Status.READY_FOR_IMPORT)
         self.assertEqual(Person.objects.count(), person_count)
         self.assertEqual(self.client.post(url, {"resolution": "DIFFERENT_PERSON"}, format="json").status_code, status.HTTP_409_CONFLICT)
+
+    def test_different_person_accepts_mobile_only_collision_with_safe_audit_evidence(self):
+        record = self.create_review_record(source_overrides={"email": "new@example.com", "mobile": self.person.mobile})
+        self.authenticate_as(self.admin)
+
+        response = self.client.post(
+            f"/api/v1/imports/{self.batch.id}/review/{record.id}/resolve/",
+            {"resolution": "DIFFERENT_PERSON"},
+            format="json",
+        )
+
+        record.refresh_from_db()
+        self.batch.refresh_from_db()
+        event = AuditEvent.objects.get(entity_id=str(record.id))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(record.resolution_method, ImportRecord.ResolutionMethod.STAFF_CREATE_NEW)
+        self.assertEqual(self.batch.status, ImportBatch.Status.READY_FOR_IMPORT)
+        self.assertEqual(event.metadata["identity_collision"], "MOBILE_COLLISION")
+        self.assertEqual(event.metadata["identity_collision_person_ids"], [str(self.person.id)])
+        self.assertNotIn("new@example.com", str(event.metadata))
+        self.assertNotIn(self.person.mobile, str(event.metadata))
+
+    def test_different_person_rejects_exact_email_collision_without_finalizing_resolution(self):
+        record = self.create_review_record(source_overrides={"email": self.person.primary_email, "mobile": "0799999999"})
+        self.authenticate_as(self.admin)
+
+        response = self.client.post(
+            f"/api/v1/imports/{self.batch.id}/review/{record.id}/resolve/",
+            {"resolution": "DIFFERENT_PERSON"},
+            format="json",
+        )
+
+        record.refresh_from_db()
+        self.batch.refresh_from_db()
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(
+            response.data["detail"],
+            "This record uses an email address already assigned to an existing CRM Person and cannot be created as a separate Person.",
+        )
+        self.assertEqual(record.status, ImportRecord.Status.REVIEW_REQUIRED)
+        self.assertNotEqual(record.resolution_method, ImportRecord.ResolutionMethod.STAFF_CREATE_NEW)
+        self.assertEqual(self.batch.status, ImportBatch.Status.READY_FOR_REVIEW)
 
     def test_batch_remains_ready_for_review_until_the_final_review_record_is_resolved(self):
         first_record = self.create_review_record()

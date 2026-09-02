@@ -110,6 +110,56 @@ class MembershipFormImportServiceTests(TestCase):
         self.assertEqual(record.resolved_person.record_type, Person.RecordType.BUSINESS)
         self.assertEqual(record.outcome, ImportRecord.Outcome.CREATED)
 
+    def test_staff_create_new_allows_a_mobile_only_collision_after_staff_confirmation(self):
+        existing = Person.objects.create(first_name="Existing", last_name="Person", primary_email="existing@example.com", mobile="0791234567")
+        record = self.record(
+            ImportRecord.ResolutionMethod.STAFF_CREATE_NEW,
+            source=self.source(email="new@example.com", mobile="0791234567"),
+        )
+
+        result = import_membership_form_batch(batch_id=self.batch.id)
+
+        record.refresh_from_db()
+        self.assertEqual(result.people_created, 1)
+        self.assertEqual(record.resolved_person.mobile, existing.mobile)
+        self.assertNotEqual(record.resolved_person.id, existing.id)
+        self.assertEqual(Person.objects.filter(mobile=existing.mobile).count(), 2)
+
+    def test_staff_create_new_revalidates_and_blocks_email_collisions_without_mutation(self):
+        first = self.record(
+            ImportRecord.ResolutionMethod.STAFF_CREATE_NEW,
+            source=self.source(email="new@example.com", mobile="0791234567"),
+        )
+        blocked = self.record(
+            ImportRecord.ResolutionMethod.STAFF_CREATE_NEW,
+            source=self.source(email="EXISTING@example.com", mobile="0799999999"),
+        )
+        existing = Person.objects.create(first_name="Existing", last_name="Person", primary_email="existing@example.com", mobile="0700000000")
+
+        with self.assertRaises(ImportBatchPreflightError):
+            import_membership_form_batch(batch_id=self.batch.id)
+
+        self.batch.refresh_from_db()
+        first.refresh_from_db()
+        blocked.refresh_from_db()
+        self.assertEqual(Person.objects.count(), 1)
+        self.assertEqual(existing.primary_email, "existing@example.com")
+        self.assertIsNone(first.committed_at)
+        self.assertIsNone(blocked.committed_at)
+        self.assertEqual(self.batch.status, ImportBatch.Status.READY_FOR_IMPORT)
+
+    def test_staff_create_new_blocks_email_and_mobile_collision(self):
+        Person.objects.create(first_name="Existing", last_name="Person", primary_email="existing@example.com", mobile="0791234567")
+        self.record(
+            ImportRecord.ResolutionMethod.STAFF_CREATE_NEW,
+            source=self.source(email="existing@example.com", mobile="0791234567"),
+        )
+
+        with self.assertRaises(ImportBatchPreflightError):
+            import_membership_form_batch(batch_id=self.batch.id)
+
+        self.assertEqual(Person.objects.count(), 1)
+
     def test_auto_and_staff_matches_fill_only_missing_person_fields_and_reuse_active_membership(self):
         auto_person = Person.objects.create(
             first_name="Current",
