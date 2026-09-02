@@ -313,6 +313,7 @@ class ImportRecordResolutionSerializer(StrictSerializer):
 
     resolution = serializers.ChoiceField(choices=(SAME_PERSON, DIFFERENT_PERSON))
     person_id = serializers.IntegerField(required=False, min_value=1)
+    confirm_identity_override = serializers.BooleanField(required=False, default=False)
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
@@ -320,6 +321,8 @@ class ImportRecordResolutionSerializer(StrictSerializer):
             raise serializers.ValidationError({"person_id": ["This field is required for SAME_PERSON."]})
         if attrs["resolution"] == self.DIFFERENT_PERSON and "person_id" in attrs:
             raise serializers.ValidationError({"person_id": ["This field is not allowed for DIFFERENT_PERSON."]})
+        if attrs["resolution"] == self.SAME_PERSON and attrs.get("confirm_identity_override"):
+            raise serializers.ValidationError({"confirm_identity_override": ["This field is only allowed for DIFFERENT_PERSON."]})
         return attrs
 
 

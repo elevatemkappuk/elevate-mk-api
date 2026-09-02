@@ -37,6 +37,7 @@ from data_imports.services.membership_form_upload import (
 from data_imports.services.membership_form_import import (
     ImportBatchNotImportable,
     ImportBatchPreflightError,
+    StaleCreateNewIdentityReview,
     import_membership_form_batch,
 )
 from data_imports.adapters.membership_form import MembershipFormStructureError
@@ -67,6 +68,12 @@ class ImportBatchImportConflict(APIException):
     status_code = status.HTTP_409_CONFLICT
     default_detail = "Import batch cannot be imported in its current state."
     default_code = "import_batch_import_conflict"
+
+
+class ImportBatchImportStaleIdentityConflict(APIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "The possible CRM matches have changed since this identity decision was made. Review the record again before adding it to the CRM."
+    default_code = "import_batch_import_stale_identity_conflict"
 
 
 class ImportBatchQuerysetMixin:
@@ -190,7 +197,7 @@ class ImportBatchImportView(ImportBatchQuerysetMixin, generics.GenericAPIView):
             401: OpenApiResponse(description="Authentication credentials were not provided."),
             403: OpenApiResponse(description="You do not have the CRM_ADMIN staff role."),
             404: OpenApiResponse(description="Import batch was not found."),
-            409: OpenApiResponse(description="Import batch cannot be imported in its current state."),
+            409: OpenApiResponse(description="Import batch is not importable or reviewed identity evidence has become stale."),
         },
         tags=["Historical Imports"],
     )
@@ -202,6 +209,8 @@ class ImportBatchImportView(ImportBatchQuerysetMixin, generics.GenericAPIView):
             )
         except ImportBatch.DoesNotExist:
             raise NotFound("Not found.")
+        except StaleCreateNewIdentityReview:
+            raise ImportBatchImportStaleIdentityConflict
         except (ImportBatchNotImportable, ImportBatchPreflightError):
             raise ImportBatchImportConflict
 
@@ -336,6 +345,7 @@ class ImportReviewResolveView(generics.GenericAPIView):
         description=(
             "Records a CRM_ADMIN decision only. SAME_PERSON requires an analyzer candidate BUSINESS Person. "
             "DIFFERENT_PERSON records a future create-new decision and does not create a Person. "
+            "Email-involved identity evidence requires confirm_identity_override=true. "
             "This endpoint is concurrency-safe and never commits authoritative CRM mutations."
         ),
         request=ImportRecordResolutionSerializer,
@@ -362,6 +372,7 @@ class ImportReviewResolveView(generics.GenericAPIView):
                 record_id=self.kwargs["record_id"],
                 action=input_serializer.validated_data["resolution"],
                 person_id=input_serializer.validated_data.get("person_id"),
+                confirm_identity_override=input_serializer.validated_data.get("confirm_identity_override", False),
                 reviewed_by=request.user,
             )
         except ImportBatch.DoesNotExist:

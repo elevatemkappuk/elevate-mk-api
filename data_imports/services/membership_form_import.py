@@ -12,7 +12,12 @@ from audit.services import record_audit_event
 from data_imports.models import ImportBatch, ImportRecord
 from memberships.models import Membership
 from people.models import Person
-from people.services import evaluate_create_new_identity, normalize_email, normalize_mobile
+from people.services import (
+    evaluate_create_new_identity,
+    normalize_email,
+    normalize_mobile,
+    reviewed_create_new_identity_evidence,
+)
 from professional_profiles.models import Industry, ProfessionalProfile
 
 
@@ -25,6 +30,10 @@ class ImportBatchNotImportable(MembershipFormImportError):
 
 
 class ImportBatchPreflightError(MembershipFormImportError):
+    pass
+
+
+class StaleCreateNewIdentityReview(ImportBatchPreflightError):
     pass
 
 
@@ -155,9 +164,10 @@ def _preflight_records(batch, records):
                 raise ImportBatchPreflightError("A create-new record already has a resolved Person.")
             _validate_new_person_source(source)
             _validate_new_person_identity(
+                record,
                 source,
                 create_identity_keys,
-                staff_confirmed_different=method == ImportRecord.ResolutionMethod.STAFF_CREATE_NEW,
+                staff_create_new=method == ImportRecord.ResolutionMethod.STAFF_CREATE_NEW,
             )
             plans.append(ImportPlan(record, source, None, joined_at, _match_industry(source), True))
         else:
@@ -176,15 +186,26 @@ def _validate_new_person_source(source):
         raise ImportBatchPreflightError("A create-new record requires first_name and last_name.")
 
 
-def _validate_new_person_identity(source, create_identity_keys, *, staff_confirmed_different):
+def _validate_new_person_identity(record, source, create_identity_keys, *, staff_create_new):
     email = _value(source.get("email"))
     mobile = _value(source.get("mobile"))
     identity_policy = evaluate_create_new_identity(
         primary_email=email,
         mobile=mobile,
-        staff_confirmed_different=staff_confirmed_different,
     )
-    if not identity_policy.is_safe_to_create:
+    if staff_create_new:
+        reviewed_evidence = (record.match_evidence or {}).get("staff_create_new_review")
+        if reviewed_evidence is None:
+            reviewed_evidence = reviewed_create_new_identity_evidence(record.match_candidates)
+        if reviewed_evidence is not None and not identity_policy.matches_reviewed_evidence(reviewed_evidence):
+            raise StaleCreateNewIdentityReview(
+                "The possible CRM matches have changed since this identity decision was made. Review the record again before adding it to the CRM."
+            )
+        if reviewed_evidence is None and identity_policy.requires_review:
+            raise StaleCreateNewIdentityReview(
+                "The possible CRM matches have changed since this identity decision was made. Review the record again before adding it to the CRM."
+            )
+    elif identity_policy.requires_review:
         raise ImportBatchPreflightError("A create-new record now has a blocking CRM identity collision.")
     keys = {
         ("email", normalize_email(email)),

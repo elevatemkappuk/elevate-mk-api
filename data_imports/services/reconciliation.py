@@ -16,7 +16,7 @@ class ReconciliationValidationError(Exception):
     """Raised when a requested decision is not valid for the analyzed record."""
 
 
-def resolve_import_record(*, batch_id, record_id, action, person_id, reviewed_by):
+def resolve_import_record(*, batch_id, record_id, action, person_id, reviewed_by, confirm_identity_override=False):
     """Persist one explicit staff decision without mutating authoritative CRM records."""
     with transaction.atomic():
         batch = ImportBatch.objects.select_for_update().filter(pk=batch_id).first()
@@ -41,11 +41,15 @@ def resolve_import_record(*, batch_id, record_id, action, person_id, reviewed_by
                 primary_email=source.get("email"),
                 mobile=source.get("mobile"),
                 staff_confirmed_different=True,
+                confirm_identity_override=confirm_identity_override,
             )
             if not identity_policy.is_safe_to_create:
-                raise ReconciliationConflict(
-                    "This record uses an email address already assigned to an existing CRM Person and cannot be created as a separate Person."
+                raise ReconciliationValidationError(
+                    "This record uses contact details already associated with another CRM Person. Confirm that these are different people before creating a separate Person."
                 )
+            match_evidence = dict(record.match_evidence or {})
+            match_evidence["staff_create_new_review"] = identity_policy.review_evidence()
+            record.match_evidence = match_evidence
             record.resolved_person = None
             record.resolution_method = ImportRecord.ResolutionMethod.STAFF_CREATE_NEW
             record.resolution_reason = "STAFF_CONFIRMED_DIFFERENT_PERSON"
@@ -66,6 +70,7 @@ def resolve_import_record(*, batch_id, record_id, action, person_id, reviewed_by
                 "outcome",
                 "reviewed_by",
                 "reviewed_at",
+                "match_evidence",
                 "updated_at",
             ]
         )
@@ -85,9 +90,10 @@ def resolve_import_record(*, batch_id, record_id, action, person_id, reviewed_by
         }
         if record.resolved_person_id is not None:
             metadata["resolved_person_id"] = str(record.resolved_person_id)
-        if action == "DIFFERENT_PERSON" and identity_policy.collision == CreateNewIdentityCollision.MOBILE_COLLISION:
+        if action == "DIFFERENT_PERSON" and identity_policy.requires_review:
             metadata["identity_collision"] = identity_policy.collision.value
             metadata["identity_collision_person_ids"] = [str(person_id) for person_id in identity_policy.matched_person_ids]
+            metadata["identity_override_confirmed"] = bool(confirm_identity_override)
         record_audit_event(
             action=audit_action,
             actor_user=reviewed_by,

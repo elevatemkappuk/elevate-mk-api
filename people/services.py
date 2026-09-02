@@ -17,7 +17,26 @@ class CreateNewIdentityCollision(str, Enum):
 class CreateNewIdentityPolicy:
     collision: CreateNewIdentityCollision
     matched_person_ids: tuple[int, ...]
+    requires_review: bool
+    requires_strong_confirmation: bool
     is_safe_to_create: bool
+
+    def review_evidence(self) -> dict:
+        return {
+            "collision": self.collision.value,
+            "matched_person_ids": list(self.matched_person_ids),
+        }
+
+    def matches_reviewed_evidence(self, evidence) -> bool:
+        if not isinstance(evidence, dict):
+            return False
+        person_ids = evidence.get("matched_person_ids")
+        return (
+            evidence.get("collision") == self.collision.value
+            and isinstance(person_ids, list)
+            and tuple(sorted(person_id for person_id in person_ids if isinstance(person_id, int))) == self.matched_person_ids
+            and len(person_ids) == len(self.matched_person_ids)
+        )
 
 
 def normalize_email(value):
@@ -58,7 +77,13 @@ def find_business_duplicate_people(*, primary_email="", mobile="", exclude_perso
     return list({person.id: person for person in candidates}.values())
 
 
-def evaluate_create_new_identity(*, primary_email="", mobile="", staff_confirmed_different=False):
+def evaluate_create_new_identity(
+    *,
+    primary_email="",
+    mobile="",
+    staff_confirmed_different=False,
+    confirm_identity_override=False,
+):
     """Apply the CRM identity policy for a proposed separate BUSINESS Person."""
     normalized_email = normalize_email(primary_email)
     normalized_mobile = normalize_mobile(mobile)
@@ -82,11 +107,39 @@ def evaluate_create_new_identity(*, primary_email="", mobile="", staff_confirmed
     else:
         collision = CreateNewIdentityCollision.NO_BLOCKING_COLLISION
 
+    requires_review = collision != CreateNewIdentityCollision.NO_BLOCKING_COLLISION
+    requires_strong_confirmation = collision in (
+        CreateNewIdentityCollision.EMAIL_COLLISION,
+        CreateNewIdentityCollision.EMAIL_AND_MOBILE_COLLISION,
+    )
     return CreateNewIdentityPolicy(
         collision=collision,
         matched_person_ids=tuple(sorted({person.id for person in [*email_matches, *mobile_matches]})),
-        is_safe_to_create=(
-            collision == CreateNewIdentityCollision.NO_BLOCKING_COLLISION
-            or (collision == CreateNewIdentityCollision.MOBILE_COLLISION and staff_confirmed_different)
+        requires_review=requires_review,
+        requires_strong_confirmation=requires_strong_confirmation,
+        is_safe_to_create=(not requires_review) or (
+            staff_confirmed_different and (not requires_strong_confirmation or confirm_identity_override)
         ),
     )
+
+
+def reviewed_create_new_identity_evidence(match_candidates) -> dict | None:
+    """Derive safe legacy review evidence from analyzer snapshots when needed."""
+    email_ids = set()
+    mobile_ids = set()
+    for candidate in match_candidates or []:
+        if not isinstance(candidate, dict) or not isinstance(candidate.get("person_id"), int):
+            continue
+        if "email" in candidate.get("matched_on", []):
+            email_ids.add(candidate["person_id"])
+        if "mobile" in candidate.get("matched_on", []):
+            mobile_ids.add(candidate["person_id"])
+    if email_ids and mobile_ids:
+        collision = CreateNewIdentityCollision.EMAIL_AND_MOBILE_COLLISION
+    elif email_ids:
+        collision = CreateNewIdentityCollision.EMAIL_COLLISION
+    elif mobile_ids:
+        collision = CreateNewIdentityCollision.MOBILE_COLLISION
+    else:
+        return None
+    return {"collision": collision.value, "matched_person_ids": sorted(email_ids | mobile_ids)}

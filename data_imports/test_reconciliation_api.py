@@ -210,14 +210,54 @@ class ImportReconciliationApiTests(APITestCase):
 
         record.refresh_from_db()
         self.batch.refresh_from_db()
-        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(
             response.data["detail"],
-            "This record uses an email address already assigned to an existing CRM Person and cannot be created as a separate Person.",
+            "This record uses contact details already associated with another CRM Person. Confirm that these are different people before creating a separate Person.",
         )
         self.assertEqual(record.status, ImportRecord.Status.REVIEW_REQUIRED)
         self.assertNotEqual(record.resolution_method, ImportRecord.ResolutionMethod.STAFF_CREATE_NEW)
         self.assertEqual(self.batch.status, ImportBatch.Status.READY_FOR_REVIEW)
+
+    def test_confirmed_different_person_allows_email_collision_and_persists_safe_evidence(self):
+        record = self.create_review_record(source_overrides={"email": self.person.primary_email, "mobile": "0799999999"})
+        self.authenticate_as(self.admin)
+
+        response = self.client.post(
+            f"/api/v1/imports/{self.batch.id}/review/{record.id}/resolve/",
+            {"resolution": "DIFFERENT_PERSON", "confirm_identity_override": True},
+            format="json",
+        )
+
+        record.refresh_from_db()
+        event = AuditEvent.objects.get(entity_id=str(record.id))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(record.resolution_method, ImportRecord.ResolutionMethod.STAFF_CREATE_NEW)
+        self.assertEqual(
+            record.match_evidence["staff_create_new_review"],
+            {"collision": "EMAIL_COLLISION", "matched_person_ids": [self.person.id]},
+        )
+        self.assertEqual(event.metadata["identity_collision"], "EMAIL_COLLISION")
+        self.assertTrue(event.metadata["identity_override_confirmed"])
+        self.assertNotIn(self.person.primary_email, str(event.metadata))
+        self.assertNotIn(self.person.mobile, str(event.metadata))
+
+    def test_confirmed_different_person_allows_email_and_mobile_collision(self):
+        record = self.create_review_record(source_overrides={"email": self.person.primary_email, "mobile": self.person.mobile})
+        self.authenticate_as(self.admin)
+
+        response = self.client.post(
+            f"/api/v1/imports/{self.batch.id}/review/{record.id}/resolve/",
+            {"resolution": "DIFFERENT_PERSON", "confirm_identity_override": True},
+            format="json",
+        )
+
+        record.refresh_from_db()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            record.match_evidence["staff_create_new_review"],
+            {"collision": "EMAIL_AND_MOBILE_COLLISION", "matched_person_ids": [self.person.id]},
+        )
 
     def test_batch_remains_ready_for_review_until_the_final_review_record_is_resolved(self):
         first_record = self.create_review_record()

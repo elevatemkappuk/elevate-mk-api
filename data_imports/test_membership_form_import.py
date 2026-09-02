@@ -116,6 +116,8 @@ class MembershipFormImportServiceTests(TestCase):
             ImportRecord.ResolutionMethod.STAFF_CREATE_NEW,
             source=self.source(email="new@example.com", mobile="0791234567"),
         )
+        record.match_evidence = {"staff_create_new_review": {"collision": "MOBILE_COLLISION", "matched_person_ids": [existing.id]}}
+        record.save(update_fields=["match_evidence"])
 
         result = import_membership_form_batch(batch_id=self.batch.id)
 
@@ -148,7 +150,7 @@ class MembershipFormImportServiceTests(TestCase):
         self.assertIsNone(blocked.committed_at)
         self.assertEqual(self.batch.status, ImportBatch.Status.READY_FOR_IMPORT)
 
-    def test_staff_create_new_blocks_email_and_mobile_collision(self):
+    def test_staff_create_new_requires_reviewed_email_and_mobile_evidence(self):
         Person.objects.create(first_name="Existing", last_name="Person", primary_email="existing@example.com", mobile="0791234567")
         self.record(
             ImportRecord.ResolutionMethod.STAFF_CREATE_NEW,
@@ -158,6 +160,57 @@ class MembershipFormImportServiceTests(TestCase):
         with self.assertRaises(ImportBatchPreflightError):
             import_membership_form_batch(batch_id=self.batch.id)
 
+        self.assertEqual(Person.objects.count(), 1)
+
+    def test_staff_create_new_allows_unchanged_reviewed_email_and_mobile_collision(self):
+        existing = Person.objects.create(first_name="Existing", last_name="Person", primary_email="existing@example.com", mobile="0791234567")
+        record = self.record(
+            ImportRecord.ResolutionMethod.STAFF_CREATE_NEW,
+            source=self.source(email="existing@example.com", mobile="0791234567"),
+        )
+        record.match_evidence = {
+            "staff_create_new_review": {
+                "collision": "EMAIL_AND_MOBILE_COLLISION",
+                "matched_person_ids": [existing.id],
+            }
+        }
+        record.save(update_fields=["match_evidence"])
+
+        import_membership_form_batch(batch_id=self.batch.id)
+
+        record.refresh_from_db()
+        self.assertEqual(record.status, ImportRecord.Status.COMMITTED)
+        self.assertNotEqual(record.resolved_person_id, existing.id)
+
+    def test_staff_create_new_allows_unchanged_reviewed_email_collision(self):
+        existing = Person.objects.create(first_name="Existing", last_name="Person", primary_email="existing@example.com", mobile="")
+        record = self.record(
+            ImportRecord.ResolutionMethod.STAFF_CREATE_NEW,
+            source=self.source(email="existing@example.com", mobile="0791234567"),
+        )
+        record.match_evidence = {"staff_create_new_review": {"collision": "EMAIL_COLLISION", "matched_person_ids": [existing.id]}}
+        record.save(update_fields=["match_evidence"])
+
+        import_membership_form_batch(batch_id=self.batch.id)
+
+        record.refresh_from_db()
+        self.assertEqual(record.status, ImportRecord.Status.COMMITTED)
+        self.assertNotEqual(record.resolved_person_id, existing.id)
+
+    def test_staff_create_new_blocks_stale_reviewed_identity_evidence_without_mutation(self):
+        record = self.record(
+            ImportRecord.ResolutionMethod.STAFF_CREATE_NEW,
+            source=self.source(email="existing@example.com", mobile="0791234567"),
+        )
+        record.match_evidence = {"staff_create_new_review": {"collision": "EMAIL_COLLISION", "matched_person_ids": [999]}}
+        record.save(update_fields=["match_evidence"])
+        Person.objects.create(first_name="Existing", last_name="Person", primary_email="existing@example.com", mobile="")
+
+        with self.assertRaises(ImportBatchPreflightError):
+            import_membership_form_batch(batch_id=self.batch.id)
+
+        record.refresh_from_db()
+        self.assertIsNone(record.committed_at)
         self.assertEqual(Person.objects.count(), 1)
 
     def test_auto_and_staff_matches_fill_only_missing_person_fields_and_reuse_active_membership(self):
