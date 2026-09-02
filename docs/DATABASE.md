@@ -1,6 +1,6 @@
 # Elevate MK Database
 Status: Living Documentation
-Last Updated: 2026-08-31
+Last Updated: 2026-09-02
 
 ## Scope
 This document describes the Elevate-owned database/domain structures currently implemented in the Django API codebase.
@@ -24,6 +24,9 @@ The current Elevate-owned models are:
 - `staff_access.StaffRoleAssignment`
 - `data_imports.ImportBatch`
 - `data_imports.ImportRecord`
+- `events.Event`
+- `events.EventParticipation`
+- `events.ExternalEventReference`
 
 ## Historical Import Staging
 
@@ -87,6 +90,27 @@ The backend-only Membership Form import service is the first authoritative histo
 - existing audit actions record Person, Membership, and ProfessionalProfile mutation with identifier-only import provenance; `IMPORT_BATCH_IMPORTED` records batch completion.
 - the service is idempotent by batch status: an `IMPORTED` batch is not importable again.
 
+## Events Domain
+
+The Events domain is provider-neutral. External providers and future Elevate MK Community ticketing feed authoritative `Event` and `EventParticipation` records through provider adapters; Eventbrite is not part of the core schema.
+
+```text
+External provider or Community platform
+  -> provider adapter
+  -> Event <- ExternalEventReference (EVENT)
+  -> EventParticipation <- ExternalEventReference (PARTICIPATION)
+  -> Person
+```
+
+- one source row does not imply one Event, Person, or EventParticipation
+- repeated provider identities resolve through `ExternalEventReference`, allowing a future adapter to reuse an Event and participation idempotently
+- Event identity and registration/order/participation identity use separate typed references; `external_id` is never overloaded without its `reference_type`
+- `provider` is an extensible string, not an Eventbrite-only enum. Current and future adapters may use values such as `EVENTBRITE` and `COMMUNITY`.
+- `ImportRecord` may be retained as optional provenance on an external reference without adding provider-specific columns to Event or EventParticipation
+- an EventParticipation is one Person's participation in one Event. A provider adapter must use an attendee/registration-specific identifier when a provider order covers more than one person.
+- EventParticipation is fully isolated from Membership: it never creates, changes, reactivates, ends, or otherwise mutates Membership. A contact, ACTIVE Member, FORMER Member, or archived Person may be referenced without lifecycle changes.
+- no Events API or Staff CRM Events UI exists in V1; Django Admin is technical inspection only.
+
 Django-managed framework tables also exist because this project uses Django authentication, permissions, content types, admin, and server-side sessions. Those framework tables are not documented field-by-field here.
 
 ## Identity Relationship
@@ -101,6 +125,7 @@ Current rules:
 - A `Person` may also have zero or many assigned `Skill` definitions through `PersonSkill`.
 - A `Person` may also have zero or many assigned `Interest` definitions through `PersonInterest`.
 - A `Person` may also have zero or many internal CRM `Tag` classifications through `PersonTag`.
+- A `Person` may have zero or many `EventParticipation` records across zero or many Events.
 - An authenticated `User` may also be referenced as the actor on zero or many immutable `AuditEvent` rows.
 
 Information deliberately stored on `Person` instead of `User`:
@@ -991,3 +1016,77 @@ Current implementation:
 - archived note requires `archived_by`
 - normal application hard-delete is blocked at model and queryset level
 - no revision table exists in V1
+
+## Model: `events.Event`
+Database table: `events_event`
+
+Purpose:
+- Provider-neutral authoritative event record. It stores Elevate's Event identity, not an external provider's identifier.
+
+### Fields
+| Field | Type | Null / Blank | Default / Automatic | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
+| `name` | `CharField(255)` | not null | none | Event name |
+| `start_at` | `DateTimeField` | not null | none | Canonical start instant |
+| `end_at` | `DateTimeField` | `null=True`, `blank=True` | none | Optional end instant |
+| `timezone` | `CharField(64)` | not null | none | Source/canonical timezone identifier, for example `Africa/Blantyre` |
+| `location_name` | `CharField(255)` | not null, `blank=True` | empty string | Optional provider-neutral location text |
+| `status` | `CharField(20)` | not null | `SCHEDULED` | `SCHEDULED`, `COMPLETED`, or `CANCELLED` |
+| `created_at` | `DateTimeField` | not null | `auto_now_add=True` | Set automatically on create |
+| `updated_at` | `DateTimeField` | not null | `auto_now=True` | Updated automatically on save |
+
+### Constraints and Behavior
+- default ordering is `start_at DESC`, then `id DESC`
+- Event has no provider-specific identifier such as an Eventbrite event ID
+- external identity is stored separately by `ExternalEventReference`
+
+## Model: `events.EventParticipation`
+Database table: `events_eventparticipation`
+
+Purpose:
+- Authoritative relationship between one canonical Person and one Event.
+
+### Fields
+| Field | Type | Null / Blank | Default / Automatic | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
+| `event` | `ForeignKey(events.Event)` | not null | none | Required Event, `PROTECT` |
+| `person` | `ForeignKey(people.Person)` | not null | none | Required canonical Person, `PROTECT` |
+| `status` | `CharField(20)` | not null | `REGISTERED` | `REGISTERED`, `ATTENDED`, or `CANCELLED` |
+| `ticket_quantity` | `PositiveIntegerField` | `null=True`, `blank=True` | none | Optional provider-neutral quantity |
+| `registered_at` | `DateTimeField` | `null=True`, `blank=True` | none | Optional registration instant |
+| `created_at` | `DateTimeField` | not null | `auto_now_add=True` | Set automatically on create |
+| `updated_at` | `DateTimeField` | not null | `auto_now=True` | Updated automatically on save |
+
+### Constraints and Behavior
+- unique constraint: `(event_id, person_id)`; repeated imports cannot create a second authoritative participation for the same Person and Event
+- index: `(person_id, event_id)` for Person-centric lookup
+- provider data must not cause `ATTENDED` to be claimed unless source evidence proves attendance; imported registrations normally begin as `REGISTERED`
+- no Person contact snapshot is duplicated here in V1
+- no Membership lifecycle behavior is coupled to this model
+
+## Model: `events.ExternalEventReference`
+Database table: `events_externaleventreference`
+
+Purpose:
+- Durable provider-neutral external identity and import provenance for Event and EventParticipation records.
+
+### Fields
+| Field | Type | Null / Blank | Default / Automatic | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
+| `provider` | `CharField(100)` | not null | none | Extensible provider identifier, such as `EVENTBRITE` or `COMMUNITY` |
+| `reference_type` | `CharField(20)` | not null | none | `EVENT` or `PARTICIPATION` |
+| `external_id` | `CharField(255)` | not null | none | Provider ID scoped by provider and reference type |
+| `event` | `ForeignKey(events.Event)` | not null | none | Required authoritative Event, `PROTECT` |
+| `participation` | `ForeignKey(events.EventParticipation)` | `null=True`, `blank=True` | none | Optional authoritative participation, `PROTECT` |
+| `import_record` | `ForeignKey(data_imports.ImportRecord)` | `null=True`, `blank=True` | none | Optional durable source-row provenance, `PROTECT` |
+| `created_at` | `DateTimeField` | not null | `auto_now_add=True` | Set automatically on create |
+
+### Constraints and Behavior
+- unique constraint: `(provider, reference_type, external_id)`
+- the same provider ID may be used once as an Event reference and once as a participation reference because those are distinct identity namespaces
+- the same external ID can coexist across providers; an Eventbrite ID and a Community ID are not treated as the same source identity
+- indexes support lookup by Event/reference type and Participation/reference type
+- future Eventbrite and Community adapters attach their source IDs here, leaving Event and EventParticipation provider-neutral

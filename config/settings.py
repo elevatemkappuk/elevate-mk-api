@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     'notes',
     'notifications',
     'data_imports',
+    'events',
     'corsheaders',
     'rest_framework',
     'drf_spectacular',
