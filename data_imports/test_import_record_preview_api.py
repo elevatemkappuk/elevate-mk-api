@@ -113,12 +113,45 @@ class ImportRecordPreviewApiTests(APITestCase):
         self.assertEqual(records[3]["resolution_method"], ImportRecord.ResolutionMethod.STAFF_CREATE_NEW)
         self.assertEqual(records[4]["status"], ImportRecord.Status.REVIEW_REQUIRED)
         self.assertEqual(records[5]["status"], ImportRecord.Status.INVALID)
+        self.assertEqual(records[5]["validation_errors"], [])
         self.assertEqual(records[6]["status"], ImportRecord.Status.COMMITTED)
         self.assertIn("source", auto_match)
         self.assertNotIn("raw_data", auto_match)
+        self.assertNotIn("normalized_data", auto_match)
         self.assertEqual(Person.objects.count(), before_people)
         self.assertEqual(Membership.objects.count(), before_memberships)
         self.assertEqual(ProfessionalProfile.objects.count(), before_profiles)
+
+    def test_preview_exposes_only_safe_structured_validation_errors(self):
+        self.record(
+            "invalid-row",
+            status=ImportRecord.Status.INVALID,
+            validation_errors=[
+                {"field": "age_range", "code": "unsupported_age_range", "message": "internal: 46 - 50"},
+                {"field": "gender", "code": "unsupported_gender", "message": "internal: Prefer not to say"},
+                {"field": "email", "code": "invalid_email", "message": "internal validation exception"},
+                {"field": "linkedin_url", "code": "invalid_url", "message": "internal URL validator exception"},
+                {"field": "mobile", "code": "unexpected", "message": "must never be exposed"},
+            ],
+        )
+        self.authenticate_as(self.admin)
+
+        response = self.client.get(f"/api/v1/imports/{self.batch.id}/records/")
+
+        record = response.data["results"][0]
+        self.assertEqual(
+            record["validation_errors"],
+            [
+                {"field": "age_range", "code": "unsupported_age_range", "message": "Age range is not supported."},
+                {"field": "gender", "code": "unsupported_gender", "message": "Gender is not supported."},
+                {"field": "email", "code": "invalid_email", "message": "Email address is not valid."},
+                {"field": "linkedin_url", "code": "invalid_url", "message": "LinkedIn URL is not valid."},
+            ],
+        )
+        self.assertNotIn("raw_data", record)
+        self.assertNotIn("normalized_data", record)
+        self.assertNotIn("internal", str(record))
+        self.assertNotIn("must never be exposed", str(record))
 
     def test_batch_counts_distinguish_existing_matches_from_future_new_people(self):
         self.record("auto", resolution_method=ImportRecord.ResolutionMethod.AUTO_MATCH, resolved_person=self.person)

@@ -148,9 +148,24 @@ class ImportReviewBatchContextSerializer(serializers.Serializer):
     status = serializers.CharField()
 
 
+class ImportValidationErrorSerializer(serializers.Serializer):
+    field = serializers.CharField()
+    code = serializers.CharField()
+    message = serializers.CharField()
+
+
+SAFE_VALIDATION_MESSAGES = {
+    ("age_range", "unsupported_age_range"): "Age range is not supported.",
+    ("gender", "unsupported_gender"): "Gender is not supported.",
+    ("email", "invalid_email"): "Email address is not valid.",
+    ("linkedin_url", "invalid_url"): "LinkedIn URL is not valid.",
+}
+
+
 class ImportReviewRecordSerializer(serializers.ModelSerializer):
     source = serializers.SerializerMethodField()
     candidates = serializers.SerializerMethodField()
+    validation_errors = serializers.SerializerMethodField()
 
     class Meta:
         model = ImportRecord
@@ -211,6 +226,19 @@ class ImportReviewRecordSerializer(serializers.ModelSerializer):
             )
         return candidates
 
+    @extend_schema_field(ImportValidationErrorSerializer(many=True))
+    def get_validation_errors(self, record) -> list[dict]:
+        errors = []
+        for error in record.validation_errors or []:
+            if not isinstance(error, dict):
+                continue
+            field = error.get("field")
+            code = error.get("code")
+            message = SAFE_VALIDATION_MESSAGES.get((field, code))
+            if message:
+                errors.append({"field": field, "code": code, "message": message})
+        return errors
+
 
 class ImportReviewDetailSerializer(ImportReviewRecordSerializer):
     batch = serializers.SerializerMethodField()
@@ -249,6 +277,7 @@ class ImportRecordPreviewSerializer(ImportReviewRecordSerializer):
             "resolution_reason",
             "resolved_person",
             "source",
+            "validation_errors",
             "reviewed_at",
             "committed_at",
         )
