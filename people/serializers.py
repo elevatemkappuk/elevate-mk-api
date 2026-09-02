@@ -124,7 +124,32 @@ class StrictPersonWriteSerializer(serializers.Serializer):
         return attrs
 
 
-class PersonCreateSerializer(StrictPersonWriteSerializer):
+class ReviewedIdentityCollisionSerializer(serializers.Serializer):
+    collision = serializers.ChoiceField(choices=(
+        "MOBILE_COLLISION",
+        "EMAIL_COLLISION",
+        "EMAIL_AND_MOBILE_COLLISION",
+    ))
+    person_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        allow_empty=False,
+    )
+
+
+class IdentityOverrideCreateSerializerMixin(serializers.Serializer):
+    confirm_identity_override = serializers.BooleanField(required=False, default=False)
+    reviewed_collision = ReviewedIdentityCollisionSerializer(required=False)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if attrs.get("confirm_identity_override") and "reviewed_collision" not in attrs:
+            raise serializers.ValidationError({"reviewed_collision": ["Reviewed collision evidence is required when confirming a separate Person."]})
+        if "reviewed_collision" in attrs and not attrs.get("confirm_identity_override"):
+            raise serializers.ValidationError({"confirm_identity_override": ["This field must be true when reviewed collision evidence is supplied."]})
+        return attrs
+
+
+class PersonCreateSerializer(IdentityOverrideCreateSerializerMixin, StrictPersonWriteSerializer):
     pass
 
 
@@ -133,7 +158,7 @@ class PersonUpdateSerializer(StrictPersonWriteSerializer):
     last_name = serializers.CharField(max_length=150, required=False)
 
 
-class PersonMemberCreateSerializer(StrictPersonWriteSerializer):
+class PersonMemberCreateSerializer(IdentityOverrideCreateSerializerMixin, StrictPersonWriteSerializer):
     joined_at = serializers.DateField()
     membership_source = serializers.ChoiceField(choices=Membership.Source.choices)
 
@@ -142,6 +167,13 @@ class DuplicatePersonMatchSerializer(serializers.ModelSerializer):
     class Meta:
         model = Person
         fields = ("id", "first_name", "last_name", "primary_email", "mobile", "archived_at")
+
+
+class IdentityCollisionResponseSerializer(serializers.Serializer):
+    code = serializers.ChoiceField(choices=("IDENTITY_COLLISION", "IDENTITY_COLLISION_STALE"))
+    detail = serializers.CharField()
+    collision = ReviewedIdentityCollisionSerializer()
+    candidates = DuplicatePersonMatchSerializer(many=True)
 
 
 class EmptyPersonLifecycleSerializer(serializers.Serializer):

@@ -22,6 +22,7 @@ from people.models import Person
 from people.serializers import (
     DuplicatePersonMatchSerializer,
     EmptyPersonLifecycleSerializer,
+    IdentityCollisionResponseSerializer,
     PaginatedPersonListSerializer,
     PersonCreateSerializer,
     PersonListQuerySerializer,
@@ -30,7 +31,7 @@ from people.serializers import (
     PersonOverviewSerializer,
     PersonUpdateSerializer,
 )
-from people.services import find_business_duplicate_people
+from people.services import evaluate_create_new_identity, find_business_duplicate_people
 from people.querying import PeopleDirectoryQuery
 from memberships.models import Membership
 from staff_access.models import StaffRole
@@ -82,6 +83,41 @@ class DuplicatePersonConflict(APIException):
                 "matches": DuplicatePersonMatchSerializer(matches, many=True).data,
             }
         )
+
+
+class IdentityCollisionConflict(APIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_code = "IDENTITY_COLLISION"
+
+    def __init__(self, policy, *, stale=False):
+        candidates = Person.objects.business().filter(pk__in=policy.matched_person_ids).order_by("last_name", "first_name", "id")
+        detail = (
+            "The possible CRM matches have changed. Review the existing People again before creating a separate Person."
+            if stale
+            else "A possible existing CRM Person was found."
+        )
+        super().__init__(
+            {
+                "detail": detail,
+                "code": "IDENTITY_COLLISION_STALE" if stale else self.default_code,
+                "collision": {
+                    "collision": policy.collision.value,
+                    "person_ids": list(policy.matched_person_ids),
+                },
+                "candidates": DuplicatePersonMatchSerializer(candidates, many=True).data,
+            }
+        )
+
+
+def identity_override_metadata(validated_data):
+    if not validated_data.get("confirm_identity_override"):
+        return None
+    reviewed_collision = validated_data["reviewed_collision"]
+    return {
+        "identity_override": True,
+        "identity_collision": reviewed_collision["collision"],
+        "identity_collision_person_ids": [str(person_id) for person_id in reviewed_collision["person_ids"]],
+    }
 
 
 class BusinessPersonQuerysetMixin:
@@ -172,7 +208,7 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
         summary="Create CRM Contact",
         description=(
             "Creates an active BUSINESS Person with no Membership. Only CRM_ADMIN and CRM_MANAGER "
-            "may create People. Potential duplicate BUSINESS identities, including archived records, return 409."
+            "may create People. Identity collisions, including archived BUSINESS records, require an explicit reviewed override."
         ),
         request=PersonCreateSerializer,
         responses={
@@ -180,7 +216,7 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
             400: OpenApiResponse(description="Invalid or server-managed request field."),
             401: OpenApiResponse(description="Authentication credentials were not provided."),
             403: OpenApiResponse(description="You do not have a permitted active staff role."),
-            409: OpenApiResponse(description="A possible existing BUSINESS Person was found."),
+            409: OpenApiResponse(response=IdentityCollisionResponseSerializer, description="A possible existing BUSINESS Person was found, or reviewed evidence is stale."),
         },
         tags=["People"],
     )
@@ -189,11 +225,11 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
         input_serializer.is_valid(raise_exception=True)
 
         with transaction.atomic():
-            self.raise_if_duplicate(**input_serializer.validated_data)
-            person = self.create_person(input_serializer.validated_data)
+            self.resolve_create_identity_collision(input_serializer.validated_data)
+            person = self.create_person(self.person_data(input_serializer.validated_data))
             self.record_person_audit(AuditEvent.Action.PERSON_CREATED, request.user, person, {
                 "created": {"from": False, "to": True},
-            })
+            }, identity_override_metadata(input_serializer.validated_data))
 
         return Response(PersonListSerializer(person).data, status=status.HTTP_201_CREATED)
 
@@ -208,6 +244,33 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
         return person
 
     @staticmethod
+    def person_data(validated_data):
+        return {
+            field: validated_data[field]
+            for field in ("first_name", "last_name", "primary_email", "mobile", "location", "age_range", "gender")
+            if field in validated_data
+        }
+
+    @staticmethod
+    def resolve_create_identity_collision(validated_data):
+        policy = evaluate_create_new_identity(
+            primary_email=validated_data.get("primary_email", ""),
+            mobile=validated_data.get("mobile", ""),
+        )
+        if validated_data.get("confirm_identity_override"):
+            reviewed_collision = validated_data.get("reviewed_collision", {})
+            reviewed_evidence = {
+                "collision": reviewed_collision.get("collision"),
+                "matched_person_ids": reviewed_collision.get("person_ids"),
+            }
+            if not policy.matches_reviewed_evidence(reviewed_evidence):
+                raise IdentityCollisionConflict(policy, stale=True)
+            return
+
+        if policy.requires_review:
+            raise IdentityCollisionConflict(policy)
+
+    @staticmethod
     def raise_if_duplicate(*, primary_email="", mobile="", exclude_person_id=None, **_unused):
         matches = find_business_duplicate_people(
             primary_email=primary_email,
@@ -218,14 +281,17 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
             raise DuplicatePersonConflict(matches)
 
     @staticmethod
-    def record_person_audit(action, actor_user, person, changes):
+    def record_person_audit(action, actor_user, person, changes, metadata=None):
+        audit_metadata = {"person_id": str(person.id)}
+        if metadata:
+            audit_metadata.update(metadata)
         record_audit_event(
             action=action,
             actor_user=actor_user,
             entity_type="Person",
             entity_id=person.id,
             changes=changes,
-            metadata={"person_id": str(person.id)},
+            metadata=audit_metadata,
         )
 
 
@@ -245,20 +311,17 @@ class PersonMemberCreateView(generics.GenericAPIView):
             400: OpenApiResponse(description="Invalid or server-managed request field."),
             401: OpenApiResponse(description="Authentication credentials were not provided."),
             403: OpenApiResponse(description="You do not have a permitted active staff role."),
-            409: OpenApiResponse(description="A possible existing BUSINESS Person was found."),
+            409: OpenApiResponse(response=IdentityCollisionResponseSerializer, description="A possible existing BUSINESS Person was found, or reviewed evidence is stale."),
         },
         tags=["People", "Membership"],
     )
     def post(self, request, *args, **kwargs):
         input_serializer = PersonMemberCreateSerializer(data=request.data)
         input_serializer.is_valid(raise_exception=True)
-        person_data = {
-            field: value for field, value in input_serializer.validated_data.items()
-            if field in PersonCreateSerializer().fields
-        }
+        person_data = PeopleListView.person_data(input_serializer.validated_data)
 
         with transaction.atomic():
-            PeopleListView.raise_if_duplicate(**person_data)
+            PeopleListView.resolve_create_identity_collision(input_serializer.validated_data)
             person = PeopleListView.create_person(person_data)
             membership = Membership(
                 person=person,
@@ -277,6 +340,7 @@ class PersonMemberCreateView(generics.GenericAPIView):
                 request.user,
                 person,
                 {"created": {"from": False, "to": True}},
+                identity_override_metadata(input_serializer.validated_data),
             )
             record_audit_event(
                 action=AuditEvent.Action.MEMBERSHIP_CREATED,

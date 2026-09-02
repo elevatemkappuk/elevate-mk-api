@@ -1119,9 +1119,115 @@ class PersonWriteLifecycleApiTests(TestCase):
 
         self.assertEqual(rejected.status_code, 400)
         self.assertEqual(email_duplicate.status_code, 409)
-        self.assertEqual(email_duplicate.data["code"], "duplicate_person")
+        self.assertEqual(email_duplicate.data["code"], "IDENTITY_COLLISION")
         self.assertEqual(mobile_duplicate.status_code, 409)
         self.assertEqual(technical_allowed.status_code, 201)
+
+    def test_create_identity_collision_returns_safe_structured_candidates_including_archived_people(self):
+        existing = Person.objects.create(
+            first_name="Existing", last_name="Person", primary_email="existing@example.com",
+            mobile="991000001", archived_at=timezone.now(),
+        )
+        self.authenticate(self.admin_user)
+
+        response = self.client.post(
+            self.create_url,
+            self.person_payload(primary_email=" EXISTING@example.com ", mobile="991000001"),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["code"], "IDENTITY_COLLISION")
+        self.assertEqual(response.data["collision"], {"collision": "EMAIL_AND_MOBILE_COLLISION", "person_ids": [existing.id]})
+        self.assertEqual(response.data["candidates"][0]["id"], existing.id)
+        self.assertIsNotNone(response.data["candidates"][0]["archived_at"])
+        self.assertNotIn("record_type", response.data["candidates"][0])
+
+    def test_confirmed_contact_identity_overrides_require_current_reviewed_evidence(self):
+        existing = Person.objects.create(first_name="Existing", last_name="Person", primary_email="existing@example.com")
+        self.authenticate(self.admin_user)
+        payload = self.person_payload(
+            primary_email="existing@example.com",
+            confirm_identity_override=True,
+            reviewed_collision={"collision": "EMAIL_COLLISION", "person_ids": [existing.id]},
+        )
+
+        response = self.client.post(self.create_url, payload, format="json")
+
+        self.assertEqual(response.status_code, 201)
+        created = Person.objects.get(pk=response.data["id"])
+        self.assertEqual(created.primary_email, "existing@example.com")
+        event = AuditEvent.objects.get(action=AuditEvent.Action.PERSON_CREATED, entity_id=str(created.id))
+        self.assertEqual(event.metadata["identity_collision"], "EMAIL_COLLISION")
+        self.assertEqual(event.metadata["identity_collision_person_ids"], [str(existing.id)])
+        self.assertNotIn("primary_email", event.metadata)
+        self.assertNotIn("mobile", event.metadata)
+
+    def test_stale_identity_override_is_rejected_without_creating_a_person(self):
+        existing = Person.objects.create(first_name="Existing", last_name="Person", primary_email="existing@example.com")
+        Person.objects.create(first_name="New", last_name="Candidate", primary_email="existing@example.com")
+        self.authenticate(self.admin_user)
+
+        response = self.client.post(
+            self.create_url,
+            self.person_payload(
+                primary_email="existing@example.com",
+                confirm_identity_override=True,
+                reviewed_collision={"collision": "EMAIL_COLLISION", "person_ids": [existing.id]},
+            ),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["code"], "IDENTITY_COLLISION_STALE")
+        self.assertEqual(Person.objects.filter(first_name="Amina", last_name="Zulu").count(), 0)
+
+    def test_confirmed_member_identity_override_is_atomic(self):
+        existing = Person.objects.create(first_name="Existing", last_name="Person", mobile="991000001")
+        self.authenticate(self.manager_user)
+        payload = self.person_payload(
+            primary_email="new@example.com", mobile="991000001", joined_at="2026-08-31", membership_source="STAFF",
+            confirm_identity_override=True,
+            reviewed_collision={"collision": "MOBILE_COLLISION", "person_ids": [existing.id]},
+        )
+
+        response = self.client.post(self.member_create_url, payload, format="json")
+
+        self.assertEqual(response.status_code, 201)
+        person = Person.objects.get(pk=response.data["id"])
+        self.assertEqual(person.membership.status, Membership.Status.ACTIVE)
+
+    def test_member_identity_override_rolls_back_when_membership_audit_fails(self):
+        existing = Person.objects.create(first_name="Existing", last_name="Person", mobile="991000001")
+        self.authenticate(self.manager_user)
+        payload = self.person_payload(
+            primary_email="new@example.com", mobile="991000001", joined_at="2026-08-31", membership_source="STAFF",
+            confirm_identity_override=True,
+            reviewed_collision={"collision": "MOBILE_COLLISION", "person_ids": [existing.id]},
+        )
+
+        with mock.patch("people.views.record_audit_event", side_effect=[None, RuntimeError("audit down")]):
+            response = self.client.post(self.member_create_url, payload, format="json")
+
+        self.assertEqual(response.status_code, 500)
+        self.assertFalse(Person.objects.filter(primary_email="new@example.com").exists())
+        self.assertFalse(Membership.objects.filter(person__primary_email="new@example.com").exists())
+
+    def test_viewer_cannot_use_identity_override(self):
+        existing = Person.objects.create(first_name="Existing", last_name="Person", primary_email="existing@example.com")
+        self.authenticate(self.viewer_user)
+
+        response = self.client.post(
+            self.create_url,
+            self.person_payload(
+                primary_email="existing@example.com",
+                confirm_identity_override=True,
+                reviewed_collision={"collision": "EMAIL_COLLISION", "person_ids": [existing.id]},
+            ),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
 
     def test_create_accepts_each_canonical_age_range_and_rejects_unsupported_value(self):
         self.authenticate(self.admin_user)

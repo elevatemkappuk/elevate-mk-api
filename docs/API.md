@@ -1281,23 +1281,26 @@ Only CRM-visible `BUSINESS` Persons are created or mutated. `record_type`, ident
 
 Creates an active `BUSINESS` Contact with no Membership. Required fields are `first_name` and `last_name`; optional Person-owned fields are `primary_email`, `mobile`, `location`, `age_range`, and `gender`. `age_range` accepts `UNDER_25`, `25_29`, `30_34`, `35_39`, `40_45`, or `OVER_45`; `gender` accepts `MALE`, `FEMALE`, `NON_BINARY`, `TRANSGENDER`, or `OTHER`. The response is `201 Created` with the standard Person representation.
 
-Before persistence, the API checks existing `BUSINESS` records, including archived records, for an exact normalized email (trimmed, lowercase) and a conservatively normalized mobile (trimmed with spaces, hyphens, and parentheses removed). Name alone never blocks creation. A match returns `409 Conflict`:
+Before persistence, the API checks existing `BUSINESS` records, including archived records, for an exact normalized email (trimmed, lowercase) and a conservatively normalized mobile (trimmed with spaces, hyphens, and parentheses removed). Name alone never blocks creation. A collision returns `409 Conflict` with safe candidate summaries:
 
 ```json
 {
-  "detail": "A possible existing Person was found.",
-  "code": "duplicate_person",
-  "matches": [{"id": 14, "first_name": "Amina", "last_name": "Zulu", "primary_email": "amina@example.com", "mobile": "991000001", "archived_at": null}]
+  "detail": "A possible existing CRM Person was found.",
+  "code": "IDENTITY_COLLISION",
+  "collision": {"collision": "EMAIL_COLLISION", "person_ids": [14]},
+  "candidates": [{"id": 14, "first_name": "Amina", "last_name": "Zulu", "primary_email": "amina@example.com", "mobile": "991000001", "archived_at": null}]
 }
 ```
 
-TECHNICAL records are never duplicate candidates. `PERSON_CREATED` is written in the same transaction as the Person.
+`collision.collision` is `MOBILE_COLLISION`, `EMAIL_COLLISION`, or `EMAIL_AND_MOBILE_COLLISION`. The client may retry only after an authorized staff member explicitly confirms a separate Person using `confirm_identity_override: true` and the exact safe `reviewed_collision` object from the 409 response. The server recomputes the evidence; changed candidates or collision type return `IDENTITY_COLLISION_STALE` with a refreshed safe candidate list and create nothing. Raw email or mobile is not used as confirmation evidence.
+
+TECHNICAL records are never duplicate candidates. `PERSON_CREATED` is written in the same transaction as the Person. Intentional overrides retain that event and add only collision type and matched Person IDs to its metadata.
 
 ### Endpoint: `POST /api/v1/people/members/`
 
 Creates a new `BUSINESS` Person and their first Membership atomically. It accepts the Contact fields above plus required `joined_at` (`YYYY-MM-DD`) and `membership_source`. The server forces Membership `status` to `ACTIVE` and `ended_at` to `null`.
 
-The endpoint returns `201 Created` with the standard Person representation. It emits both `PERSON_CREATED` and `MEMBERSHIP_CREATED`; a Person, Membership, or either audit persistence failure rolls back the whole workflow. Duplicate detection occurs before any row is created.
+The endpoint returns `201 Created` with the standard Person representation. It emits both `PERSON_CREATED` and `MEMBERSHIP_CREATED`; a Person, Membership, or either audit persistence failure rolls back the whole workflow. It uses the same collision and explicit reviewed-override contract as Contact creation, so an intentional duplicate can never create a partial Person if Membership creation later fails.
 
 This is distinct from `POST /api/v1/people/{person_id}/membership/`, which makes an already-existing Contact a Member.
 
