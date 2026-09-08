@@ -497,6 +497,13 @@ Returned Person fields:
 - `created_at`
 - `updated_at`
 
+Additional read-only directory projections:
+
+- `job_title`: current `ProfessionalProfile.job_title`, or `null` for no profile/empty title
+- `relationship`: `ACTIVE_MEMBER` for ACTIVE Membership, `FORMER_MEMBER` for FORMER Membership, `CONTACT` for no Membership
+- These fields are derived from the existing one-to-one relations, not stored on Person.
+- `archived_at` does not affect relationship type. Person write contracts and other response shapes are unchanged.
+
 Fields intentionally not exposed:
 
 - `record_type`
@@ -518,6 +525,8 @@ Example response:
       "last_name": "Zulu",
       "primary_email": "amina@example.com",
       "mobile": "991000001",
+      "job_title": "Programme Manager",
+      "relationship": "ACTIVE_MEMBER",
       "location": "Lilongwe",
       "age_range": "",
       "gender": "",

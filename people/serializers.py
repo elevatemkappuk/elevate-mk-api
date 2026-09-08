@@ -96,6 +96,33 @@ class PersonListSerializer(serializers.ModelSerializer):
         )
 
 
+class PersonDirectoryListSerializer(PersonListSerializer):
+    """Read-only related-domain projections for the directory, not Person fields."""
+
+    job_title = serializers.SerializerMethodField()
+    relationship = serializers.SerializerMethodField()
+
+    class Meta(PersonListSerializer.Meta):
+        fields = PersonListSerializer.Meta.fields + ("job_title", "relationship")
+
+    @extend_schema_field(serializers.CharField(allow_null=True, max_length=255))
+    def get_job_title(self, instance):
+        profile = getattr(instance, "professional_profile", None)
+        if profile is None:
+            return None
+        return profile.job_title or None
+
+    @extend_schema_field(serializers.ChoiceField(choices=("CONTACT", "ACTIVE_MEMBER", "FORMER_MEMBER")))
+    def get_relationship(self, instance):
+        membership = getattr(instance, "membership", None)
+        if membership is None:
+            return "CONTACT"
+        return {
+            Membership.Status.ACTIVE: "ACTIVE_MEMBER",
+            Membership.Status.FORMER: "FORMER_MEMBER",
+        }[membership.status]
+
+
 class StrictPersonWriteSerializer(serializers.Serializer):
     """Explicit Person write contract; read projections remain read-only."""
 
@@ -189,7 +216,7 @@ class PaginatedPersonListSerializer(serializers.Serializer):
     count = serializers.IntegerField()
     next = serializers.URLField(allow_null=True)
     previous = serializers.URLField(allow_null=True)
-    results = PersonListSerializer(many=True)
+    results = PersonDirectoryListSerializer(many=True)
 
 
 class PersonRelationshipSerializer(serializers.Serializer):

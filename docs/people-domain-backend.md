@@ -84,6 +84,14 @@ Implemented People routes are mounted under `/api/v1/`:
 
 See [API.md](API.md) for endpoint-level request and response schemas.
 
+The directory list adds two read-only projection fields to each result:
+`job_title` is the current `ProfessionalProfile.job_title` (null when the profile
+or title is absent), and `relationship` is `ACTIVE_MEMBER`, `FORMER_MEMBER`, or
+`CONTACT` from the one-to-one Membership's status or absence. Archive state does
+not change relationship type. The list eagerly loads both related records to
+avoid per-Person queries. These fields are not Person model/write fields; the
+basic detail, create/update, lifecycle, and Overview response shapes are unchanged.
+
 All People reads require an authenticated CRM staff role: `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER`. `CRM_ADMIN` and `CRM_MANAGER` perform Person, membership, profile, skill, interest, and tag writes. Internal Notes are restricted to Admin/Manager; a Viewer neither reads nor writes notes. Viewers can read the audit history, except Internal Note audit events are excluded. The backend is authoritative; UI gating is not a permission boundary.
 
 Archived BUSINESS Persons remain directly retrievable and may appear in the directory according to `record_state`; they are not eligible for normal mutation. Missing and TECHNICAL Persons both return `404` from CRM People routes.

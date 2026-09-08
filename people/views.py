@@ -25,6 +25,7 @@ from people.serializers import (
     IdentityCollisionResponseSerializer,
     PaginatedPersonListSerializer,
     PersonCreateSerializer,
+    PersonDirectoryListSerializer,
     PersonListQuerySerializer,
     PersonListSerializer,
     PersonMemberCreateSerializer,
@@ -132,7 +133,7 @@ class BusinessPersonQuerysetMixin:
 
 
 class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
-    serializer_class = PersonListSerializer
+    serializer_class = PersonDirectoryListSerializer
     permission_classes = [IsAuthenticated, HasPeopleAccess]
     pagination_class = PeoplePagination
 
@@ -141,6 +142,7 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
         summary="List CRM People",
         description=(
             "Returns BUSINESS Person records for the Staff CRM People directory. "
+            "Includes read-only job_title from ProfessionalProfile and relationship from Membership. "
             "TECHNICAL persons are excluded for all record_state values. "
             "Supports repeated relationship, location, industry, career_stage, interest, skill, and tag filters: "
             "values are ORed within a category and categories combine with AND. "
@@ -170,6 +172,8 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
                             "last_name": "Johnson",
                             "primary_email": "amina@example.com",
                             "mobile": "+265991234567",
+                            "job_title": "Programme Manager",
+                            "relationship": "ACTIVE_MEMBER",
                             "location": "Lilongwe",
                             "age_range": "",
                             "gender": "",
@@ -190,7 +194,9 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
 
     def get_queryset(self):
         params = getattr(self, "validated_query_params", self.get_validated_query_params())
-        return PeopleDirectoryQuery(self.get_business_people_queryset(), params).apply()
+        return PeopleDirectoryQuery(self.get_business_people_queryset(), params).apply().select_related(
+            "professional_profile", "membership",
+        )
 
     def get_validated_query_params(self):
         serializer = PersonListQuerySerializer(data=self.request.query_params)
