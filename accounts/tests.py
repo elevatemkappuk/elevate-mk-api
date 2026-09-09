@@ -142,6 +142,7 @@ class AuthenticationApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["detail"], "CSRF cookie set.")
+        self.assertTrue(response.data["csrf_token"])
 
     def test_csrf_bootstrap_sets_csrftoken_cookie(self):
         response = self.client.get(self.csrf_url)
@@ -166,7 +167,7 @@ class AuthenticationApiTests(TestCase):
 
     def test_login_succeeds_with_matching_csrf_cookie_and_header(self):
         csrf_response = self.csrf_client.get(self.csrf_url)
-        csrf_token = csrf_response.cookies["csrftoken"].value
+        csrf_token = csrf_response.data["csrf_token"]
 
         response = self.csrf_client.post(
             self.login_url,
@@ -441,6 +442,10 @@ class LocalBrowserDevelopmentConfigurationTests(TestCase):
         self.assertEqual(settings.CSRF_TRUSTED_ORIGINS, ["http://localhost:4200"])
         self.assertTrue(settings.SESSION_COOKIE_HTTPONLY)
         self.assertFalse(settings.CSRF_COOKIE_HTTPONLY)
+        self.assertEqual(settings.SESSION_COOKIE_SAMESITE, "Lax")
+        self.assertEqual(settings.CSRF_COOKIE_SAMESITE, "Lax")
+        self.assertFalse(settings.SESSION_COOKIE_SECURE)
+        self.assertFalse(settings.CSRF_COOKIE_SECURE)
 
 
 @override_settings(

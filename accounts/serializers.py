@@ -82,6 +82,11 @@ class DetailSerializer(serializers.Serializer):
     detail = serializers.CharField()
 
 
+class CsrfBootstrapSerializer(serializers.Serializer):
+    detail = serializers.CharField()
+    csrf_token = serializers.CharField()
+
+
 class PasswordResetRequestSerializer(serializers.Serializer):
     email = serializers.EmailField()
 

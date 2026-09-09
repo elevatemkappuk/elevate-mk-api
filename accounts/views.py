@@ -9,6 +9,7 @@ from django.utils.http import urlsafe_base64_encode
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.csrf import csrf_protect
+from django.middleware.csrf import get_token
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -19,6 +20,7 @@ from rest_framework.views import APIView
 from accounts.serializers import (
     AuthErrorSerializer,
     CurrentUserSerializer,
+    CsrfBootstrapSerializer,
     DetailSerializer,
     InvalidCredentialsError,
     LoginSerializer,
@@ -65,15 +67,18 @@ class CsrfView(APIView):
         request=None,
         responses={
             200: OpenApiResponse(
-                response=DetailSerializer,
-                description="CSRF cookie issued in the csrftoken response cookie.",
+                response=CsrfBootstrapSerializer,
+                description="CSRF cookie issued in the csrftoken response cookie and token returned for cross-origin clients.",
             ),
         },
         tags=["Authentication"],
         auth=[],
     )
     def get(self, request):
-        return Response({"detail": "CSRF cookie set."}, status=status.HTTP_200_OK)
+        return Response(
+            {"detail": "CSRF cookie set.", "csrf_token": get_token(request)},
+            status=status.HTTP_200_OK,
+        )
 
 
 @method_decorator(csrf_protect, name="dispatch")
