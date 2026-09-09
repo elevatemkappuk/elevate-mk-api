@@ -54,6 +54,32 @@ allowed. Credentialed CORS is enabled because the API uses Django session and
 cookie authentication. Cookies remain host-scoped: no `SESSION_COOKIE_DOMAIN`
 is configured, so the API session cookie is sent only to the API host.
 
+## Railway environments
+
+Production and staging should use separate Railway environments, databases,
+frontend origins, and Brevo credentials. The application settings already
+read these values from environment variables; configure each environment as
+follows:
+
+| Setting / Railway variable | Production | Staging |
+| --- | --- | --- |
+| `ALLOWED_HOSTS` | `elevate-mk-api-production.up.railway.app` | `elevate-mk-api-staging.up.railway.app` |
+| `CORS_ALLOWED_ORIGINS` | `https://<crm-production-domain>` | `https://<crm-staging-domain>` |
+| `CSRF_TRUSTED_ORIGINS` | `https://<crm-production-domain>` | `https://<crm-staging-domain>` |
+| `CRM_FRONTEND_URL` | `https://<crm-production-domain>` | `https://<crm-staging-domain>` |
+| `DJANGO_DEBUG` (`DEBUG`) | `False` | `False` |
+| `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` | Production database credentials and host | Staging database credentials and host |
+| `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME`, `BREVO_REPLY_TO_EMAIL`, `BREVO_REPLY_TO_NAME`, `BREVO_PASSWORD_RESET_TEMPLATE_ID` | Production Brevo credentials and template ID | Staging Brevo credentials and template ID |
+| `SECURE_SSL_REDIRECT` | `True` | `True` |
+
+`ALLOWED_HOSTS` contains hostnames without schemes. CORS and CSRF variables
+contain full origins including `https://`. Keep the production and staging
+database and Brevo values separate; do not copy production secrets into
+staging. `SECURE_PROXY_SSL_HEADER` is fixed in settings for Railway's
+`X-Forwarded-Proto` header in both environments, and secure session/CSRF
+cookies are enabled automatically while `DJANGO_DEBUG=False`. Railway's
+`PORT` remains dynamic in both environments.
+
 `No migrations to apply` is normal: it means the database already has every
 migration included in the deployed code. The command still proceeds to start
 Gunicorn.
