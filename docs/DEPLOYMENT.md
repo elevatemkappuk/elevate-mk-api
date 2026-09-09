@@ -21,11 +21,26 @@ Set the Railway variable `ALLOWED_HOSTS` to the hostnames Django should accept.
 For the production API, use:
 
 ```text
-`ALLOWED_HOSTS=backend url`.
+ALLOWED_HOSTS=elevate-mk-api-production.up.railway.app
 ```
 
 The setting accepts a comma-separated list, for example
-`ALLOWED_HOSTS=backend url`.
+`ALLOWED_HOSTS=elevate-mk-api-production.up.railway.app,api.example.com`.
+
+Railway terminates HTTPS at its reverse proxy and forwards the original scheme
+in `X-Forwarded-Proto`. Django is configured to trust that header, so the API
+origin does not need to be added to `CSRF_TRUSTED_ORIGINS` as a workaround for
+proxy scheme detection. Keep the CRM frontend origin in `CSRF_TRUSTED_ORIGINS`.
+
+Set these Railway variables for production:
+
+```text
+DJANGO_DEBUG=False
+SECURE_SSL_REDIRECT=True
+```
+
+`DJANGO_DEBUG` controls Django's `DEBUG` setting. Secure session and CSRF
+cookies are enabled automatically when `DEBUG=False`.
 
 Configure the separate CRM origin with full schemes for both CORS and CSRF:
 
