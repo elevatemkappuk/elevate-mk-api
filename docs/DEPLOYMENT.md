@@ -4,7 +4,7 @@ Railway should run the Django migrations before starting the web process. The
 versioned Railway configuration sets this Start Command:
 
 ```text
-python manage.py migrate && gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
+python manage.py collectstatic --noinput && python manage.py migrate && gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
 ```
 
 The service root must be the `elevate-mk-api` directory, where `manage.py`,
@@ -12,6 +12,10 @@ The service root must be the `elevate-mk-api` directory, where `manage.py`,
 runtime dependencies from `requirements.txt` before running the command. Railway
 provides `PORT` dynamically for each deployment, so Gunicorn binds to
 `0.0.0.0:$PORT`; do not replace it with a hardcoded port.
+
+Each deployment runs `collectstatic --noinput` before migrations and Gunicorn.
+WhiteNoise serves the collected files from `STATIC_ROOT`, including Django
+Admin CSS, JavaScript, and theme icons.
 
 Set the Railway variable `ALLOWED_HOSTS` to the hostnames Django should accept.
 For the production API, use:
