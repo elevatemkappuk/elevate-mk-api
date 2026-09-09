@@ -171,6 +171,7 @@ SPECTACULAR_SETTINGS = {
     "DESCRIPTION": "Backend API for the Elevate MK digital ecosystem.",
     "VERSION": "1.0.0",
     "ENUM_NAME_OVERRIDES": {
+        "AgeRangeEnum": "people.models.Person.AgeRange",
         "ImportBatchStatusEnum": "data_imports.models.ImportBatch.Status",
         "ImportRecordStatusEnum": "data_imports.models.ImportRecord.Status",
     },

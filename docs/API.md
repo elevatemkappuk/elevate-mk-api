@@ -2128,3 +2128,42 @@ Planned, not yet implemented:
 - broader people/domain APIs around the `Person` model beyond the current read-only list endpoint
 - additional first-party authenticated application endpoints under the `/api/v1/` convention
 - separate authorization-aware staff CRM capabilities once the authorization model exists
+
+
+## Staff CRM Dashboard
+
+`GET /api/v1/dashboard/` is a read-only projection for active CRM_ADMIN,
+CRM_MANAGER, or CRM_VIEWER role assignments. Anonymous callers receive 401;
+authenticated callers without a qualifying active role receive 403. Django staff
+and superuser flags do not grant access.
+
+Response sections:
+
+- `overview`: `total_people`, `active_members`, `contacts`, `former_members`.
+  All count non-archived BUSINESS People. Membership ACTIVE/FORMER determines member categories; no Membership means Contact.
+- `growth`: `people_by_month` and `members_by_month`, each six `{month: YYYY-MM,
+  count: integer}` entries oldest first, including zero months and the current
+  calendar month. Person creation counts non-archived BUSINESS People using
+  `Person.created_at` in the current backend timezone (UTC by default).
+  Membership growth uses the calendar date `Membership.joined_at` for all
+  BUSINESS-linked memberships, including FORMER memberships and archived People;
+  it measures historical joining, not membership-row creation or current status.
+  The window starts on the first day five months ago and ends exclusively at the
+  first day of next month. Future months are excluded.
+- `community_profile`: `top_locations` (`label`, `count`), `top_industries`
+  (`id`, `label`, `count`), and `age_ranges` (`value`, `label`, `count`). All count
+  non-archived BUSINESS People. Locations exclude missing/whitespace-only values
+  but retain stored labels without normalization. Industries use the current
+  ProfessionalProfile relationship, exclude missing Industry, and include stored
+  references even if a taxonomy entry is inactive. Top lists contain at most five
+  rows ordered by count descending then label ascending (Industry ID breaks equal
+  labels). Age ranges include every canonical Person choice in display order,
+  zero-filled; missing age values do not form an extra band.
+- `attention`: `imports_needing_review` counts ImportBatch rows with status
+  READY_FOR_REVIEW, not source rows. `archived_people` counts archived BUSINESS
+  People only. All authorized Dashboard roles receive these aggregate counts.
+
+No Events data, engagement scores, percentages, or inferred analytics are returned.
+The dedicated `dashboard` module uses database aggregation; the projection performs
+8 queries independent of the number of People, plus normal authentication/role
+queries. The nested response contract is documented in OpenAPI as Dashboard.
