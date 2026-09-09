@@ -1,4 +1,7 @@
+from datetime import timedelta
+
 from django.urls import resolve
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -90,6 +93,24 @@ class ImportReconciliationApiTests(APITestCase):
             self.assertEqual(self.client.get("/api/v1/imports/").status_code, status.HTTP_403_FORBIDDEN)
         self.authenticate_as(self.admin)
         self.assertEqual(self.client.get("/api/v1/imports/").status_code, status.HTTP_200_OK)
+
+    def test_import_list_orders_by_created_at_then_id_descending(self):
+        same_time = ImportBatch.objects.create(
+            source_type=ImportBatch.SourceType.EVENTBRITE,
+            source_filename="same-time.xlsx", source_fingerprint="c" * 64,
+        )
+        oldest = ImportBatch.objects.create(
+            source_type=ImportBatch.SourceType.MEMBERSHIP_FORM,
+            source_filename="oldest.xlsx", source_fingerprint="d" * 64,
+        )
+        now = timezone.now()
+        ImportBatch.objects.filter(pk__in=[self.batch.pk, same_time.pk]).update(created_at=now)
+        ImportBatch.objects.filter(pk=oldest.pk).update(created_at=now - timedelta(days=1))
+        self.create_review_record()
+        self.authenticate_as(self.admin)
+        response = self.client.get("/api/v1/imports/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["id"] for item in response.data], [same_time.pk, self.batch.pk, oldest.pk])
 
     def test_batch_list_returns_efficient_summary_counts(self):
         self.create_review_record()

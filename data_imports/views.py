@@ -115,7 +115,8 @@ class ImportBatchListView(ImportBatchQuerysetMixin, generics.ListAPIView):
         tags=["Historical Imports"],
     )
     def get_queryset(self):
-        return self.get_batch_queryset()
+        # Aggregated counts must retain explicit, deterministic newest-first ordering.
+        return self.get_batch_queryset().order_by("-created_at", "-id")
 
 
 class MembershipFormUploadView(ImportBatchQuerysetMixin, generics.GenericAPIView):
