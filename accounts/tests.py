@@ -12,6 +12,7 @@ from django.utils.http import urlsafe_base64_encode
 from rest_framework.test import APIClient
 
 from accounts.models import User
+from audit.models import AuditEvent
 from people.models import Person
 from notifications.exceptions import TransactionalEmailError
 from staff_access.models import StaffRole, StaffRoleAssignment
@@ -315,6 +316,13 @@ class AuthenticationApiTests(TestCase):
 
     def test_revoked_roles_are_excluded_from_me(self):
         assignment = StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role)
+        other_admin = User.objects.create_user(
+            email="other-admin@example.com",
+            password="testpass123",
+            person_first_name="Other",
+            person_last_name="Admin",
+        )
+        StaffRoleAssignment.objects.assign_role(user=other_admin, role=self.admin_role)
         assignment.revoke()
         self.client.post(
             self.login_url,

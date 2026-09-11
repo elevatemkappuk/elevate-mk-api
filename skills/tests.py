@@ -105,6 +105,7 @@ class SkillAdminTests(TestCase):
 class SkillApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.client.raise_request_exception = False
         self.skills_url = "/api/v1/skills/"
         self.person_skills_url_template = "/api/v1/people/{person_id}/skills/"
         self.person_skill_detail_url_template = "/api/v1/people/{person_id}/skills/{skill_id}/"

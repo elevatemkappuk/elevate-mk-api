@@ -321,8 +321,8 @@ class EventbriteImportApiTests(APITestCase):
             person_first_name="Event",
             person_last_name="Manager",
         )
-        admin_role = StaffRole.objects.create(code=StaffRole.CRM_ADMIN, name="CRM Administrator")
-        manager_role = StaffRole.objects.create(code=StaffRole.CRM_MANAGER, name="CRM Manager")
+        admin_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_ADMIN, defaults={"name": "CRM Administrator"})
+        manager_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_MANAGER, defaults={"name": "CRM Manager"})
         StaffRoleAssignment.objects.assign_role(user=self.admin, role=admin_role)
         StaffRoleAssignment.objects.assign_role(user=self.manager, role=manager_role)
 

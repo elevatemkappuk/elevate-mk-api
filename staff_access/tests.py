@@ -615,6 +615,8 @@ class StaffAdminTests(TestCase):
 
 @skipUnless(connection.vendor == "postgresql", "Requires PostgreSQL row-level locking semantics.")
 class FinalCrmAdminConcurrencyTests(TransactionTestCase):
+    serialized_rollback = True
+
     def setUp(self):
         self.role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
         self.first = self.create_assignment("first-admin@example.com")

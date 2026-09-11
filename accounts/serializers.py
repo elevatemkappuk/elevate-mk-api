@@ -1,5 +1,6 @@
 from django.contrib.auth import authenticate, get_user_model, password_validation
 from django.contrib.auth.tokens import default_token_generator
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
 from drf_spectacular.utils import extend_schema_field
@@ -13,7 +14,7 @@ User = get_user_model()
 
 
 class InvalidCredentialsError(serializers.ValidationError):
-    pass
+    default_code = "invalid_credentials"
 
 
 class PersonSummarySerializer(serializers.Serializer):
@@ -63,7 +64,8 @@ class LoginSerializer(serializers.Serializer):
 
         if user is None or not user.is_active:
             raise InvalidCredentialsError(
-                {"detail": self.error_messages["invalid_credentials"]}
+                {"detail": self.error_messages["invalid_credentials"]},
+                code=InvalidCredentialsError.default_code,
             )
 
         attrs["email"] = email
@@ -119,6 +121,9 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 {"code": "invalid_password_reset_token", "detail": self.error_messages["invalid_token"]}
             )
-        password_validation.validate_password(attrs["new_password"], user)
+        try:
+            password_validation.validate_password(attrs["new_password"], user)
+        except DjangoValidationError as error:
+            raise serializers.ValidationError({"new_password": list(error.messages)}) from error
         attrs["user"] = user
         return attrs

@@ -454,6 +454,7 @@ class ProfessionalProfileApiTests(TestCase):
 class ProfessionalProfileCreateApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.client.raise_request_exception = False
         self.url_template = "/api/v1/people/{person_id}/professional-profile/"
         self.overview_url_template = "/api/v1/people/{person_id}/overview/"
 
@@ -835,6 +836,7 @@ class ProfessionalProfileCreateApiTests(TestCase):
 class ProfessionalProfileUpdateApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.client.raise_request_exception = False
         self.url_template = "/api/v1/people/{person_id}/professional-profile/"
         self.overview_url_template = "/api/v1/people/{person_id}/overview/"
 

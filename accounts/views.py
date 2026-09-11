@@ -107,19 +107,23 @@ class LoginView(APIView):
     )
     def post(self, request):
         serializer = LoginSerializer(data=request.data, context={"request": request})
-        try:
+        if not serializer.is_valid():
+            detail_error = serializer.errors.get("detail")
+            if (
+                isinstance(detail_error, list)
+                and len(detail_error) == 1
+                and getattr(detail_error[0], "code", None) == InvalidCredentialsError.default_code
+            ):
+                try:
+                    record_auth_audit_or_raise(
+                        action=AuditEvent.Action.LOGIN_FAILED,
+                        actor_user=None,
+                        entity_type="Authentication",
+                        entity_id=None,
+                    )
+                except AuditPersistenceError:
+                    raise AuditPersistenceError
             serializer.is_valid(raise_exception=True)
-        except InvalidCredentialsError:
-            try:
-                record_auth_audit_or_raise(
-                    action=AuditEvent.Action.LOGIN_FAILED,
-                    actor_user=None,
-                    entity_type="Authentication",
-                    entity_id=None,
-                )
-            except AuditPersistenceError:
-                raise AuditPersistenceError
-            raise
 
         user = serializer.validated_data["user"]
         login(request, user)

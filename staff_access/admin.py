@@ -21,7 +21,11 @@ def record_staff_role_audit_event(*, action, actor_user, assignment):
         entity_id=assignment.id,
         changes={
             "is_active": {
-                "from": None if action == AuditEvent.Action.STAFF_ROLE_ASSIGNED else False,
+                "from": (
+                    None
+                    if action == AuditEvent.Action.STAFF_ROLE_ASSIGNED
+                    else action == AuditEvent.Action.STAFF_ROLE_REVOKED
+                ),
                 "to": False if action == AuditEvent.Action.STAFF_ROLE_REVOKED else True,
             }
         },

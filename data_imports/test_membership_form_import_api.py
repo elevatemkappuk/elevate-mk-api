@@ -17,9 +17,9 @@ class MembershipFormImportApiTests(APITestCase):
         self.viewer = self.create_user("viewer@example.com")
         self.non_staff = self.create_user("member@example.com")
         self.superuser = self.create_user("superuser@example.com", is_staff=True, is_superuser=True)
-        admin_role = StaffRole.objects.create(code=StaffRole.CRM_ADMIN, name="CRM Administrator")
-        manager_role = StaffRole.objects.create(code=StaffRole.CRM_MANAGER, name="CRM Manager")
-        viewer_role = StaffRole.objects.create(code=StaffRole.CRM_VIEWER, name="CRM Viewer")
+        admin_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_ADMIN, defaults={"name": "CRM Administrator"})
+        manager_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_MANAGER, defaults={"name": "CRM Manager"})
+        viewer_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_VIEWER, defaults={"name": "CRM Viewer"})
         StaffRoleAssignment.objects.assign_role(user=self.admin, role=admin_role)
         StaffRoleAssignment.objects.assign_role(user=self.manager, role=manager_role)
         StaffRoleAssignment.objects.assign_role(user=self.viewer, role=viewer_role)
@@ -140,11 +140,15 @@ class MembershipFormImportApiTests(APITestCase):
                 self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
                 self.assertNotIn("membership.xlsx", str(response.data))
 
-    def test_non_membership_form_batch_returns_conflict(self):
+    def test_ready_eventbrite_batch_uses_the_source_specific_importer(self):
         batch = self.create_batch(source_type=ImportBatch.SourceType.EVENTBRITE)
         self.authenticate_as(self.admin)
 
-        self.assertEqual(self.client.post(self.import_url(batch), {}, format="json").status_code, status.HTTP_409_CONFLICT)
+        response = self.client.post(self.import_url(batch), {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        batch.refresh_from_db()
+        self.assertEqual(batch.status, ImportBatch.Status.IMPORTED)
 
     def test_former_membership_conflict_returns_safe_conflict_without_new_mutations(self):
         batch = self.create_batch()

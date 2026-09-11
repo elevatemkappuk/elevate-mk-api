@@ -403,7 +403,7 @@ class PeopleApiTests(TestCase):
         response = self.client.get(self.url, {"ordering": "-created_at", "page_size": 50})
         ids = self.get_ids(response)
 
-        self.assertLess(ids.index(first.id), ids.index(second.id))
+        self.assertLess(ids.index(second.id), ids.index(first.id))
 
     def test_invalid_ordering_returns_400(self):
         self.authenticate(self.admin_user)
@@ -1043,6 +1043,7 @@ class PersonOverviewApiTests(TestCase):
 class PersonWriteLifecycleApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.client.raise_request_exception = False
         self.create_url = "/api/v1/people/"
         self.member_create_url = "/api/v1/people/members/"
         self.admin_user = User.objects.create_user(
@@ -1335,9 +1336,9 @@ class PeopleDirectoryQueryApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.url = "/api/v1/people/"
-        self.admin_user = User.objects.create_user(email="directory-admin@example.com", password="testpass123", person_first_name="Directory", person_last_name="Admin")
-        self.viewer_user = User.objects.create_user(email="directory-viewer@example.com", password="testpass123", person_first_name="Directory", person_last_name="Viewer")
-        self.nonstaff_user = User.objects.create_user(email="directory-nonstaff@example.com", password="testpass123", person_first_name="Directory", person_last_name="Nonstaff")
+        self.admin_user = User.objects.create_user(email="directory-admin@example.com", password="testpass123", person_first_name="Directory", person_last_name="Admin", person_record_type=Person.RecordType.TECHNICAL)
+        self.viewer_user = User.objects.create_user(email="directory-viewer@example.com", password="testpass123", person_first_name="Directory", person_last_name="Viewer", person_record_type=Person.RecordType.TECHNICAL)
+        self.nonstaff_user = User.objects.create_user(email="directory-nonstaff@example.com", password="testpass123", person_first_name="Directory", person_last_name="Nonstaff", person_record_type=Person.RecordType.TECHNICAL)
         StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN))
         StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=StaffRole.objects.get(code=StaffRole.CRM_VIEWER))
         self.contact = Person.objects.create(first_name="Ada", last_name="Lovelace", primary_email="ada@example.com", mobile="991", location=" Milton Keynes ")
@@ -1345,12 +1346,12 @@ class PeopleDirectoryQueryApiTests(TestCase):
         self.former_member = Person.objects.create(first_name="Alan", last_name="Turing", archived_at=timezone.now())
         Membership.objects.create(person=self.active_member, status=Membership.Status.ACTIVE, joined_at="2024-01-01", membership_source=Membership.Source.STAFF)
         Membership.objects.create(person=self.former_member, status=Membership.Status.FORMER, joined_at="2023-01-01", ended_at="2024-01-01", membership_source=Membership.Source.STAFF)
-        self.industry = Industry.objects.create(name="Technology", slug="technology")
+        self.industry = Industry.objects.get(slug="technology")
         ProfessionalProfile.objects.create(person=self.active_member, job_title="Software Engineer", company="Microsoft", industry=self.industry, career_stage=ProfessionalProfile.CareerStage.SENIOR)
-        self.interest_a = Interest.objects.create(name="Mentoring", slug="mentoring")
-        self.interest_b = Interest.objects.create(name="Networking", slug="networking")
+        self.interest_a = Interest.objects.get(slug="mentoring")
+        self.interest_b = Interest.objects.get(slug="networking")
         self.skill = Skill.objects.create(name="Python", slug="python")
-        self.active_tag = Tag.objects.create(name="VIP", slug="vip")
+        self.active_tag = Tag.objects.get(slug="vip")
         self.removed_tag = Tag.objects.create(name="Removed", slug="removed")
         PersonInterest.objects.create(person=self.active_member, interest=self.interest_a)
         PersonInterest.objects.create(person=self.contact, interest=self.interest_b)

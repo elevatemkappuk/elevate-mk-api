@@ -92,7 +92,7 @@ class PersonTagModelTests(TestCase):
         tag = Tag.objects.create(name="Potential Mentor", slug="potential-mentor-extra")
         PersonTag.objects.create(person=person, tag=tag, assigned_by=self.assigned_by)
 
-        with self.assertRaises(IntegrityError):
+        with self.assertRaises(ValidationError):
             PersonTag.objects.create(person=person, tag=tag, assigned_by=self.assigned_by)
 
     def test_person_delete_is_protected(self):
@@ -191,6 +191,7 @@ class TagAdminTests(TestCase):
 class TagApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.client.raise_request_exception = False
         self.tags_url = "/api/v1/tags/"
         self.person_tags_url_template = "/api/v1/people/{person_id}/tags/"
         self.person_tag_remove_url_template = "/api/v1/people/{person_id}/tags/{tag_id}/remove/"

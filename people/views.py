@@ -97,17 +97,19 @@ class IdentityCollisionConflict(APIException):
             if stale
             else "A possible existing CRM Person was found."
         )
-        super().__init__(
-            {
-                "detail": detail,
-                "code": "IDENTITY_COLLISION_STALE" if stale else self.default_code,
-                "collision": {
-                    "collision": policy.collision.value,
-                    "person_ids": list(policy.matched_person_ids),
-                },
-                "candidates": DuplicatePersonMatchSerializer(candidates, many=True).data,
-            }
-        )
+        response_detail = {
+            "detail": detail,
+            "code": "IDENTITY_COLLISION_STALE" if stale else self.default_code,
+            "collision": {
+                "collision": policy.collision.value,
+                "person_ids": list(policy.matched_person_ids),
+            },
+            "candidates": DuplicatePersonMatchSerializer(candidates, many=True).data,
+        }
+        super().__init__(response_detail)
+        # APIException stringifies nested values as ErrorDetail objects. Keep
+        # the documented typed collision payload, including integer Person IDs.
+        self.detail = response_detail
 
 
 def identity_override_metadata(validated_data):

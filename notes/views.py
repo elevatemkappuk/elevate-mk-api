@@ -78,7 +78,7 @@ class BusinessPersonNotesMixin:
     def get_note_or_404(self, *, person, select_for_update=False):
         queryset = get_note_list_queryset_for_person(person)
         if select_for_update:
-            queryset = queryset.select_for_update()
+            queryset = queryset.select_for_update(of=("self",))
         note = queryset.filter(pk=self.kwargs["note_id"]).first()
         if note is None:
             raise NotFound("Not found.")

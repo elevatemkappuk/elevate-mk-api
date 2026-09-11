@@ -148,9 +148,13 @@ def _parse_time(value):
 
 
 def _normalize_datetime_or_date(value):
-    if isinstance(value, (datetime, date)):
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
         return value.isoformat()
-    return clean_text(value)
+    text = clean_text(value)
+    parsed = _parse_date(text)
+    return parsed.isoformat() if parsed is not None else text
 
 
 def _normalize_ticket_quantity(value):

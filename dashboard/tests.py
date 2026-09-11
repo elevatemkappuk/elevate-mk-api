@@ -15,7 +15,13 @@ from .queries import dashboard_projection
 
 class DashboardTests(APITestCase):
     def setUp(self):
-        self.user = User.objects.create_user(email="dashboard@example.com", password="safe-password", person_first_name="Staff", person_last_name="User")
+        self.user = User.objects.create_user(
+            email="dashboard@example.com",
+            password="safe-password",
+            person_first_name="Staff",
+            person_last_name="User",
+            person_record_type=Person.RecordType.TECHNICAL,
+        )
         self.roles = {code: StaffRole.objects.get_or_create(code=code, defaults={"name": name})[0] for code, name in StaffRole.CANONICAL_ROLES}
 
     def person(self, **kwargs):
@@ -94,7 +100,10 @@ class DashboardTests(APITestCase):
         ])
 
     def test_industries_and_all_canonical_age_ranges(self):
-        industries = [Industry.objects.create(name=name, slug=name.lower()) for name in ["Technology", "Arts", "Business", "Design", "Education", "Finance"]]
+        industries = [
+            Industry.objects.create(name=name, slug=f"dashboard-{name.lower()}")
+            for name in ["Technology", "Arts", "Business", "Design", "Education", "Finance"]
+        ]
         for industry in industries:
             ProfessionalProfile.objects.create(person=self.person(age_range=Person.AgeRange.UNDER_25), industry=industry)
         ProfessionalProfile.objects.create(person=self.person(), industry=industries[0])

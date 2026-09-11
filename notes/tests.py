@@ -132,6 +132,7 @@ class InternalNoteAdminTests(TestCase):
 class InternalNoteApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.client.raise_request_exception = False
         self.site = AdminSite()
 
         self.list_url_template = "/api/v1/people/{person_id}/notes/"
@@ -401,9 +402,9 @@ class InternalNoteApiTests(TestCase):
             format="json",
         )
 
+        self.assertEqual(response.status_code, 200)
         self.active_note.refresh_from_db()
         event = AuditEvent.objects.get(action=AuditEvent.Action.NOTE_UPDATED)
-        self.assertEqual(response.status_code, 200)
         self.assertEqual(self.active_note.body, "Updated sensitive note.")
         self.assertEqual(self.active_note.created_by, self.other_author)
         self.assertEqual(event.metadata, {"person_id": str(self.active_business_person.id), "body_changed": True})

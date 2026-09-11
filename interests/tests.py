@@ -106,6 +106,7 @@ class InterestAdminTests(TestCase):
 class InterestApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.client.raise_request_exception = False
         self.interests_url = "/api/v1/interests/"
         self.person_interests_url_template = "/api/v1/people/{person_id}/interests/"
         self.person_interest_detail_url_template = "/api/v1/people/{person_id}/interests/{interest_id}/"

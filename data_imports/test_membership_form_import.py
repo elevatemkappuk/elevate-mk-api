@@ -55,7 +55,7 @@ class MembershipFormImportServiceTests(TestCase):
         )
 
     def test_ready_for_import_creates_business_person_membership_profile_and_provenance(self):
-        industry = Industry.objects.create(name="Technology", slug="technology")
+        industry = Industry.objects.get(slug="technology")
         record = self.record(ImportRecord.ResolutionMethod.NO_MATCH)
 
         result = import_membership_form_batch(batch_id=self.batch.id)
@@ -351,7 +351,8 @@ class MembershipFormImportServiceTests(TestCase):
         self.assertEqual(AuditEvent.objects.count(), before_audits)
 
     def test_profiles_use_safe_industry_matching_and_fill_missing_only(self):
-        industry = Industry.objects.create(name="Technology", slug="technology")
+        industry = Industry.objects.get(slug="technology")
+        industry_count = Industry.objects.count()
         person = Person.objects.create(first_name="Existing", last_name="Person")
         profile = ProfessionalProfile.objects.create(person=person, job_title="Current title")
         self.record(
@@ -365,9 +366,10 @@ class MembershipFormImportServiceTests(TestCase):
         profile.refresh_from_db()
         self.assertEqual(profile.job_title, "Current title")
         self.assertEqual(profile.industry, industry)
-        self.assertEqual(Industry.objects.count(), 1)
+        self.assertEqual(Industry.objects.count(), industry_count)
 
     def test_unmappable_source_industry_does_not_create_taxonomy_records(self):
+        industry_count = Industry.objects.count()
         person = Person.objects.create(first_name="Existing", last_name="Person")
         self.record(
             ImportRecord.ResolutionMethod.AUTO_MATCH,
@@ -377,7 +379,7 @@ class MembershipFormImportServiceTests(TestCase):
 
         import_membership_form_batch(batch_id=self.batch.id)
 
-        self.assertEqual(Industry.objects.count(), 0)
+        self.assertEqual(Industry.objects.count(), industry_count)
         self.assertFalse(ProfessionalProfile.objects.filter(person=person).exists())
 
     def test_audit_events_use_identifiers_not_source_pii_and_roll_back_on_failure(self):
@@ -397,7 +399,15 @@ class MembershipFormImportServiceTests(TestCase):
             status=ImportBatch.Status.READY_FOR_IMPORT,
         )
         self.batch = failing_batch
-        self.record(ImportRecord.ResolutionMethod.NO_MATCH)
+        self.record(
+            ImportRecord.ResolutionMethod.NO_MATCH,
+            source=self.source(
+                first_name="Failure",
+                last_name="Case",
+                email="failure@example.com",
+                mobile="0799999999",
+            ),
+        )
         before_people = Person.objects.count()
         before_audits = AuditEvent.objects.count()
         with mock.patch(

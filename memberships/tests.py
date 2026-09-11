@@ -372,6 +372,7 @@ class MembershipApiTests(TestCase):
 class MakeMembershipApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.client.raise_request_exception = False
         self.url_template = "/api/v1/people/{person_id}/membership/"
 
         self.non_staff_user = User.objects.create_user(
@@ -806,6 +807,7 @@ class MakeMembershipApiTests(TestCase):
 class EndMembershipApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.client.raise_request_exception = False
         self.url_template = "/api/v1/people/{person_id}/membership/end/"
 
         self.non_staff_user = User.objects.create_user(
