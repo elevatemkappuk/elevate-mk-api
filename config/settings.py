@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     'tags',
     'notes',
     'notifications',
+    'brevo_marketing',
     'data_imports',
     'events',
     'external_references',
@@ -208,6 +209,7 @@ BREVO_SENDER_NAME = env("BREVO_SENDER_NAME", default="")
 BREVO_REPLY_TO_EMAIL = env("BREVO_REPLY_TO_EMAIL", default="")
 BREVO_REPLY_TO_NAME = env("BREVO_REPLY_TO_NAME", default="")
 BREVO_PASSWORD_RESET_TEMPLATE_ID = env("BREVO_PASSWORD_RESET_TEMPLATE_ID", default="")
+BREVO_MARKETING_LIST_ID = env("BREVO_MARKETING_LIST_ID", default="")
 CRM_FRONTEND_URL = env("CRM_FRONTEND_URL", default="http://localhost:4200")
 
 # Mailchimp Marketing API verification is backend-only. No Mailchimp operation

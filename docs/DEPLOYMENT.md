@@ -69,7 +69,7 @@ follows:
 | `CRM_FRONTEND_URL` | `https://<crm-production-domain>` | `https://elevate-mk-crm-staging.up.railway.app` |
 | `DJANGO_DEBUG` (`DEBUG`) | `False` | `False` |
 | `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` | Production database credentials and host | Staging database credentials and host |
-| `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME`, `BREVO_REPLY_TO_EMAIL`, `BREVO_REPLY_TO_NAME`, `BREVO_PASSWORD_RESET_TEMPLATE_ID` | Production Brevo credentials and template ID | Staging Brevo credentials and template ID |
+| `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME`, `BREVO_REPLY_TO_EMAIL`, `BREVO_REPLY_TO_NAME`, `BREVO_PASSWORD_RESET_TEMPLATE_ID`, `BREVO_MARKETING_LIST_ID` | Production Brevo credentials, template ID, and approved marketing list ID | Staging Brevo credentials, template ID, and approved marketing list ID |
 | `SECURE_SSL_REDIRECT` | `True` | `True` |
 | `CSRF_COOKIE_SAMESITE` | `None` | `None` |
 | `SESSION_COOKIE_SAMESITE` | `None` | `None` |

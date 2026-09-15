@@ -64,9 +64,12 @@ The backend uses the Brevo Transactional Email API for server-to-server transact
 - `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, and `BREVO_SENDER_NAME` are required only when an application feature sends email
 - `BREVO_REPLY_TO_EMAIL` and `BREVO_REPLY_TO_NAME` are optional sender-reply settings
 - `BREVO_PASSWORD_RESET_TEMPLATE_ID` is reserved for the future password-reset feature and does not enable password recovery by itself
+- `BREVO_MARKETING_LIST_ID` selects the explicitly approved Brevo marketing list for the manual one-Person sync command
 - feature code supplies the Brevo template ID and safe parameter names; template parameters may contain sensitive values and are not logged
 - Brevo credentials are backend-only environment configuration and must never be committed, returned by APIs, sent to the frontend, or stored in audit metadata
 - the generic notification service supports Brevo templates such as a future password-reset template receiving `params.reset_url`
+
+The Brevo marketing integration reuses `BREVO_API_KEY` and `BREVO_MARKETING_LIST_ID`, but is intentionally separate from `notifications.providers.brevo.BrevoTransactionalEmailProvider`. The inspection command remains read-only; the manual one-Person sync command is the only current marketing mutation path and does not print credentials or raw provider responses.
 
 ## Account Activation
 Current behavior:
