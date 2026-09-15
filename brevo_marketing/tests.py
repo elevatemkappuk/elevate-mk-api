@@ -408,6 +408,49 @@ class BrevoMarketingWebhookTests(TestCase):
         self.assertEqual(MarketingPreferenceHistory.objects.count(), 1)
         self.assertEqual(MarketingWebhookReceipt.objects.count(), 1)
 
+    def test_same_webhook_id_for_different_recipients_does_not_collide(self):
+        other = Person.objects.create(first_name="Other", last_name="Example", primary_email="other@example.com")
+
+        first = self.client.post(self.url, self.payload(), format="json", **self.auth())
+        second = self.client.post(
+            self.url,
+            self.payload(email=other.primary_email),
+            format="json",
+            **self.auth(),
+        )
+
+        self.assertEqual(first.data["outcome"], "CRM_OPTED_OUT_RECORDED")
+        self.assertEqual(second.data["outcome"], "CRM_OPTED_OUT_RECORDED")
+        self.assertEqual(MarketingPreferenceHistory.objects.count(), 2)
+        self.assertEqual(MarketingWebhookReceipt.objects.count(), 2)
+
+    def test_same_person_can_process_later_unsubscribe_after_reconsent(self):
+        first = self.client.post(self.url, self.payload(camp_id=44, ts_event=1770000000), format="json", **self.auth())
+        self.assertEqual(first.data["outcome"], "CRM_OPTED_OUT_RECORDED")
+
+        from marketing_preferences.services import record_opt_in
+
+        record_opt_in(person=self.person, source=MarketingPreference.Source.STAFF_RECORDED)
+        second = self.client.post(
+            self.url,
+            self.payload(camp_id=45, ts_event=1770086400),
+            format="json",
+            **self.auth(),
+        )
+
+        self.assertEqual(second.data["outcome"], "CRM_OPTED_OUT_RECORDED")
+        self.assertEqual(MarketingPreferenceHistory.objects.count(), 3)
+        self.assertEqual(MarketingWebhookReceipt.objects.count(), 2)
+
+    def test_missing_event_timestamp_relies_on_preference_idempotency(self):
+        first = self.client.post(self.url, self.payload(ts_event=None, date_event=None), format="json", **self.auth())
+        second = self.client.post(self.url, self.payload(ts_event=None, date_event=None), format="json", **self.auth())
+
+        self.assertEqual(first.data["outcome"], "CRM_OPTED_OUT_RECORDED")
+        self.assertEqual(second.data["outcome"], "CRM_OPTED_OUT_ALREADY_RECORDED")
+        self.assertEqual(MarketingPreferenceHistory.objects.count(), 1)
+        self.assertEqual(MarketingWebhookReceipt.objects.count(), 0)
+
     def test_unsupported_marketing_event_is_acknowledged_without_mutation(self):
         response = self.client.post(self.url, {"event": "opened"}, format="json", **self.auth())
 

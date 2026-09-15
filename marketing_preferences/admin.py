@@ -41,11 +41,11 @@ class MarketingPreferenceHistoryAdmin(admin.ModelAdmin):
 
 @admin.register(MarketingWebhookReceipt)
 class MarketingWebhookReceiptAdmin(admin.ModelAdmin):
-    list_display = ("id", "provider", "event_type", "event_id", "person", "outcome", "received_at")
+    list_display = ("id", "provider", "event_type", "event_fingerprint", "person", "outcome", "received_at")
     list_filter = ("provider", "event_type", "outcome", "received_at")
-    search_fields = ("event_id", "campaign_id", "person__first_name", "person__last_name")
+    search_fields = ("event_fingerprint", "campaign_id", "person__first_name", "person__last_name")
     autocomplete_fields = ("person",)
-    readonly_fields = ("provider", "event_id", "event_type", "person", "event_recorded_at", "list_ids", "campaign_id", "outcome", "received_at")
+    readonly_fields = ("provider", "event_fingerprint", "event_type", "person", "event_recorded_at", "list_ids", "campaign_id", "outcome", "received_at")
 
     def has_add_permission(self, request):
         return False

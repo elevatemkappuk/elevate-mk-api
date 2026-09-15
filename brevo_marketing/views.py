@@ -49,6 +49,6 @@ class BrevoMarketingWebhookView(APIView):
         try:
             result = handle_unsubscribe_event(event)
         except Exception:
-            logger.exception("Brevo marketing webhook processing failed. event_id=%s", event.event_id)
+            logger.exception("Brevo marketing webhook processing failed. fingerprint=%s", event.event_fingerprint)
             return Response({"detail": "Webhook processing failed."}, status=500)
         return Response({"status": "accepted", "outcome": result.outcome}, status=200)

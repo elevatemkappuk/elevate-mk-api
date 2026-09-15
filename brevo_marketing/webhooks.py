@@ -1,5 +1,6 @@
 import json
 import logging
+import hashlib
 from base64 import b64decode
 from dataclasses import dataclass
 from datetime import datetime, timezone as datetime_timezone
@@ -37,7 +38,7 @@ class BrevoWebhookPayloadError(Exception):
 
 @dataclass(frozen=True)
 class BrevoUnsubscribeEvent:
-    event_id: str | None
+    event_fingerprint: str | None
     email: str
     event_recorded_at: datetime | None
     list_ids: tuple[int, ...]
@@ -96,10 +97,21 @@ def parse_webhook_payload(payload):
     if configured_list_id not in list_ids:
         raise BrevoWebhookPayloadError("The unsubscribe event is outside the configured marketing list.")
 
+    event_recorded_at = _parse_event_timestamp(payload.get("ts_event"), payload.get("date_event"))
+    if event_recorded_at is None:
+        event_recorded_at = _parse_event_timestamp(payload.get("ts"), None)
+
     return BrevoUnsubscribeEvent(
-        event_id=_safe_identifier(payload.get("id")),
+        event_fingerprint=_event_fingerprint(
+            event_type=event,
+            email=email,
+            list_ids=list_ids,
+            campaign_id=_safe_identifier(payload.get("camp_id")),
+            event_recorded_at=event_recorded_at,
+            webhook_id=_safe_identifier(payload.get("id")),
+        ),
         email=email,
-        event_recorded_at=_parse_event_timestamp(payload.get("ts_event"), payload.get("date_event")),
+        event_recorded_at=event_recorded_at,
         list_ids=tuple(list_ids),
         campaign_id=_safe_identifier(payload.get("camp_id")),
     )
@@ -107,23 +119,23 @@ def parse_webhook_payload(payload):
 
 def handle_unsubscribe_event(event: BrevoUnsubscribeEvent):
     with transaction.atomic():
-        if event.event_id:
+        if event.event_fingerprint:
             existing = MarketingWebhookReceipt.objects.select_for_update().filter(
                 provider=BREVO_PROVIDER,
-                event_id=event.event_id,
+                event_fingerprint=event.event_fingerprint,
             ).first()
             if existing is not None:
-                logger.info("Brevo marketing webhook replay acknowledged. event_id=%s outcome=%s", event.event_id, existing.outcome)
+                logger.info("Brevo marketing webhook replay acknowledged. fingerprint=%s outcome=%s", event.event_fingerprint, existing.outcome)
                 return BrevoWebhookResult(outcome="REPLAY_IGNORED", receipt_id=existing.id)
 
         people = list(Person.objects.business().filter(primary_email__iexact=event.email).order_by("id")[:2])
         if not people:
             result = BrevoWebhookResult(outcome="PERSON_NOT_FOUND")
-            logger.info("Brevo marketing unsubscribe acknowledged without CRM Person. event_id=%s outcome=%s", event.event_id, result.outcome)
+            logger.info("Brevo marketing unsubscribe acknowledged without CRM Person. fingerprint=%s outcome=%s", event.event_fingerprint, result.outcome)
             return _store_receipt(event, result)
         if len(people) > 1:
             result = BrevoWebhookResult(outcome="IDENTITY_CONFLICT")
-            logger.warning("Brevo marketing unsubscribe rejected for ambiguous CRM identity. event_id=%s outcome=%s", event.event_id, result.outcome)
+            logger.warning("Brevo marketing unsubscribe rejected for ambiguous CRM identity. fingerprint=%s outcome=%s", event.event_fingerprint, result.outcome)
             return _store_receipt(event, result)
 
         person = people[0]
@@ -132,24 +144,24 @@ def handle_unsubscribe_event(event: BrevoUnsubscribeEvent):
             source=MarketingPreference.Source.BREVO,
             recorded_at=event.event_recorded_at or timezone.now(),
             origin_provider=BREVO_PROVIDER,
-            provider_event_id=event.event_id,
+            provider_event_id=event.event_fingerprint,
             provider_event_type=SUPPORTED_UNSUBSCRIBE_EVENT,
         )
         preference = result.preference
         outcome = "CRM_OPTED_OUT_RECORDED" if result.changed else "CRM_OPTED_OUT_ALREADY_RECORDED"
         webhook_result = BrevoWebhookResult(outcome=outcome, person_id=person.id, history_id=_latest_history_id(preference.person_id))
-        logger.info("Brevo marketing unsubscribe applied. person_id=%s event_id=%s outcome=%s", person.id, event.event_id, outcome)
+        logger.info("Brevo marketing unsubscribe applied. person_id=%s fingerprint=%s outcome=%s", person.id, event.event_fingerprint, outcome)
         return _store_receipt(event, webhook_result, person=person)
 
 
 def _store_receipt(event, result, person=None):
-    if not event.event_id:
+    if not event.event_fingerprint:
         return result
     try:
         with transaction.atomic():
             receipt, created = MarketingWebhookReceipt.objects.get_or_create(
                 provider=BREVO_PROVIDER,
-                event_id=event.event_id,
+                event_fingerprint=event.event_fingerprint,
                 defaults={
                     "event_type": SUPPORTED_UNSUBSCRIBE_EVENT,
                     "person": person,
@@ -160,7 +172,7 @@ def _store_receipt(event, result, person=None):
                 },
             )
     except IntegrityError:
-        receipt = MarketingWebhookReceipt.objects.get(provider=BREVO_PROVIDER, event_id=event.event_id)
+        receipt = MarketingWebhookReceipt.objects.get(provider=BREVO_PROVIDER, event_fingerprint=event.event_fingerprint)
         created = False
     if not created:
         return BrevoWebhookResult(outcome="REPLAY_IGNORED", receipt_id=receipt.id)
@@ -213,6 +225,28 @@ def _safe_identifier(value):
         return None
     value = str(value).strip()
     return value[:255] or None
+
+
+def _event_fingerprint(*, event_type, email, list_ids, campaign_id, event_recorded_at, webhook_id):
+    """Return a replay key only when Brevo supplied an event occurrence time.
+
+    Brevo's ``id`` identifies the configured webhook, not this delivery. The
+    email is represented only by a digest, and the timestamp prevents a later
+    unsubscribe after re-consent from colliding with an earlier one.
+    """
+    if event_recorded_at is None:
+        return None
+    canonical = "|".join(
+        (
+            event_type,
+            hashlib.sha256(email.encode("utf-8")).hexdigest(),
+            ",".join(str(value) for value in sorted(list_ids)),
+            campaign_id or "",
+            event_recorded_at.astimezone(datetime_timezone.utc).isoformat(),
+            webhook_id or "",
+        )
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _parse_event_timestamp(timestamp, date_value):

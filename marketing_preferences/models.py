@@ -117,7 +117,7 @@ class MarketingWebhookReceipt(models.Model):
     """Bounded evidence that a provider webhook delivery was handled or safely ignored."""
 
     provider = models.CharField(max_length=100)
-    event_id = models.CharField(max_length=255)
+    event_fingerprint = models.CharField(max_length=64)
     event_type = models.CharField(max_length=80)
     person = models.ForeignKey(
         Person,
@@ -136,8 +136,8 @@ class MarketingWebhookReceipt(models.Model):
         ordering = ["-received_at", "-id"]
         constraints = [
             models.UniqueConstraint(
-                fields=["provider", "event_id"],
-                name="marketing_webhook_provider_event_unique",
+                fields=["provider", "event_fingerprint"],
+                name="marketing_webhook_provider_fingerprint_unique",
             ),
         ]
         indexes = [
@@ -146,10 +146,10 @@ class MarketingWebhookReceipt(models.Model):
 
     def save(self, *args, **kwargs):
         self.provider = self.provider.strip().upper()
-        self.event_id = self.event_id.strip()
+        self.event_fingerprint = self.event_fingerprint.strip().lower()
         self.event_type = self.event_type.strip().lower()
         self.outcome = self.outcome.strip().upper()
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"{self.provider} {self.event_type} {self.event_id} ({self.outcome})"
+        return f"{self.provider} {self.event_type} {self.event_fingerprint} ({self.outcome})"

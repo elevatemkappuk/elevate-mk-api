@@ -26,7 +26,7 @@ class Migration(migrations.Migration):
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('provider', models.CharField(max_length=100)),
-                ('event_id', models.CharField(max_length=255)),
+                ('event_fingerprint', models.CharField(max_length=64)),
                 ('event_type', models.CharField(max_length=80)),
                 ('event_recorded_at', models.DateTimeField(blank=True, null=True)),
                 ('list_ids', models.JSONField(blank=True, default=list)),
@@ -38,7 +38,7 @@ class Migration(migrations.Migration):
             options={
                 'ordering': ['-received_at', '-id'],
                 'indexes': [models.Index(fields=['provider', 'event_type', 'received_at'], name='marketing_webhook_event_idx')],
-                'constraints': [models.UniqueConstraint(fields=('provider', 'event_id'), name='marketing_webhook_provider_event_unique')],
+                'constraints': [models.UniqueConstraint(fields=('provider', 'event_fingerprint'), name='marketing_webhook_provider_fingerprint_unique')],
             },
         ),
     ]
