@@ -34,6 +34,8 @@ Email changes are not silently migrated: if a Person already has a BREVO referen
 
 `python manage.py process_brevo_sync_jobs --watch` runs the durable BREVO preference queue continuously until SIGINT or SIGTERM. It polls with `BREVO_SYNC_WORKER_POLL_SECONDS` (default `3` seconds) and caps each batch with `BREVO_SYNC_WORKER_BATCH_SIZE` (default `20`, maximum `100`). It uses the same synchronization service as the one-shot command, so consent, provider-state protection, retries, and terminal failure classification are not duplicated. CRM preference requests enqueue durable work and do not wait for Brevo network calls.
 
+CRM edits to `Person.primary_email`, `first_name`, `last_name`, or `mobile` enqueue the provider-neutral `PERSON_PROFILE` job type after the authoritative Person update. A pending BREVO profile job for the same Person is coalesced, and the worker reads current CRM values when it runs. Profile work never creates a marketing contact or changes consent; without an active BREVO reference it completes as `SKIPPED_NO_MARKETING_CONTACT`. Existing referenced contacts receive only `FIRSTNAME`, `LASTNAME`, and safe `SMS` profile attributes. Blank values are sent as empty attributes to clear stale text/SMS values; unsafe local mobile values are omitted without failing name synchronization. Profile updates never alter email blocklisting/list-unsubscribe state. A changed or invalid CRM email that does not match the referenced contact returns `RECONCILIATION_REQUIRED` rather than migrating or duplicating the provider contact.
+
 For local development, run Django in one terminal and the worker in another:
 
 ```text

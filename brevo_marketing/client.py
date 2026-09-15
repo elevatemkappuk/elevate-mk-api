@@ -91,6 +91,18 @@ class BrevoMarketingClient:
             return None
         return self._contact_from_provider(response)
 
+    def get_contact_by_id(self, contact_id):
+        response = self._call(
+            lambda: self._client.contacts.get_contact_info(
+                str(contact_id),
+                identifier_type="contact_id",
+            ),
+            not_found_is_none=True,
+        )
+        if response is None:
+            return None
+        return self._contact_from_provider(response)
+
     def create_contact(self, *, email, attributes, list_id):
         response = self._call(
             lambda: self._client.contacts.create_contact(

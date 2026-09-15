@@ -24,6 +24,26 @@ def enqueue_person_sync_job(*, person, provider, job_type, source_event_id, avai
 
 
 @transaction.atomic
+def enqueue_coalesced_person_sync_job(*, person, provider, job_type, source_event_id, available_at=None):
+    """Reuse an existing pending job for this Person and job type when safe."""
+    existing = ExternalPersonSyncJob.objects.select_for_update().filter(
+        person=person,
+        provider=provider,
+        job_type=job_type,
+        status=ExternalPersonSyncJob.Status.PENDING,
+    ).order_by("id").first()
+    if existing is not None:
+        return existing
+    return enqueue_person_sync_job(
+        person=person,
+        provider=provider,
+        job_type=job_type,
+        source_event_id=source_event_id,
+        available_at=available_at,
+    )
+
+
+@transaction.atomic
 def attach_person_reference(*, person, provider, reference_type, external_id, actor_user=None):
     """Idempotently link an external person identity and audit the authoritative change."""
     person = Person.objects.select_for_update().get(pk=person.pk)

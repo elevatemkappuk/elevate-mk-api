@@ -23,7 +23,7 @@ from brevo_marketing.exceptions import (
 from brevo_marketing.services import inspect_brevo_marketing_configuration
 from brevo_marketing.jobs import BrevoJobProcessResult, process_next_brevo_sync_job, run_brevo_sync_worker
 from brevo_marketing.routing import get_active_marketing_sync_provider
-from brevo_marketing.sync import BrevoPersonSyncOutcome, synchronize_person_to_brevo
+from brevo_marketing.sync import BrevoPersonSyncOutcome, synchronize_person_profile_to_brevo, synchronize_person_to_brevo
 from external_references.models import ExternalPersonReference, ExternalPersonSyncJob
 from marketing_preferences.models import MarketingPreference, MarketingPreferenceHistory, MarketingWebhookReceipt
 from marketing_preferences.services import record_opt_in, record_opt_out
@@ -125,6 +125,9 @@ class FakeBrevoSyncClient:
 
     def get_contact(self, email):
         return self.contact
+
+    def get_contact_by_id(self, contact_id):
+        return self.contact if self.contact and self.contact.contact_id == int(contact_id) else None
 
     def create_contact(self, *, email, attributes, list_id):
         self.created.append({"email": email, "attributes": attributes, "list_id": list_id})
@@ -279,6 +282,70 @@ class BrevoPersonDatabaseSyncTests(TestCase):
         with self.assertRaises(BrevoMarketingIdentityConflictError):
             synchronize_person_to_brevo(person_id=person.id, client=FakeBrevoSyncClient(contact=contact))
 
+    def profile_reference(self, person, contact_id=9):
+        return ExternalPersonReference.objects.create(
+            person=person,
+            provider="BREVO",
+            reference_type=ExternalPersonReference.ReferenceType.MARKETING_CONTACT,
+            external_id=str(contact_id),
+        )
+
+    def test_profile_sync_updates_name_and_safe_mobile_without_consent_dependency(self):
+        person = self.person(first_name="Sofia", last_name="Smith", mobile="+265991234567")
+        reference = self.profile_reference(person)
+        contact = BrevoContact(9, person.primary_email, {"FIRSTNAME": "Old", "LASTNAME": "Name", "SMS": "+265991000000"}, (2,), (2,), True, False)
+        client = FakeBrevoSyncClient(contact=contact)
+
+        result = synchronize_person_profile_to_brevo(person_id=person.id, client=client)
+
+        self.assertEqual(result.outcome, BrevoPersonSyncOutcome.UPDATED_PERSON_PROFILE)
+        self.assertEqual(client.updated[0]["attributes"], {"FIRSTNAME": "Sofia", "LASTNAME": "Smith", "SMS": "+265991234567"})
+        self.assertEqual(result.reference_id, reference.id)
+        self.assertFalse(MarketingPreference.objects.filter(person=person).exists())
+
+    def test_profile_sync_clears_blank_attributes_and_omits_unsafe_mobile(self):
+        person = self.person(first_name="", last_name="", mobile="0991000001")
+        self.profile_reference(person)
+        contact = BrevoContact(9, person.primary_email, {"FIRSTNAME": "Old", "LASTNAME": "Name", "SMS": "+265991000000"}, (), (), False, False)
+        client = FakeBrevoSyncClient(contact=contact)
+
+        result = synchronize_person_profile_to_brevo(person_id=person.id, client=client)
+
+        self.assertEqual(result.outcome, BrevoPersonSyncOutcome.UPDATED_PERSON_PROFILE)
+        self.assertEqual(result.reason, "MOBILE_OMITTED_UNSAFE_FORMAT")
+        self.assertEqual(client.updated[0]["attributes"], {"FIRSTNAME": "", "LASTNAME": "",})
+        self.assertNotIn("SMS", client.updated[0]["attributes"])
+
+    def test_profile_sync_clears_blank_mobile(self):
+        person = self.person(mobile="")
+        self.profile_reference(person)
+        contact = BrevoContact(9, person.primary_email, {"FIRSTNAME": "Ava", "LASTNAME": "Example", "SMS": "+265991000000"}, (), (), False, False)
+        client = FakeBrevoSyncClient(contact=contact)
+
+        synchronize_person_profile_to_brevo(person_id=person.id, client=client)
+
+        self.assertEqual(client.updated[0]["attributes"]["SMS"], "")
+
+    def test_profile_sync_without_reference_skips_without_creating_contact(self):
+        person = self.person()
+        client = FakeBrevoSyncClient()
+
+        result = synchronize_person_profile_to_brevo(person_id=person.id, client=client)
+
+        self.assertEqual(result.outcome, BrevoPersonSyncOutcome.SKIPPED_NO_MARKETING_CONTACT)
+        self.assertFalse(client.created)
+
+    def test_profile_email_identity_mismatch_requires_reconciliation(self):
+        person = self.person(primary_email="new@example.com")
+        self.profile_reference(person)
+        contact = BrevoContact(9, "old@example.com", {"FIRSTNAME": "Ava", "LASTNAME": "Example"}, (), (), False, False)
+        client = FakeBrevoSyncClient(contact=contact)
+
+        result = synchronize_person_profile_to_brevo(person_id=person.id, client=client)
+
+        self.assertEqual(result.outcome, BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED)
+        self.assertFalse(client.updated)
+
 
 class BrevoSyncJobTests(TestCase):
     def setUp(self):
@@ -296,6 +363,25 @@ class BrevoSyncJobTests(TestCase):
         self.assertEqual(result.status, ExternalPersonSyncJob.Status.SUCCEEDED)
         self.assertEqual(self.job.status, ExternalPersonSyncJob.Status.SUCCEEDED)
         synchronize.assert_called_once_with(person_id=self.person.id, client=synchronize.call_args.kwargs["client"])
+
+    @patch("brevo_marketing.jobs.synchronize_person_profile_to_brevo")
+    def test_worker_processes_person_profile_job(self, synchronize_profile):
+        self.job.status = ExternalPersonSyncJob.Status.SUCCEEDED
+        self.job.save(update_fields=["status", "updated_at"])
+        profile_job = ExternalPersonSyncJob.objects.create(
+            person=self.person,
+            provider="BREVO",
+            job_type="PERSON_PROFILE",
+            source_event_id=999,
+        )
+        synchronize_profile.return_value = type("Result", (), {"outcome": BrevoPersonSyncOutcome.UPDATED_PERSON_PROFILE})()
+
+        result = process_next_brevo_sync_job(client=Mock())
+
+        profile_job.refresh_from_db()
+        self.assertEqual(result.status, ExternalPersonSyncJob.Status.SUCCEEDED)
+        self.assertEqual(profile_job.status, ExternalPersonSyncJob.Status.SUCCEEDED)
+        synchronize_profile.assert_called_once_with(person_id=self.person.id, client=synchronize_profile.call_args.kwargs["client"])
 
     @patch("brevo_marketing.jobs.synchronize_person_to_brevo")
     def test_worker_retries_temporary_provider_failure(self, synchronize):

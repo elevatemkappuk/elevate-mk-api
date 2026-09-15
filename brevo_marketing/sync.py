@@ -33,6 +33,9 @@ class BrevoPersonSyncOutcome:
     MARKETING_OPTED_OUT = "MARKETING_OPTED_OUT"
     ALREADY_MARKETING_OPTED_OUT = "ALREADY_MARKETING_OPTED_OUT"
     RECONCILIATION_REQUIRED = "RECONCILIATION_REQUIRED"
+    SKIPPED_NO_MARKETING_CONTACT = "SKIPPED_NO_MARKETING_CONTACT"
+    UPDATED_PERSON_PROFILE = "UPDATED_PERSON_PROFILE"
+    PROFILE_ALREADY_SYNCHRONIZED = "PROFILE_ALREADY_SYNCHRONIZED"
 
 
 @dataclass(frozen=True)
@@ -192,5 +195,91 @@ def synchronize_person_to_brevo(*, person_id, client=None, actor_user=None):
         contact_id=contact.contact_id,
         reference_id=reference.id,
         provider_state=_provider_state(contact, list_id),
+        reason=mobile_reason,
+    )
+
+
+@transaction.atomic
+def synchronize_person_profile_to_brevo(*, person_id, client=None):
+    """Update only the approved CRM profile fields on an existing Brevo contact."""
+    person = Person.objects.select_for_update().get(pk=person_id)
+    if person.record_type != Person.RecordType.BUSINESS:
+        return BrevoPersonSyncResult(person_id=person.id, outcome=BrevoPersonSyncOutcome.SKIPPED_NOT_BUSINESS)
+    if person.archived_at is not None:
+        return BrevoPersonSyncResult(person_id=person.id, outcome=BrevoPersonSyncOutcome.SKIPPED_ARCHIVED)
+
+    reference = ExternalPersonReference.objects.select_for_update().filter(
+        person=person,
+        provider=BREVO_PROVIDER,
+        reference_type=MARKETING_CONTACT_REFERENCE_TYPE,
+        status=ExternalPersonReference.Status.ACTIVE,
+    ).first()
+    if reference is None:
+        return BrevoPersonSyncResult(
+            person_id=person.id,
+            outcome=BrevoPersonSyncOutcome.SKIPPED_NO_MARKETING_CONTACT,
+            reason="NO_ACTIVE_BREVO_REFERENCE",
+        )
+
+    client = client or BrevoMarketingClient.from_settings()
+    contact = client.get_contact_by_id(reference.external_id)
+    if contact is None:
+        return BrevoPersonSyncResult(
+            person_id=person.id,
+            outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED,
+            reference_id=reference.id,
+            reason="BREVO_CONTACT_NOT_FOUND_FOR_REFERENCE",
+        )
+
+    email = _safe_email(person)
+    try:
+        validate_email(email)
+    except ValidationError:
+        return BrevoPersonSyncResult(
+            person_id=person.id,
+            outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED,
+            contact_id=contact.contact_id,
+            reference_id=reference.id,
+            reason="CRM_EMAIL_INVALID_FOR_REFERENCED_CONTACT",
+        )
+    if not contact.email or contact.email != email:
+        return BrevoPersonSyncResult(
+            person_id=person.id,
+            outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED,
+            contact_id=contact.contact_id,
+            reference_id=reference.id,
+            reason="CRM_EMAIL_DIFFERS_FROM_REFERENCED_CONTACT",
+        )
+
+    attributes = {
+        "FIRSTNAME": person.first_name or "",
+        "LASTNAME": person.last_name or "",
+    }
+    mobile_reason = None
+    if not person.mobile:
+        attributes["SMS"] = ""
+    else:
+        safe_sms = _safe_brevo_sms(person.mobile)
+        if safe_sms:
+            attributes["SMS"] = safe_sms
+        else:
+            mobile_reason = "MOBILE_OMITTED_UNSAFE_FORMAT"
+
+    changed_attributes = {
+        key: value
+        for key, value in attributes.items()
+        if (contact.attributes.get(key) or "") != value
+    }
+    if changed_attributes:
+        client.update_contact(contact_id=contact.contact_id, attributes=changed_attributes)
+        outcome = BrevoPersonSyncOutcome.UPDATED_PERSON_PROFILE
+    else:
+        outcome = BrevoPersonSyncOutcome.PROFILE_ALREADY_SYNCHRONIZED
+    return BrevoPersonSyncResult(
+        person_id=person.id,
+        outcome=outcome,
+        contact_id=contact.contact_id,
+        reference_id=reference.id,
+        provider_state=_provider_state(contact, None),
         reason=mobile_reason,
     )

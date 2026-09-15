@@ -20,11 +20,16 @@ from brevo_marketing.exceptions import (
     BrevoMarketingValidationError,
 )
 from brevo_marketing.routing import BREVO_PROVIDER
-from brevo_marketing.sync import BrevoPersonSyncOutcome, synchronize_person_to_brevo
+from brevo_marketing.sync import (
+    BrevoPersonSyncOutcome,
+    synchronize_person_profile_to_brevo,
+    synchronize_person_to_brevo,
+)
 from external_references.models import ExternalPersonSyncJob
 
 
 EMAIL_MARKETING_PREFERENCE_SYNC = "EMAIL_MARKETING_PREFERENCE"
+PERSON_PROFILE_SYNC = "PERSON_PROFILE"
 STALE_PROCESSING_AFTER = timedelta(minutes=15)
 RETRY_BACKOFF_MINUTES = (1, 5, 15, 60)
 MAX_STORED_ERROR_LENGTH = 500
@@ -114,7 +119,10 @@ def process_next_brevo_sync_job(*, client=None):
         return None
 
     try:
-        result = synchronize_person_to_brevo(person_id=job.person_id, client=client)
+        if job.job_type == PERSON_PROFILE_SYNC:
+            result = synchronize_person_profile_to_brevo(person_id=job.person_id, client=client)
+        else:
+            result = synchronize_person_to_brevo(person_id=job.person_id, client=client)
     except BrevoMarketingTemporaryError as error:
         return _record_retry(job, _error_code(error), error)
     except BrevoMarketingError as error:
@@ -140,7 +148,7 @@ def _claim_next_job():
     stale_before = now - STALE_PROCESSING_AFTER
     ExternalPersonSyncJob.objects.filter(
         provider=BREVO_PROVIDER,
-        job_type=EMAIL_MARKETING_PREFERENCE_SYNC,
+        job_type__in=(EMAIL_MARKETING_PREFERENCE_SYNC, PERSON_PROFILE_SYNC),
         status=ExternalPersonSyncJob.Status.PROCESSING,
         locked_at__lt=stale_before,
     ).update(
@@ -152,7 +160,7 @@ def _claim_next_job():
     )
     job = ExternalPersonSyncJob.objects.select_for_update().filter(
         provider=BREVO_PROVIDER,
-        job_type=EMAIL_MARKETING_PREFERENCE_SYNC,
+        job_type__in=(EMAIL_MARKETING_PREFERENCE_SYNC, PERSON_PROFILE_SYNC),
         status=ExternalPersonSyncJob.Status.PENDING,
         available_at__lte=now,
     ).order_by("available_at", "id").first()
