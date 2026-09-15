@@ -20,6 +20,7 @@ from mailchimp.exceptions import (
 )
 from mailchimp.services import verify_mailchimp_connection
 from mailchimp.sync import synchronize_person_to_mailchimp
+from marketing_preferences.services import record_opt_in, record_opt_out
 from people.models import Person
 
 
@@ -96,7 +97,7 @@ class MailchimpClientTests(SimpleTestCase):
         self.assertEqual(create.method, "POST")
         self.assertEqual(update.method, "PATCH")
         self.assertNotIn("secret-key", create.data.decode())
-        self.assertIn('"status": "pending"', create.data.decode())
+        self.assertIn('"status": "subscribed"', create.data.decode())
         self.assertNotIn("status_if_new", create.data.decode())
         self.assertNotIn("status", update.data.decode())
 
@@ -189,6 +190,7 @@ class MailchimpPersonSyncTests(TestCase):
             last_name="Example",
             primary_email="Ava@Example.com",
         )
+        record_opt_in(person=self.person)
 
     @staticmethod
     def member(member_id="mc-123", status="subscribed", email="ava@example.com", first="Ava", last="Example"):
@@ -199,18 +201,19 @@ class MailchimpPersonSyncTests(TestCase):
             merge_fields={"FNAME": first, "LNAME": last},
         )
 
-    def test_creates_new_member_as_pending_and_links_reference(self):
+    def test_creates_new_member_as_subscribed_and_links_reference(self):
         client = Mock()
         client.get_member.return_value = None
-        client.create_member.return_value = self.member(status="pending")
+        client.create_member.return_value = self.member(status="subscribed")
 
         result = synchronize_person_to_mailchimp(person_id=self.person.id, client=client)
 
-        self.assertEqual(result.outcome, "CREATED")
+        self.assertEqual(result.outcome, "CREATED_SUBSCRIBED")
         client.create_member.assert_called_once_with(
             email_address="ava@example.com",
             first_name="Ava",
             last_name="Example",
+            status="subscribed",
         )
         self.assertEqual(ExternalPersonReference.objects.count(), 1)
         self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.EXTERNAL_PERSON_REFERENCE_LINKED).count(), 1)
@@ -259,7 +262,18 @@ class MailchimpPersonSyncTests(TestCase):
             Person.objects.create(first_name="Archived", last_name="User", primary_email="archived@example.com", archived_at=timezone.now()),
         ):
             result = synchronize_person_to_mailchimp(person_id=person.id, client=client)
-            self.assertEqual(result.outcome, "SKIPPED")
+            self.assertTrue(result.outcome.startswith("SKIPPED_"))
+        client.get_member.assert_not_called()
+
+    def test_unknown_and_opted_out_consent_are_skipped_without_provider_calls(self):
+        unknown = Person.objects.create(first_name="Unknown", last_name="User", primary_email="unknown@example.com")
+        result = synchronize_person_to_mailchimp(person_id=unknown.id, client=Mock())
+        self.assertEqual(result.outcome, "SKIPPED_CONSENT_UNKNOWN")
+
+        record_opt_out(person=unknown)
+        client = Mock()
+        result = synchronize_person_to_mailchimp(person_id=unknown.id, client=client)
+        self.assertEqual(result.outcome, "SKIPPED_CONSENT_OPTED_OUT")
         client.get_member.assert_not_called()
 
     def test_unsubscribed_and_cleaned_members_are_not_resubscribed_or_updated(self):
@@ -301,16 +315,16 @@ class MailchimpPersonSyncTests(TestCase):
     def test_sync_management_command_reports_safe_structured_result(self, synchronize):
         synchronize.return_value = type("Result", (), {
             "person_id": self.person.id,
-            "outcome": "CREATED",
+            "outcome": "CREATED_SUBSCRIBED",
             "reason": None,
             "member_id": "mc-123",
-            "provider_status": "pending",
+            "provider_status": "subscribed",
             "reference_id": 7,
         })()
         output = StringIO()
 
         call_command("sync_mailchimp_person", str(self.person.id), stdout=output)
 
-        self.assertIn("Outcome: CREATED", output.getvalue())
+        self.assertIn("Outcome: CREATED_SUBSCRIBED", output.getvalue())
         self.assertIn("Person ID: ", output.getvalue())
         synchronize.assert_called_once_with(person_id=self.person.id)

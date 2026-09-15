@@ -77,14 +77,13 @@ class MailchimpMarketingClient:
             return None
         return self._member_from_payload(payload, email_address)
 
-    def create_member(self, *, email_address, first_name, last_name):
+    def create_member(self, *, email_address, first_name, last_name, status="subscribed"):
         payload = self._request(
             "POST",
             f"/lists/{quote(self.audience_id, safe='')}/members",
             body={
                 "email_address": email_address,
-                # Pending avoids treating CRM membership as marketing consent.
-                "status": "pending",
+                "status": status,
                 "merge_fields": self._merge_fields(first_name, last_name),
             },
         )
