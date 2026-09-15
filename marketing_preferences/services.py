@@ -46,28 +46,36 @@ def get_effective_marketing_preference(*, person, channel=MarketingPreference.Ch
     return _effective_from_model(preference)
 
 
-def record_opt_in(*, person, source=MarketingPreference.Source.STAFF_RECORDED, actor_user=None, recorded_at=None):
+def record_opt_in(*, person, source=MarketingPreference.Source.STAFF_RECORDED, actor_user=None, recorded_at=None, origin_provider=None, provider_event_id=None, provider_contact_id=None, provider_event_type=None):
     return _record_explicit_preference(
         person=person,
         state=MarketingPreference.State.OPTED_IN,
         source=source,
         actor_user=actor_user,
         recorded_at=recorded_at,
+        origin_provider=origin_provider,
+        provider_event_id=provider_event_id,
+        provider_contact_id=provider_contact_id,
+        provider_event_type=provider_event_type,
     )
 
 
-def record_opt_out(*, person, source=MarketingPreference.Source.STAFF_RECORDED, actor_user=None, recorded_at=None):
+def record_opt_out(*, person, source=MarketingPreference.Source.STAFF_RECORDED, actor_user=None, recorded_at=None, origin_provider=None, provider_event_id=None, provider_contact_id=None, provider_event_type=None):
     return _record_explicit_preference(
         person=person,
         state=MarketingPreference.State.OPTED_OUT,
         source=source,
         actor_user=actor_user,
         recorded_at=recorded_at,
+        origin_provider=origin_provider,
+        provider_event_id=provider_event_id,
+        provider_contact_id=provider_contact_id,
+        provider_event_type=provider_event_type,
     )
 
 
 @transaction.atomic
-def _record_explicit_preference(*, person, state, source, actor_user=None, recorded_at=None):
+def _record_explicit_preference(*, person, state, source, actor_user=None, recorded_at=None, origin_provider=None, provider_event_id=None, provider_contact_id=None, provider_event_type=None):
     if state not in {MarketingPreference.State.OPTED_IN, MarketingPreference.State.OPTED_OUT}:
         raise ValueError("Only OPTED_IN and OPTED_OUT may be recorded explicitly.")
     if source not in MarketingPreference.Source.values:
@@ -127,14 +135,23 @@ def _record_explicit_preference(*, person, state, source, actor_user=None, recor
             "state": {"from": previous_state, "to": state},
             "source": {"from": previous_source, "to": source},
         },
-        metadata={"person_id": str(person.id), "channel": preference.channel},
+        metadata={
+            "person_id": str(person.id),
+            "channel": preference.channel,
+            **({"origin_provider": origin_provider.strip().upper()} if origin_provider else {}),
+            **({"provider_event_id": str(provider_event_id)} if provider_event_id else {}),
+            **({"provider_contact_id": str(provider_contact_id)} if provider_contact_id else {}),
+            **({"provider_event_type": provider_event_type.strip().lower()} if provider_event_type else {}),
+        },
     )
-    enqueue_person_sync_job(
-        person=person,
-        provider=get_active_marketing_sync_provider(),
-        job_type=EMAIL_MARKETING_PREFERENCE_SYNC,
-        source_event_id=history.id,
-    )
+    active_provider = get_active_marketing_sync_provider()
+    if not origin_provider or origin_provider.strip().upper() != active_provider:
+        enqueue_person_sync_job(
+            person=person,
+            provider=active_provider,
+            job_type=EMAIL_MARKETING_PREFERENCE_SYNC,
+            source_event_id=history.id,
+        )
     return MarketingPreferenceWriteResult(_effective_from_model(preference), changed=True)
 
 

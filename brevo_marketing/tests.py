@@ -1,4 +1,6 @@
 from io import StringIO
+import base64
+from datetime import datetime, timezone as datetime_timezone
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -6,6 +8,7 @@ import httpx
 from brevo import BadRequestError, UnauthorizedError
 from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase, override_settings
+from rest_framework.test import APIClient
 
 from brevo_marketing.client import BrevoContact, BrevoMarketingClient
 from brevo_marketing.exceptions import (
@@ -21,6 +24,7 @@ from brevo_marketing.jobs import process_next_brevo_sync_job
 from brevo_marketing.routing import get_active_marketing_sync_provider
 from brevo_marketing.sync import BrevoPersonSyncOutcome, synchronize_person_to_brevo
 from external_references.models import ExternalPersonReference, ExternalPersonSyncJob
+from marketing_preferences.models import MarketingPreference, MarketingPreferenceHistory, MarketingWebhookReceipt
 from marketing_preferences.services import record_opt_in, record_opt_out
 from people.models import Person
 
@@ -341,3 +345,89 @@ class BrevoSyncJobTests(TestCase):
             ExternalPersonSyncJob.objects.get(provider="MAILCHIMP").status,
             ExternalPersonSyncJob.Status.PENDING,
         )
+
+
+@override_settings(
+    BREVO_MARKETING_WEBHOOK_USERNAME="webhook-user",
+    BREVO_MARKETING_WEBHOOK_PASSWORD="webhook-password",
+    BREVO_MARKETING_LIST_ID="2",
+)
+class BrevoMarketingWebhookTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.person = Person.objects.create(first_name="Ava", last_name="Example", primary_email="ava@example.com")
+        self.url = "/api/v1/webhooks/brevo/marketing/"
+
+    def auth(self, username="webhook-user", password="webhook-password"):
+        token = base64.b64encode(f"{username}:{password}".encode()).decode()
+        return {"HTTP_AUTHORIZATION": f"Basic {token}"}
+
+    def payload(self, **overrides):
+        payload = {
+            "event": "unsubscribe",
+            "email": "AVA@example.com",
+            "id": 7001,
+            "ts_event": 1770000000,
+            "date_event": "2026-02-02 00:00:00",
+            "camp_id": 44,
+            "list_id": [2],
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_authenticated_unsubscribe_records_brevo_opt_out_without_echo_job(self):
+        response = self.client.post(self.url, self.payload(), format="json", **self.auth())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["outcome"], "CRM_OPTED_OUT_RECORDED")
+        preference = MarketingPreference.objects.get(person=self.person)
+        self.assertEqual(preference.state, MarketingPreference.State.OPTED_OUT)
+        self.assertEqual(preference.source, MarketingPreference.Source.BREVO)
+        history = MarketingPreferenceHistory.objects.get()
+        self.assertEqual(history.source, MarketingPreference.Source.BREVO)
+        self.assertEqual(history.recorded_at, datetime.fromtimestamp(1770000000, tz=datetime_timezone.utc))
+        self.assertFalse(ExternalPersonSyncJob.objects.exists())
+        self.assertEqual(MarketingWebhookReceipt.objects.count(), 1)
+
+    def test_unknown_unsubscribe_records_opt_out_without_creating_person_or_job(self):
+        response = self.client.post(self.url, self.payload(email="missing@example.com"), format="json", **self.auth())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["outcome"], "PERSON_NOT_FOUND")
+        self.assertFalse(MarketingPreference.objects.exists())
+        self.assertFalse(Person.objects.filter(primary_email="missing@example.com").exists())
+        self.assertFalse(ExternalPersonSyncJob.objects.exists())
+
+    def test_replay_is_acknowledged_without_duplicate_history(self):
+        first = self.client.post(self.url, self.payload(), format="json", **self.auth())
+        second = self.client.post(self.url, self.payload(), format="json", **self.auth())
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.data["outcome"], "REPLAY_IGNORED")
+        self.assertEqual(MarketingPreferenceHistory.objects.count(), 1)
+        self.assertEqual(MarketingWebhookReceipt.objects.count(), 1)
+
+    def test_unsupported_marketing_event_is_acknowledged_without_mutation(self):
+        response = self.client.post(self.url, {"event": "opened"}, format="json", **self.auth())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["outcome"], "UNSUPPORTED_EVENT")
+        self.assertFalse(MarketingPreference.objects.exists())
+
+    def test_authentication_and_malformed_payload_are_rejected_safely(self):
+        unauthorized = self.client.post(self.url, self.payload(), format="json", **self.auth(password="wrong"))
+        malformed = self.client.post(self.url, b"not-json", content_type="application/json", **self.auth())
+
+        self.assertEqual(unauthorized.status_code, 401)
+        self.assertEqual(malformed.status_code, 400)
+        self.assertNotIn("webhook-password", unauthorized.content.decode())
+
+    def test_ambiguous_email_does_not_mutate_consent(self):
+        Person.objects.create(first_name="Another", last_name="Example", primary_email="ava@example.com")
+
+        response = self.client.post(self.url, self.payload(), format="json", **self.auth())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["outcome"], "IDENTITY_CONFLICT")
+        self.assertFalse(MarketingPreference.objects.exists())

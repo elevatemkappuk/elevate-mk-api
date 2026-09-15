@@ -36,6 +36,16 @@ Email changes are not silently migrated: if a Person already has a BREVO referen
 
 Existing MAILCHIMP references and jobs are preserved and never reinterpreted as BREVO jobs. The existing Mailchimp worker remains a separately invoked rollback/reference path and processes only rows explicitly owned by `MAILCHIMP`; operators should not run it against historical pending rows unless Mailchimp rollback processing is intentional.
 
+## Inbound Brevo marketing unsubscribe
+
+`POST /api/v1/webhooks/brevo/marketing/` accepts only authenticated Brevo marketing webhook traffic. Brevo Basic webhook authentication is configured with `BREVO_MARKETING_WEBHOOK_USERNAME` and `BREVO_MARKETING_WEBHOOK_PASSWORD`; these credentials are separate from the API key and are compared without logging or persisting them. The route is not a CRM staff endpoint and does not use normal session/token authorization.
+
+The only supported event is Brevo marketing `event=unsubscribe`. The handler consumes the webhook `id` for replay protection when present, `email`, `ts_event`/`date_event`, `camp_id`, and `list_id`. It requires the configured `BREVO_MARKETING_LIST_ID` in the event list context, so transactional events and unrelated Brevo marketing-list events cannot change CRM marketing consent. Opens, clicks, delivery, bounce, contact, list-addition, SMS, and transactional events are ignored or rejected without consent mutation. Brevo's documented marketing unsubscribe payload supplies email/list/campaign context rather than a stable contact ID, so resolution safely falls back to exact normalized primary-email matching; names and phones are never used.
+
+An exact single BUSINESS Person receives `MarketingPreference.EMAIL=OPTED_OUT` with source `BREVO`, provider event metadata in the audit event, and the provider event timestamp when valid. Existing `BREVO` references are preserved; this webhook does not create or revoke references because the payload has no stable contact ID to attach. Missing People are acknowledged without creation. Ambiguous email identity is acknowledged as a safe conflict without mutation. Webhook receipts store only bounded event metadata and outcome, not the raw payload or email address.
+
+Provider-originated preference mutation passes `origin_provider=BREVO` through the authoritative preference service. It preserves preference, history, and audit behavior but suppresses the outbound BREVO echo job. Repeated event IDs are acknowledged as `REPLAY_IGNORED`; repeated events without an ID still rely on preference idempotency. Authentication failures return 401, malformed/scoping failures return 400, valid ignored/handled events return 2xx, and unexpected processing failures return 5xx for retry.
+
 ## One-Person Mailchimp synchronization
 
 `mailchimp.sync.synchronize_person_to_mailchimp(person_id=...)` synchronizes exactly one active `BUSINESS` Person. It uses only normalized `primary_email`, `first_name`, and `last_name`. A missing email, `TECHNICAL` Person, or archived Person returns a safe explicit `SKIPPED_*` result without calling Mailchimp; archived People are not automatically reintroduced to the marketing Audience.

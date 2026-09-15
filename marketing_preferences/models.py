@@ -23,6 +23,7 @@ class MarketingPreference(models.Model):
         STAFF_RECORDED = "STAFF_RECORDED", "Staff recorded"
         HISTORICAL_IMPORT = "HISTORICAL_IMPORT", "Historical import"
         MAILCHIMP = "MAILCHIMP", "Mailchimp"
+        BREVO = "BREVO", "Brevo"
         OTHER = "OTHER", "Other"
 
     person = models.ForeignKey(
@@ -110,3 +111,45 @@ class MarketingPreferenceHistory(models.Model):
 
     def __str__(self):
         return f"{self.channel}: {self.state} ({self.recorded_at.isoformat()})"
+
+
+class MarketingWebhookReceipt(models.Model):
+    """Bounded evidence that a provider webhook delivery was handled or safely ignored."""
+
+    provider = models.CharField(max_length=100)
+    event_id = models.CharField(max_length=255)
+    event_type = models.CharField(max_length=80)
+    person = models.ForeignKey(
+        Person,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="marketing_webhook_receipts",
+    )
+    event_recorded_at = models.DateTimeField(null=True, blank=True)
+    list_ids = models.JSONField(default=list, blank=True)
+    campaign_id = models.CharField(max_length=255, null=True, blank=True)
+    outcome = models.CharField(max_length=80)
+    received_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["-received_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider", "event_id"],
+                name="marketing_webhook_provider_event_unique",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["provider", "event_type", "received_at"], name="marketing_webhook_event_idx"),
+        ]
+
+    def save(self, *args, **kwargs):
+        self.provider = self.provider.strip().upper()
+        self.event_id = self.event_id.strip()
+        self.event_type = self.event_type.strip().lower()
+        self.outcome = self.outcome.strip().upper()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.provider} {self.event_type} {self.event_id} ({self.outcome})"

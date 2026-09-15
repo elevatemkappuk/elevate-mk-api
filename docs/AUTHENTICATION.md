@@ -66,6 +66,7 @@ The backend uses the Brevo Transactional Email API for server-to-server transact
 - `BREVO_PASSWORD_RESET_TEMPLATE_ID` is reserved for the future password-reset feature and does not enable password recovery by itself
 - `BREVO_MARKETING_LIST_ID` selects the explicitly approved Brevo marketing list for the manual one-Person sync command
 - `MARKETING_SYNC_PROVIDER` selects the active automatic marketing provider and currently must be `BREVO`
+- `BREVO_MARKETING_WEBHOOK_USERNAME` and `BREVO_MARKETING_WEBHOOK_PASSWORD` authenticate inbound Brevo marketing webhooks; they are separate from `BREVO_API_KEY` and must remain backend-only
 - feature code supplies the Brevo template ID and safe parameter names; template parameters may contain sensitive values and are not logged
 - Brevo credentials are backend-only environment configuration and must never be committed, returned by APIs, sent to the frontend, or stored in audit metadata
 - the generic notification service supports Brevo templates such as a future password-reset template receiving `params.reset_url`
