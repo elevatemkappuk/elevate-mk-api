@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     'events',
     'external_references',
     'mailchimp',
+    'marketing_preferences',
     'corsheaders',
     'rest_framework',
     'drf_spectacular',

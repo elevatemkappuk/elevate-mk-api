@@ -33,4 +33,6 @@ urlpatterns = [
     path('api/v1/', include('tags.urls')),
     path('api/v1/', include('notes.urls')),
     path('api/v1/', include('data_imports.urls')),
+    path('api/v1/', include('marketing_preferences.urls')),
+    path('api/v1/', include('marketing_preferences.urls')),
 ]

@@ -57,6 +57,8 @@ class AuditEvent(models.Model):
         EXTERNAL_PERSON_REFERENCE_LINKED = "EXTERNAL_PERSON_REFERENCE_LINKED", "External person reference linked"
         EXTERNAL_PERSON_REFERENCE_REACTIVATED = "EXTERNAL_PERSON_REFERENCE_REACTIVATED", "External person reference reactivated"
         EXTERNAL_PERSON_REFERENCE_REVOKED = "EXTERNAL_PERSON_REFERENCE_REVOKED", "External person reference revoked"
+        MARKETING_PREFERENCE_OPTED_IN = "MARKETING_PREFERENCE_OPTED_IN", "Marketing preference opted in"
+        MARKETING_PREFERENCE_OPTED_OUT = "MARKETING_PREFERENCE_OPTED_OUT", "Marketing preference opted out"
 
     actor_user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
