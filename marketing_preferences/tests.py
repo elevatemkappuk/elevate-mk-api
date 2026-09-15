@@ -7,6 +7,7 @@ from django.test import TestCase
 from audit.models import AuditEvent
 from marketing_preferences.models import MarketingPreference, MarketingPreferenceHistory
 from marketing_preferences.services import get_effective_marketing_preference, record_opt_in, record_opt_out
+from external_references.models import ExternalPersonSyncJob
 from memberships.models import Membership
 from people.models import Person
 from staff_access.models import StaffRole, StaffRoleAssignment
@@ -41,6 +42,8 @@ class MarketingPreferenceServiceTests(TestCase):
         self.assertEqual(MarketingPreferenceHistory.objects.count(), 1)
         audit = AuditEvent.objects.get(action=AuditEvent.Action.MARKETING_PREFERENCE_OPTED_IN)
         self.assertEqual(audit.metadata, {"person_id": str(self.person.id), "channel": "EMAIL"})
+        self.assertEqual(ExternalPersonSyncJob.objects.count(), 1)
+        self.assertEqual(ExternalPersonSyncJob.objects.get().source_event_id, MarketingPreferenceHistory.objects.get().id)
 
     def test_opt_out_then_later_opt_in_preserves_history(self):
         record_opt_in(person=self.person)
@@ -59,6 +62,14 @@ class MarketingPreferenceServiceTests(TestCase):
         self.assertFalse(second.changed)
         self.assertEqual(MarketingPreferenceHistory.objects.count(), 1)
         self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.MARKETING_PREFERENCE_OPTED_OUT).count(), 1)
+        self.assertEqual(ExternalPersonSyncJob.objects.count(), 1)
+
+    def test_meaningful_opt_out_and_later_opt_in_queue_one_job_per_history_event(self):
+        record_opt_out(person=self.person)
+        record_opt_in(person=self.person)
+
+        self.assertEqual(MarketingPreferenceHistory.objects.count(), 2)
+        self.assertEqual(ExternalPersonSyncJob.objects.count(), 2)
 
 
 class MarketingPreferenceApiTests(TestCase):

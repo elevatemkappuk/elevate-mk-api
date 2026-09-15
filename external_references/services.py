@@ -3,8 +3,24 @@ from django.utils import timezone
 
 from audit.models import AuditEvent
 from audit.services import record_audit_event
-from external_references.models import ExternalPersonReference
+from external_references.models import ExternalPersonReference, ExternalPersonSyncJob
 from people.models import Person
+
+
+def enqueue_person_sync_job(*, person, provider, job_type, source_event_id, available_at=None):
+    """Create one durable sync job for a source-domain event, idempotently."""
+    job, _ = ExternalPersonSyncJob.objects.get_or_create(
+        provider=provider,
+        job_type=job_type,
+        source_event_id=source_event_id,
+        defaults={
+            "person": person,
+            "available_at": available_at or timezone.now(),
+        },
+    )
+    if job.person_id != person.id:
+        raise ValueError("External sync event is already assigned to a different Person.")
+    return job
 
 
 @transaction.atomic

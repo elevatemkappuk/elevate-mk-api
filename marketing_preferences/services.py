@@ -5,7 +5,12 @@ from django.utils import timezone
 
 from audit.models import AuditEvent
 from audit.services import record_audit_event
+from external_references.services import enqueue_person_sync_job
 from marketing_preferences.models import MarketingPreference, MarketingPreferenceHistory
+
+
+MAILCHIMP_PROVIDER = "MAILCHIMP"
+EMAIL_MARKETING_PREFERENCE_SYNC = "EMAIL_MARKETING_PREFERENCE"
 
 
 @dataclass(frozen=True)
@@ -100,7 +105,7 @@ def _record_explicit_preference(*, person, state, source, actor_user=None, recor
         preference.actor_user = actor_user
         preference.save(update_fields=["state", "source", "recorded_at", "actor_user", "updated_at"])
 
-    MarketingPreferenceHistory.objects.create(
+    history = MarketingPreferenceHistory.objects.create(
         preference=preference,
         channel=preference.channel,
         state=state,
@@ -123,6 +128,12 @@ def _record_explicit_preference(*, person, state, source, actor_user=None, recor
             "source": {"from": previous_source, "to": source},
         },
         metadata={"person_id": str(person.id), "channel": preference.channel},
+    )
+    enqueue_person_sync_job(
+        person=person,
+        provider=MAILCHIMP_PROVIDER,
+        job_type=EMAIL_MARKETING_PREFERENCE_SYNC,
+        source_event_id=history.id,
     )
     return MarketingPreferenceWriteResult(_effective_from_model(preference), changed=True)
 

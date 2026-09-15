@@ -34,7 +34,7 @@ class MailchimpMember:
 
 
 class MailchimpMarketingClient:
-    """Minimal read-only Mailchimp Marketing API client."""
+    """Minimal Mailchimp Marketing API client for controlled audience operations."""
 
     api_base = "https://{server_prefix}.api.mailchimp.com/3.0"
 
@@ -98,6 +98,15 @@ class MailchimpMarketingClient:
                 "email_address": email_address,
                 "merge_fields": self._merge_fields(first_name, last_name),
             },
+        )
+        return self._member_from_payload(payload, email_address)
+
+    def unsubscribe_member(self, *, email_address):
+        subscriber_hash = self.subscriber_hash(email_address)
+        payload = self._request(
+            "PUT",
+            f"/lists/{quote(self.audience_id, safe='')}/members/{subscriber_hash}",
+            body={"status": "unsubscribed"},
         )
         return self._member_from_payload(payload, email_address)
 

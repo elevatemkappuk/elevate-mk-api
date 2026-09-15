@@ -69,3 +69,49 @@ class ExternalPersonReference(models.Model):
 
     def __str__(self):
         return f"{self.provider} {self.reference_type}: {self.external_id} -> Person {self.person_id}"
+
+
+class ExternalPersonSyncJob(models.Model):
+    """Durable, provider-neutral work item for synchronizing one Person externally."""
+
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        PROCESSING = "PROCESSING", "Processing"
+        SUCCEEDED = "SUCCEEDED", "Succeeded"
+        FAILED = "FAILED", "Failed"
+
+    person = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="external_sync_jobs")
+    provider = models.CharField(max_length=100)
+    job_type = models.CharField(max_length=100)
+    source_event_id = models.PositiveBigIntegerField()
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    available_at = models.DateTimeField(default=timezone.now)
+    attempts = models.PositiveIntegerField(default=0)
+    max_attempts = models.PositiveIntegerField(default=5)
+    locked_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    last_error_code = models.CharField(max_length=100, null=True, blank=True)
+    last_error_message = models.CharField(max_length=500, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["available_at", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider", "job_type", "source_event_id"],
+                name="external_sync_job_provider_type_event_unique",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["provider", "status", "available_at"], name="ext_sync_job_ready_idx"),
+            models.Index(fields=["person", "provider", "job_type"], name="ext_sync_job_person_idx"),
+        ]
+
+    def save(self, *args, **kwargs):
+        self.provider = self.provider.strip().upper()
+        self.job_type = self.job_type.strip().upper()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.provider} {self.job_type} #{self.pk} ({self.status})"

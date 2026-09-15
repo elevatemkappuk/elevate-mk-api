@@ -8,7 +8,7 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 
 from audit.models import AuditEvent
-from external_references.models import ExternalPersonReference
+from external_references.models import ExternalPersonReference, ExternalPersonSyncJob
 from mailchimp.client import MailchimpMarketingClient, MailchimpMember
 from mailchimp.exceptions import (
     MailchimpAudienceAccessError,
@@ -19,7 +19,9 @@ from mailchimp.exceptions import (
     MailchimpValidationError,
 )
 from mailchimp.services import verify_mailchimp_connection
+from mailchimp.jobs import process_next_mailchimp_sync_job
 from mailchimp.sync import synchronize_person_to_mailchimp
+from mailchimp.sync import MailchimpPersonSyncResult
 from marketing_preferences.services import record_opt_in, record_opt_out
 from people.models import Person
 
@@ -100,6 +102,22 @@ class MailchimpClientTests(SimpleTestCase):
         self.assertIn('"status": "subscribed"', create.data.decode())
         self.assertNotIn("status_if_new", create.data.decode())
         self.assertNotIn("status", update.data.decode())
+
+    def test_unsubscribe_member_uses_status_patch_without_secret_or_email(self):
+        opener = Mock(return_value=FakeResponse({
+            "id": "mc-123",
+            "email_address": "ava@example.com",
+            "status": "unsubscribed",
+        }))
+        client = MailchimpMarketingClient(api_key="secret-key", server_prefix="us21", audience_id="aud-123", opener=opener)
+
+        client.unsubscribe_member(email_address="Ava@Example.com")
+
+        request = opener.call_args.args[0]
+        self.assertEqual(request.method, "PUT")
+        self.assertIn('"status": "unsubscribed"', request.data.decode())
+        self.assertNotIn("secret-key", request.data.decode())
+        self.assertNotIn("ava@example.com", request.data.decode())
 
     def test_missing_configuration_is_controlled_and_key_is_not_in_error(self):
         with self.assertRaises(MailchimpConfigurationError) as raised:
@@ -272,9 +290,33 @@ class MailchimpPersonSyncTests(TestCase):
 
         record_opt_out(person=unknown)
         client = Mock()
+        client.get_member.return_value = None
         result = synchronize_person_to_mailchimp(person_id=unknown.id, client=client)
-        self.assertEqual(result.outcome, "SKIPPED_CONSENT_OPTED_OUT")
-        client.get_member.assert_not_called()
+        self.assertEqual(result.outcome, "SKIPPED_CONSENT_OPTED_OUT_NO_MEMBER")
+        client.get_member.assert_called_once_with("unknown@example.com")
+        client.create_member.assert_not_called()
+
+    def test_opted_out_subscribed_member_is_unsubscribed(self):
+        record_opt_out(person=self.person)
+        client = Mock()
+        client.get_member.return_value = self.member(status="subscribed")
+        client.unsubscribe_member.return_value = self.member(status="unsubscribed")
+
+        result = synchronize_person_to_mailchimp(person_id=self.person.id, client=client)
+
+        self.assertEqual(result.outcome, "UNSUBSCRIBED")
+        client.unsubscribe_member.assert_called_once_with(email_address="ava@example.com")
+        client.create_member.assert_not_called()
+
+    def test_opted_out_unsubscribed_member_is_idempotent(self):
+        record_opt_out(person=self.person)
+        client = Mock()
+        client.get_member.return_value = self.member(status="unsubscribed")
+
+        result = synchronize_person_to_mailchimp(person_id=self.person.id, client=client)
+
+        self.assertEqual(result.outcome, "ALREADY_UNSUBSCRIBED")
+        client.unsubscribe_member.assert_not_called()
 
     def test_unsubscribed_and_cleaned_members_are_not_resubscribed_or_updated(self):
         for status in ("unsubscribed", "cleaned"):
@@ -287,6 +329,18 @@ class MailchimpPersonSyncTests(TestCase):
                 self.assertEqual(result.outcome, "SKIPPED_PROTECTED_SUBSCRIPTION_STATE")
                 client.update_subscribed_member.assert_not_called()
                 ExternalPersonReference.objects.all().delete()
+
+    def test_opted_out_protected_members_are_not_changed(self):
+        record_opt_out(person=self.person)
+        for status in ("cleaned", "pending", "archived", "transactional"):
+            with self.subTest(status=status):
+                client = Mock()
+                client.get_member.return_value = self.member(status=status)
+
+                result = synchronize_person_to_mailchimp(person_id=self.person.id, client=client)
+
+                self.assertEqual(result.outcome, "SKIPPED_PROTECTED_SUBSCRIPTION_STATE")
+                client.unsubscribe_member.assert_not_called()
 
     def test_provider_failure_is_propagated_without_reference(self):
         client = Mock()
@@ -328,3 +382,92 @@ class MailchimpPersonSyncTests(TestCase):
         self.assertIn("Outcome: CREATED_SUBSCRIBED", output.getvalue())
         self.assertIn("Person ID: ", output.getvalue())
         synchronize.assert_called_once_with(person_id=self.person.id)
+
+
+class MailchimpSyncJobTests(TestCase):
+    def setUp(self):
+        self.person = Person.objects.create(
+            first_name="Ava",
+            last_name="Example",
+            primary_email="ava@example.com",
+        )
+        record_opt_in(person=self.person)
+        self.job = ExternalPersonSyncJob.objects.get()
+
+    @patch("mailchimp.jobs.synchronize_person_to_mailchimp")
+    def test_successful_processing_is_durable_and_idempotent(self, synchronize):
+        synchronize.return_value = MailchimpPersonSyncResult(
+            person_id=self.person.id,
+            outcome="CREATED_SUBSCRIBED",
+            member_id="mc-123",
+        )
+
+        result = process_next_mailchimp_sync_job(client=Mock())
+        self.job.refresh_from_db()
+
+        self.assertEqual(result.status, ExternalPersonSyncJob.Status.SUCCEEDED)
+        self.assertEqual(self.job.status, ExternalPersonSyncJob.Status.SUCCEEDED)
+        self.assertEqual(self.job.attempts, 1)
+        self.assertIsNotNone(self.job.completed_at)
+        self.assertIsNone(process_next_mailchimp_sync_job(client=Mock()))
+        synchronize.assert_called_once_with(person_id=self.person.id, client=synchronize.call_args.kwargs["client"])
+
+    @patch("mailchimp.jobs.synchronize_person_to_mailchimp")
+    def test_temporary_failure_requeues_without_exposing_provider_details(self, synchronize):
+        synchronize.side_effect = MailchimpTemporaryError("temporary provider detail")
+
+        result = process_next_mailchimp_sync_job(client=Mock())
+        self.job.refresh_from_db()
+
+        self.assertEqual(result.status, ExternalPersonSyncJob.Status.PENDING)
+        self.assertEqual(result.error_code, "MAILCHIMP_TEMPORARY")
+        self.assertEqual(self.job.status, ExternalPersonSyncJob.Status.PENDING)
+        self.assertEqual(self.job.last_error_code, "MAILCHIMP_TEMPORARY")
+        self.assertNotIn("temporary provider detail", self.job.last_error_message or "")
+        self.assertIsNotNone(self.job.available_at)
+
+    @patch("mailchimp.jobs.synchronize_person_to_mailchimp")
+    def test_permanent_configuration_failure_is_terminal_and_safe(self, synchronize):
+        synchronize.side_effect = MailchimpConfigurationError("MAILCHIMP_API_KEY=secret")
+
+        result = process_next_mailchimp_sync_job(client=Mock())
+        self.job.refresh_from_db()
+
+        self.assertEqual(result.status, ExternalPersonSyncJob.Status.FAILED)
+        self.assertEqual(result.error_code, "MAILCHIMP_CONFIGURATION")
+        self.assertEqual(self.job.status, ExternalPersonSyncJob.Status.FAILED)
+        self.assertNotIn("secret", self.job.last_error_message or "")
+
+    def test_http_400_validation_detail_survives_in_safe_failed_job_message(self):
+        not_found = HTTPError("https://example.test", 404, "missing", {}, None)
+        error_body = json.dumps({
+            "title": "Invalid Resource",
+            "detail": "Invalid value for ava@example.com; api_key=super-secret-key",
+            "errors": [{"field": "merge_fields", "message": "FNAME is not valid"}],
+        }).encode("utf-8")
+        validation = HTTPError(
+            "https://example.test",
+            400,
+            "bad request",
+            {},
+            Mock(read=Mock(return_value=error_body)),
+        )
+        client = MailchimpMarketingClient(
+            api_key="configured-secret",
+            server_prefix="us21",
+            audience_id="aud-123",
+            opener=Mock(side_effect=[not_found, validation]),
+        )
+
+        result = process_next_mailchimp_sync_job(client=client)
+        self.job.refresh_from_db()
+
+        self.assertEqual(result.status, ExternalPersonSyncJob.Status.FAILED)
+        self.assertEqual(result.error_code, "MAILCHIMP_VALIDATION")
+        self.assertEqual(self.job.status, ExternalPersonSyncJob.Status.FAILED)
+        self.assertIn("Invalid Resource", self.job.last_error_message)
+        self.assertIn("FNAME is not valid", self.job.last_error_message)
+        self.assertNotIn("ava@example.com", self.job.last_error_message)
+        self.assertNotIn("super-secret-key", self.job.last_error_message)
+        self.assertNotIn("configured-secret", self.job.last_error_message)
+        self.assertLessEqual(len(self.job.last_error_message), 500)

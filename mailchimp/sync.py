@@ -24,11 +24,14 @@ class MailchimpPersonSyncOutcome:
     SKIPPED_INVALID_PRIMARY_EMAIL = "SKIPPED_INVALID_PRIMARY_EMAIL"
     SKIPPED_CONSENT_UNKNOWN = "SKIPPED_CONSENT_UNKNOWN"
     SKIPPED_CONSENT_OPTED_OUT = "SKIPPED_CONSENT_OPTED_OUT"
+    SKIPPED_CONSENT_OPTED_OUT_NO_MEMBER = "SKIPPED_CONSENT_OPTED_OUT_NO_MEMBER"
     CREATED_SUBSCRIBED = "CREATED_SUBSCRIBED"
     UPDATED = "UPDATED"
     ALREADY_SYNCHRONIZED = "ALREADY_SYNCHRONIZED"
     EXISTING_PROVIDER_CONTACT_LINKED = "EXISTING_PROVIDER_CONTACT_LINKED"
     SKIPPED_PROTECTED_SUBSCRIPTION_STATE = "SKIPPED_PROTECTED_SUBSCRIPTION_STATE"
+    UNSUBSCRIBED = "UNSUBSCRIBED"
+    ALREADY_UNSUBSCRIBED = "ALREADY_UNSUBSCRIBED"
 
 
 @dataclass(frozen=True)
@@ -73,9 +76,6 @@ def synchronize_person_to_mailchimp(*, person_id, client=None, actor_user=None):
     preference = get_effective_marketing_preference(person=person)
     if preference.state == MarketingPreference.State.UNKNOWN:
         return MailchimpPersonSyncResult(person_id=person.id, outcome=MailchimpPersonSyncOutcome.SKIPPED_CONSENT_UNKNOWN, reason="MARKETING_CONSENT_UNKNOWN")
-    if preference.state == MarketingPreference.State.OPTED_OUT:
-        return MailchimpPersonSyncResult(person_id=person.id, outcome=MailchimpPersonSyncOutcome.SKIPPED_CONSENT_OPTED_OUT, reason="MARKETING_CONSENT_OPTED_OUT")
-
     client = client or MailchimpMarketingClient.from_settings()
     existing_reference = ExternalPersonReference.objects.select_for_update().filter(
         person=person,
@@ -84,6 +84,17 @@ def synchronize_person_to_mailchimp(*, person_id, client=None, actor_user=None):
     ).first()
     member = client.get_member(email_address)
 
+    if (
+        preference.state == MarketingPreference.State.OPTED_OUT
+        and member is None
+        and existing_reference is not None
+    ):
+        return MailchimpPersonSyncResult(
+            person_id=person.id,
+            outcome=MailchimpPersonSyncOutcome.SKIPPED_CONSENT_OPTED_OUT_NO_MEMBER,
+            reference_id=existing_reference.id,
+            reason="NO_MAILCHIMP_MEMBER",
+        )
     if existing_reference is not None and (member is None or existing_reference.external_id != member.member_id):
         raise MailchimpPersonSyncConflictError(
             "The Person already has a different Mailchimp marketing contact reference."
@@ -98,7 +109,21 @@ def synchronize_person_to_mailchimp(*, person_id, client=None, actor_user=None):
         )
 
     operation = ""
-    if member is None:
+    if preference.state == MarketingPreference.State.OPTED_OUT:
+        if member is None:
+            return MailchimpPersonSyncResult(
+                person_id=person.id,
+                outcome=MailchimpPersonSyncOutcome.SKIPPED_CONSENT_OPTED_OUT_NO_MEMBER,
+                reason="NO_MAILCHIMP_MEMBER",
+            )
+        if member.status == "subscribed":
+            member = client.unsubscribe_member(email_address=email_address)
+            operation = MailchimpPersonSyncOutcome.UNSUBSCRIBED
+        elif member.status == "unsubscribed":
+            operation = MailchimpPersonSyncOutcome.ALREADY_UNSUBSCRIBED
+        else:
+            operation = MailchimpPersonSyncOutcome.SKIPPED_PROTECTED_SUBSCRIPTION_STATE
+    elif member is None:
         member = client.create_member(
             email_address=email_address,
             first_name=person.first_name,
