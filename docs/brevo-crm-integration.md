@@ -607,6 +607,8 @@ The following are non-implemented future milestones:
 
 ## Related documentation
 
+- [Staff CRM frontend guide](brevo-crm-frontend-guide.md)
+- [Staff business and operations guide](brevo-crm-business-guide.md)
 - [Provider-neutral external references](external-references.md)
 - [Provider-neutral marketing consent](marketing-consent.md)
 - [Deployment and operations](DEPLOYMENT.md)
