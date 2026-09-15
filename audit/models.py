@@ -54,6 +54,9 @@ class AuditEvent(models.Model):
         IMPORT_RECORD_MATCH_CONFIRMED = "IMPORT_RECORD_MATCH_CONFIRMED", "Import record match confirmed"
         IMPORT_RECORD_CREATE_NEW_CONFIRMED = "IMPORT_RECORD_CREATE_NEW_CONFIRMED", "Import record create-new confirmed"
         IMPORT_BATCH_IMPORTED = "IMPORT_BATCH_IMPORTED", "Import batch imported"
+        EXTERNAL_PERSON_REFERENCE_LINKED = "EXTERNAL_PERSON_REFERENCE_LINKED", "External person reference linked"
+        EXTERNAL_PERSON_REFERENCE_REACTIVATED = "EXTERNAL_PERSON_REFERENCE_REACTIVATED", "External person reference reactivated"
+        EXTERNAL_PERSON_REFERENCE_REVOKED = "EXTERNAL_PERSON_REFERENCE_REVOKED", "External person reference revoked"
 
     actor_user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
