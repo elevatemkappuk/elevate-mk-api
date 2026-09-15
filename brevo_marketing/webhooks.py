@@ -92,14 +92,16 @@ def parse_webhook_payload(payload):
     except ValidationError as error:
         raise BrevoWebhookPayloadError("A valid webhook recipient is required.") from error
 
-    list_ids = _parse_list_ids(payload.get("list_id"))
-    configured_list_id = _configured_list_id()
-    if configured_list_id not in list_ids:
+    has_list_context = "list_id" in payload
+    list_ids = _parse_list_ids(payload.get("list_id")) if has_list_context else ()
+    if has_list_context and _configured_list_id() not in list_ids:
         raise BrevoWebhookPayloadError("The unsubscribe event is outside the configured marketing list.")
 
     event_recorded_at = _parse_event_timestamp(payload.get("ts_event"), payload.get("date_event"))
     if event_recorded_at is None:
         event_recorded_at = _parse_event_timestamp(payload.get("ts"), None)
+    if not has_list_context and event_recorded_at is None:
+        raise BrevoWebhookPayloadError("A reliable unsubscribe event timestamp is required.")
 
     return BrevoUnsubscribeEvent(
         event_fingerprint=_event_fingerprint(

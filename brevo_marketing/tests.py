@@ -389,6 +389,24 @@ class BrevoMarketingWebhookTests(TestCase):
         self.assertFalse(ExternalPersonSyncJob.objects.exists())
         self.assertEqual(MarketingWebhookReceipt.objects.count(), 1)
 
+    def test_campaign_unsubscribe_without_list_id_records_brevo_opt_out(self):
+        payload = self.payload()
+        payload.pop("list_id")
+
+        response = self.client.post(self.url, payload, format="json", **self.auth())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["outcome"], "CRM_OPTED_OUT_RECORDED")
+        self.assertEqual(MarketingPreference.objects.get(person=self.person).source, MarketingPreference.Source.BREVO)
+        self.assertFalse(ExternalPersonSyncJob.objects.exists())
+        self.assertEqual(MarketingWebhookReceipt.objects.count(), 1)
+
+    def test_conflicting_list_id_is_rejected_without_consent_mutation(self):
+        response = self.client.post(self.url, self.payload(list_id=[99]), format="json", **self.auth())
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(MarketingPreference.objects.exists())
+
     def test_unknown_unsubscribe_records_opt_out_without_creating_person_or_job(self):
         response = self.client.post(self.url, self.payload(email="missing@example.com"), format="json", **self.auth())
 
@@ -399,14 +417,25 @@ class BrevoMarketingWebhookTests(TestCase):
         self.assertFalse(ExternalPersonSyncJob.objects.exists())
 
     def test_replay_is_acknowledged_without_duplicate_history(self):
-        first = self.client.post(self.url, self.payload(), format="json", **self.auth())
-        second = self.client.post(self.url, self.payload(), format="json", **self.auth())
+        payload = self.payload()
+        payload.pop("list_id")
+        first = self.client.post(self.url, payload, format="json", **self.auth())
+        second = self.client.post(self.url, payload, format="json", **self.auth())
 
         self.assertEqual(first.status_code, 200)
         self.assertEqual(second.status_code, 200)
         self.assertEqual(second.data["outcome"], "REPLAY_IGNORED")
         self.assertEqual(MarketingPreferenceHistory.objects.count(), 1)
         self.assertEqual(MarketingWebhookReceipt.objects.count(), 1)
+
+    def test_missing_timestamp_without_list_id_is_malformed(self):
+        payload = self.payload(ts_event=None, date_event=None, ts=None)
+        payload.pop("list_id")
+
+        response = self.client.post(self.url, payload, format="json", **self.auth())
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(MarketingPreference.objects.exists())
 
     def test_same_webhook_id_for_different_recipients_does_not_collide(self):
         other = Person.objects.create(first_name="Other", last_name="Example", primary_email="other@example.com")
