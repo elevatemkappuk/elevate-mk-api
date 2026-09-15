@@ -12,12 +12,15 @@ from brevo_marketing.exceptions import (
     BrevoMarketingAuthenticationError,
     BrevoMarketingConfigurationError,
     BrevoMarketingIdentityConflictError,
+    BrevoMarketingRateLimitError,
     BrevoMarketingTemporaryError,
     BrevoMarketingValidationError,
 )
 from brevo_marketing.services import inspect_brevo_marketing_configuration
+from brevo_marketing.jobs import process_next_brevo_sync_job
+from brevo_marketing.routing import get_active_marketing_sync_provider
 from brevo_marketing.sync import BrevoPersonSyncOutcome, synchronize_person_to_brevo
-from external_references.models import ExternalPersonReference
+from external_references.models import ExternalPersonReference, ExternalPersonSyncJob
 from marketing_preferences.services import record_opt_in, record_opt_out
 from people.models import Person
 
@@ -80,6 +83,11 @@ class BrevoMarketingClientTests(SimpleTestCase):
 
         with self.assertRaises(BrevoMarketingConfigurationError):
             client.get_marketing_list_id()
+
+    @override_settings(MARKETING_SYNC_PROVIDER="MAILCHIMP")
+    def test_unsupported_active_provider_is_rejected(self):
+        with self.assertRaises(BrevoMarketingConfigurationError):
+            get_active_marketing_sync_provider()
 
 
 class BrevoMarketingCommandTests(SimpleTestCase):
@@ -265,3 +273,71 @@ class BrevoPersonDatabaseSyncTests(TestCase):
 
         with self.assertRaises(BrevoMarketingIdentityConflictError):
             synchronize_person_to_brevo(person_id=person.id, client=FakeBrevoSyncClient(contact=contact))
+
+
+class BrevoSyncJobTests(TestCase):
+    def setUp(self):
+        self.person = Person.objects.create(first_name="Ava", last_name="Example", primary_email="ava@example.com")
+        record_opt_in(person=self.person)
+        self.job = ExternalPersonSyncJob.objects.get(provider="BREVO")
+
+    @patch("brevo_marketing.jobs.synchronize_person_to_brevo")
+    def test_worker_processes_brevo_job_and_completes_business_outcomes(self, synchronize):
+        synchronize.return_value = type("Result", (), {"outcome": BrevoPersonSyncOutcome.CREATED_MARKETING_CONTACT})()
+
+        result = process_next_brevo_sync_job(client=Mock())
+        self.job.refresh_from_db()
+
+        self.assertEqual(result.status, ExternalPersonSyncJob.Status.SUCCEEDED)
+        self.assertEqual(self.job.status, ExternalPersonSyncJob.Status.SUCCEEDED)
+        synchronize.assert_called_once_with(person_id=self.person.id, client=synchronize.call_args.kwargs["client"])
+
+    @patch("brevo_marketing.jobs.synchronize_person_to_brevo")
+    def test_worker_retries_temporary_provider_failure(self, synchronize):
+        synchronize.side_effect = BrevoMarketingRateLimitError("provider detail")
+
+        result = process_next_brevo_sync_job(client=Mock())
+        self.job.refresh_from_db()
+
+        self.assertEqual(result.status, ExternalPersonSyncJob.Status.PENDING)
+        self.assertEqual(result.error_code, "BREVO_RATE_LIMIT")
+        self.assertEqual(self.job.status, ExternalPersonSyncJob.Status.PENDING)
+        self.assertNotIn("provider detail", self.job.last_error_message or "")
+
+    @patch("brevo_marketing.jobs.synchronize_person_to_brevo")
+    def test_worker_treats_identity_conflict_as_terminal(self, synchronize):
+        synchronize.side_effect = BrevoMarketingIdentityConflictError("contact conflict")
+
+        result = process_next_brevo_sync_job(client=Mock())
+        self.job.refresh_from_db()
+
+        self.assertEqual(result.status, ExternalPersonSyncJob.Status.FAILED)
+        self.assertEqual(result.error_code, "BREVO_IDENTITY_CONFLICT")
+        self.assertEqual(self.job.status, ExternalPersonSyncJob.Status.FAILED)
+
+    @patch("brevo_marketing.jobs.synchronize_person_to_brevo")
+    def test_worker_treats_reconciliation_required_as_terminal(self, synchronize):
+        synchronize.return_value = type("Result", (), {"outcome": BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED})()
+
+        result = process_next_brevo_sync_job(client=Mock())
+        self.job.refresh_from_db()
+
+        self.assertEqual(result.status, ExternalPersonSyncJob.Status.FAILED)
+        self.assertEqual(result.error_code, "BREVO_RECONCILIATION_REQUIRED")
+        self.assertEqual(self.job.status, ExternalPersonSyncJob.Status.FAILED)
+
+    def test_worker_ignores_mailchimp_jobs(self):
+        ExternalPersonSyncJob.objects.create(
+            person=self.person,
+            provider="MAILCHIMP",
+            job_type="EMAIL_MARKETING_PREFERENCE",
+            source_event_id=999,
+        )
+        self.job.status = ExternalPersonSyncJob.Status.SUCCEEDED
+        self.job.save(update_fields=["status", "updated_at"])
+
+        self.assertIsNone(process_next_brevo_sync_job(client=Mock()))
+        self.assertEqual(
+            ExternalPersonSyncJob.objects.get(provider="MAILCHIMP").status,
+            ExternalPersonSyncJob.Status.PENDING,
+        )

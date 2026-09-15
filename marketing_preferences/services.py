@@ -5,11 +5,11 @@ from django.utils import timezone
 
 from audit.models import AuditEvent
 from audit.services import record_audit_event
+from brevo_marketing.routing import get_active_marketing_sync_provider
 from external_references.services import enqueue_person_sync_job
 from marketing_preferences.models import MarketingPreference, MarketingPreferenceHistory
 
 
-MAILCHIMP_PROVIDER = "MAILCHIMP"
 EMAIL_MARKETING_PREFERENCE_SYNC = "EMAIL_MARKETING_PREFERENCE"
 
 
@@ -131,7 +131,7 @@ def _record_explicit_preference(*, person, state, source, actor_user=None, recor
     )
     enqueue_person_sync_job(
         person=person,
-        provider=MAILCHIMP_PROVIDER,
+        provider=get_active_marketing_sync_provider(),
         job_type=EMAIL_MARKETING_PREFERENCE_SYNC,
         source_event_id=history.id,
     )

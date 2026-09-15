@@ -392,7 +392,12 @@ class MailchimpSyncJobTests(TestCase):
             primary_email="ava@example.com",
         )
         record_opt_in(person=self.person)
-        self.job = ExternalPersonSyncJob.objects.get()
+        self.job = ExternalPersonSyncJob.objects.create(
+            person=self.person,
+            provider="MAILCHIMP",
+            job_type="EMAIL_MARKETING_PREFERENCE",
+            source_event_id=999,
+        )
 
     @patch("mailchimp.jobs.synchronize_person_to_mailchimp")
     def test_successful_processing_is_durable_and_idempotent(self, synchronize):

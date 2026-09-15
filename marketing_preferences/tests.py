@@ -44,6 +44,7 @@ class MarketingPreferenceServiceTests(TestCase):
         self.assertEqual(audit.metadata, {"person_id": str(self.person.id), "channel": "EMAIL"})
         self.assertEqual(ExternalPersonSyncJob.objects.count(), 1)
         self.assertEqual(ExternalPersonSyncJob.objects.get().source_event_id, MarketingPreferenceHistory.objects.get().id)
+        self.assertEqual(ExternalPersonSyncJob.objects.get().provider, "BREVO")
 
     def test_opt_out_then_later_opt_in_preserves_history(self):
         record_opt_in(person=self.person)
@@ -70,6 +71,7 @@ class MarketingPreferenceServiceTests(TestCase):
 
         self.assertEqual(MarketingPreferenceHistory.objects.count(), 2)
         self.assertEqual(ExternalPersonSyncJob.objects.count(), 2)
+        self.assertEqual(set(ExternalPersonSyncJob.objects.values_list("provider", flat=True)), {"BREVO"})
 
 
 class MarketingPreferenceApiTests(TestCase):
