@@ -23,6 +23,14 @@ class MailchimpAudience:
     cleaned_count: int | None
 
 
+@dataclass(frozen=True)
+class MailchimpMember:
+    member_id: str
+    email_address: str
+    status: str
+    merge_fields: dict
+
+
 class MailchimpMarketingClient:
     """Minimal read-only Mailchimp Marketing API client."""
 
@@ -46,7 +54,7 @@ class MailchimpMarketingClient:
         )
 
     def get_configured_audience(self):
-        payload = self._get(f"/lists/{quote(self.audience_id, safe='')}")
+        payload = self._request("GET", f"/lists/{quote(self.audience_id, safe='')}")
         stats = payload.get("stats") or {}
         return MailchimpAudience(
             audience_id=self._required_string(payload, "id", self.audience_id),
@@ -56,22 +64,85 @@ class MailchimpMarketingClient:
             cleaned_count=self._safe_count(stats.get("cleaned_count")),
         )
 
-    def _get(self, path):
+    def get_member(self, email_address):
+        subscriber_hash = self.subscriber_hash(email_address)
+        payload = self._request(
+            "GET",
+            f"/lists/{quote(self.audience_id, safe='')}/members/{subscriber_hash}",
+            not_found_is_none=True,
+        )
+        if payload is None:
+            return None
+        return self._member_from_payload(payload, email_address)
+
+    def create_member(self, *, email_address, first_name, last_name):
+        payload = self._request(
+            "POST",
+            f"/lists/{quote(self.audience_id, safe='')}/members",
+            body={
+                "email_address": email_address,
+                # Pending avoids treating CRM membership as marketing consent.
+                "status_if_new": "pending",
+                "merge_fields": self._merge_fields(first_name, last_name),
+            },
+        )
+        return self._member_from_payload(payload, email_address)
+
+    def update_subscribed_member(self, *, email_address, first_name, last_name):
+        subscriber_hash = self.subscriber_hash(email_address)
+        payload = self._request(
+            "PATCH",
+            f"/lists/{quote(self.audience_id, safe='')}/members/{subscriber_hash}",
+            body={
+                "email_address": email_address,
+                "merge_fields": self._merge_fields(first_name, last_name),
+            },
+        )
+        return self._member_from_payload(payload, email_address)
+
+    @staticmethod
+    def subscriber_hash(email_address):
+        import hashlib
+
+        return hashlib.md5(email_address.strip().casefold().encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _merge_fields(first_name, last_name):
+        return {"FNAME": first_name, "LNAME": last_name}
+
+    @classmethod
+    def _member_from_payload(cls, payload, fallback_email):
+        member_id = str(payload.get("id") or "").strip()
+        if not member_id:
+            raise MailchimpAPIError("Mailchimp returned an invalid member response.")
+        return MailchimpMember(
+            member_id=member_id,
+            email_address=str(payload.get("email_address") or fallback_email).strip(),
+            status=str(payload.get("status") or "").strip().lower(),
+            merge_fields=dict(payload.get("merge_fields") or {}),
+        )
+
+    def _request(self, method, path, *, body=None, not_found_is_none=False):
         url = f"{self.api_base.format(server_prefix=self.server_prefix)}{path}"
         token = base64.b64encode(f"any:{self.api_key}".encode("utf-8")).decode("ascii")
         request = Request(
             url,
-            method="GET",
+            method=method,
             headers={
                 "Accept": "application/json",
+                "Content-Type": "application/json",
                 "Authorization": f"Basic {token}",
             },
         )
+        if body is not None:
+            request.data = json.dumps(body).encode("utf-8")
         try:
             with self._opener(request, timeout=15) as response:
                 return json.loads(response.read().decode("utf-8"))
         except HTTPError as error:
-            self._raise_http_error(error)
+            if error.code == 404 and not_found_is_none:
+                return None
+            self._raise_http_error(error, not_found_is_none=not_found_is_none)
         except (URLError, TimeoutError, OSError) as error:
             raise MailchimpTemporaryError("Mailchimp verification could not reach the API.") from error
         except (TypeError, ValueError, json.JSONDecodeError) as error:
@@ -98,7 +169,7 @@ class MailchimpMarketingClient:
             raise MailchimpConfigurationError("MAILCHIMP_SERVER_PREFIX must be a server prefix.")
 
     @staticmethod
-    def _raise_http_error(error):
+    def _raise_http_error(error, *, not_found_is_none=False):
         if error.code == 401:
             raise MailchimpAuthenticationError("Mailchimp rejected the configured credentials.") from error
         if error.code in {403, 404}:

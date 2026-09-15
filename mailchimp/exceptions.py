@@ -20,3 +20,11 @@ class MailchimpTemporaryError(MailchimpVerificationError):
 
 class MailchimpAPIError(MailchimpVerificationError):
     """Mailchimp returned an otherwise controlled API failure."""
+
+
+class MailchimpPersonSyncError(MailchimpVerificationError):
+    """Base class for controlled one-Person synchronization failures."""
+
+
+class MailchimpPersonSyncConflictError(MailchimpPersonSyncError):
+    """The resolved provider identity conflicts with an existing CRM reference."""
