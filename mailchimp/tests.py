@@ -16,6 +16,7 @@ from mailchimp.exceptions import (
     MailchimpConfigurationError,
     MailchimpPersonSyncConflictError,
     MailchimpTemporaryError,
+    MailchimpValidationError,
 )
 from mailchimp.services import verify_mailchimp_connection
 from mailchimp.sync import synchronize_person_to_mailchimp
@@ -95,7 +96,8 @@ class MailchimpClientTests(SimpleTestCase):
         self.assertEqual(create.method, "POST")
         self.assertEqual(update.method, "PATCH")
         self.assertNotIn("secret-key", create.data.decode())
-        self.assertIn('"status_if_new": "pending"', create.data.decode())
+        self.assertIn('"status": "pending"', create.data.decode())
+        self.assertNotIn("status_if_new", create.data.decode())
         self.assertNotIn("status", update.data.decode())
 
     def test_missing_configuration_is_controlled_and_key_is_not_in_error(self):
@@ -115,6 +117,33 @@ class MailchimpClientTests(SimpleTestCase):
                 client = MailchimpMarketingClient(api_key="secret-key", server_prefix="us21", audience_id="aud-123", opener=opener)
                 with self.assertRaises(expected):
                     client.get_configured_audience()
+
+    def test_http_400_is_validation_error_with_redacted_structured_context(self):
+        error_body = json.dumps({
+            "title": "Invalid Resource",
+            "detail": "You must specify a status.",
+            "errors": [],
+        }).encode("utf-8")
+        opener = Mock(side_effect=HTTPError(
+            "https://example.test",
+            400,
+            "failed",
+            {},
+            Mock(read=Mock(return_value=error_body)),
+        ))
+        client = MailchimpMarketingClient(
+            api_key="secret-key",
+            server_prefix="us21",
+            audience_id="aud-123",
+            opener=opener,
+        )
+
+        with self.assertRaises(MailchimpValidationError) as raised:
+            client.create_member(email_address="ava@example.com", first_name="Ava", last_name="Example")
+
+        self.assertIn("You must specify a status", str(raised.exception))
+        self.assertNotIn("ava@example.com", str(raised.exception))
+        self.assertNotIn("audience verification", str(raised.exception).lower())
 
 
 class MailchimpVerificationTests(SimpleTestCase):

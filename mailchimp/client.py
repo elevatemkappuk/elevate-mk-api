@@ -1,5 +1,6 @@
 import base64
 import json
+import re
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -11,6 +12,7 @@ from mailchimp.exceptions import (
     MailchimpAuthenticationError,
     MailchimpConfigurationError,
     MailchimpTemporaryError,
+    MailchimpValidationError,
 )
 
 
@@ -82,7 +84,7 @@ class MailchimpMarketingClient:
             body={
                 "email_address": email_address,
                 # Pending avoids treating CRM membership as marketing consent.
-                "status_if_new": "pending",
+                "status": "pending",
                 "merge_fields": self._merge_fields(first_name, last_name),
             },
         )
@@ -144,9 +146,9 @@ class MailchimpMarketingClient:
                 return None
             self._raise_http_error(error, not_found_is_none=not_found_is_none)
         except (URLError, TimeoutError, OSError) as error:
-            raise MailchimpTemporaryError("Mailchimp verification could not reach the API.") from error
+            raise MailchimpTemporaryError("Mailchimp API request could not reach the provider.") from error
         except (TypeError, ValueError, json.JSONDecodeError) as error:
-            raise MailchimpTemporaryError("Mailchimp returned an invalid verification response.") from error
+            raise MailchimpTemporaryError("Mailchimp returned an invalid API response.") from error
 
     def _validate_configuration(self):
         missing = [
@@ -173,10 +175,50 @@ class MailchimpMarketingClient:
         if error.code == 401:
             raise MailchimpAuthenticationError("Mailchimp rejected the configured credentials.") from error
         if error.code in {403, 404}:
-            raise MailchimpAudienceAccessError("The configured Mailchimp audience was not found or is not accessible.") from error
+            raise MailchimpAudienceAccessError("The requested Mailchimp resource was not found or is not accessible.") from error
         if error.code == 429 or error.code >= 500:
-            raise MailchimpTemporaryError("Mailchimp temporarily could not verify the configured audience.") from error
-        raise MailchimpAPIError("Mailchimp rejected the audience verification request.") from error
+            raise MailchimpTemporaryError("Mailchimp temporarily could not complete the API request.") from error
+        if error.code == 400:
+            summary = MailchimpMarketingClient._safe_http_error_summary(error)
+            raise MailchimpValidationError(summary) from error
+        raise MailchimpAPIError("Mailchimp rejected the API request.") from error
+
+    @staticmethod
+    def _safe_http_error_summary(error):
+        """Extract bounded, redacted provider validation context without retaining the body."""
+        payload = {}
+        try:
+            raw_body = error.read()
+            decoded = json.loads(raw_body.decode("utf-8") if isinstance(raw_body, bytes) else raw_body)
+            if isinstance(decoded, dict):
+                payload = decoded
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError, OSError):
+            pass
+
+        title = MailchimpMarketingClient._safe_error_text(payload.get("title"))
+        detail = MailchimpMarketingClient._safe_error_text(payload.get("detail"))
+        field_errors = []
+        for item in payload.get("errors") or []:
+            if not isinstance(item, dict):
+                continue
+            field = MailchimpMarketingClient._safe_error_text(item.get("field"))
+            message = MailchimpMarketingClient._safe_error_text(item.get("message"))
+            if field and message:
+                field_errors.append(f"{field}: {message}")
+        parts = [part for part in (title, detail) if part]
+        if field_errors:
+            parts.append("; ".join(field_errors[:5]))
+        return "Mailchimp rejected the API request." if not parts else (
+            "Mailchimp rejected the API request: " + " | ".join(parts)
+        )
+
+    @staticmethod
+    def _safe_error_text(value):
+        if not isinstance(value, str):
+            return ""
+        value = re.sub(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "[redacted-email]", value)
+        value = " ".join(value.split())
+        return value[:240]
 
     @staticmethod
     def _required_string(payload, key, fallback):

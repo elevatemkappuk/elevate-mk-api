@@ -11,15 +11,19 @@ class MailchimpAuthenticationError(MailchimpVerificationError):
 
 
 class MailchimpAudienceAccessError(MailchimpVerificationError):
-    """The configured audience does not exist or is not accessible."""
+    """The requested Mailchimp resource does not exist or is not accessible."""
 
 
 class MailchimpTemporaryError(MailchimpVerificationError):
-    """Mailchimp or the network could not complete a verification request temporarily."""
+    """Mailchimp or the network could not complete an API request temporarily."""
 
 
 class MailchimpAPIError(MailchimpVerificationError):
     """Mailchimp returned an otherwise controlled API failure."""
+
+
+class MailchimpValidationError(MailchimpAPIError):
+    """Mailchimp rejected a request because its payload failed validation."""
 
 
 class MailchimpPersonSyncError(MailchimpVerificationError):
