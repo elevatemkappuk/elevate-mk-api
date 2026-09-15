@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     'data_imports',
     'events',
     'external_references',
+    'mailchimp',
     'corsheaders',
     'rest_framework',
     'drf_spectacular',
@@ -207,3 +208,9 @@ BREVO_REPLY_TO_EMAIL = env("BREVO_REPLY_TO_EMAIL", default="")
 BREVO_REPLY_TO_NAME = env("BREVO_REPLY_TO_NAME", default="")
 BREVO_PASSWORD_RESET_TEMPLATE_ID = env("BREVO_PASSWORD_RESET_TEMPLATE_ID", default="")
 CRM_FRONTEND_URL = env("CRM_FRONTEND_URL", default="http://localhost:4200")
+
+# Mailchimp Marketing API verification is backend-only. No Mailchimp operation
+# should be attempted without explicitly configured values.
+MAILCHIMP_API_KEY = env("MAILCHIMP_API_KEY", default="")
+MAILCHIMP_SERVER_PREFIX = env("MAILCHIMP_SERVER_PREFIX", default="")
+MAILCHIMP_AUDIENCE_ID = env("MAILCHIMP_AUDIENCE_ID", default="")
