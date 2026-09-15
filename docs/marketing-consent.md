@@ -1,5 +1,9 @@
 # CRM marketing consent
 
+For the complete Brevo-specific implementation reference, see
+[Brevo CRM integration](brevo-crm-integration.md). This document remains
+focused on provider-neutral consent-domain rules.
+
 Elevate CRM is authoritative for a Person's provider-neutral marketing preference. A CRM Person, membership, event attendance, or primary email address does not imply consent.
 
 The first supported channel is `EMAIL`. Its effective states are:

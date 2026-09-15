@@ -1,5 +1,9 @@
 # External person references
 
+For the complete Brevo-specific implementation reference, see
+[Brevo CRM integration](brevo-crm-integration.md). This document remains
+focused on provider-neutral external identity and durable-job concepts.
+
 `external_references.ExternalPersonReference` stores provider-neutral identity links from Elevate CRM `people.Person` rows to external person records. It keeps external identifiers out of `Person`, so Elevate remains authoritative for name, email, mobile, lifecycle, and other CRM identity/contact data.
 
 The first supported reference type is `MARKETING_CONTACT`; `MAILCHIMP` is represented as a provider value, not as a Mailchimp-specific column or domain model. The same model can later support another provider or another external person-record type without changing `Person`.
@@ -45,7 +49,7 @@ Terminal 2: python manage.py process_brevo_sync_jobs --watch
 
 In Railway, deploy the worker as a separate process/service using `python manage.py process_brevo_sync_jobs --watch`. It shares the application, database, `BREVO_API_KEY`, `BREVO_MARKETING_LIST_ID`, and `MARKETING_SYNC_PROVIDER=BREVO` with the web service. Webhook Basic credentials are needed by the web service receiving inbound webhooks and should not be added to the worker unless shared variables are required. Mailchimp jobs are never consumed automatically, and transactional Brevo email remains independent.
 
-`python manage.py process_brevo_sync_jobs --limit 10` claims only pending `BREVO` `EMAIL_MARKETING_PREFERENCE` jobs. It calls the same `synchronize_person_to_brevo()` service used by the manual command, so consent, restrictive-state, identity, list, and minimal-profile rules are not duplicated in the worker. Successful, no-op, UNKNOWN, opted-out-without-contact, and protected-provider outcomes complete successfully because retrying cannot improve them. Configuration, authentication, access, validation, API, identity-conflict, and reconciliation-required outcomes are terminal. Network, timeout, rate-limit, and temporary provider failures retry with bounded backoff and max-attempt behavior; stale processing locks are recoverable.
+The one-shot command claims pending `BREVO` jobs of type `EMAIL_MARKETING_PREFERENCE` or `PERSON_PROFILE`. It calls the same synchronization services used by the manual commands, so consent, profile, restrictive-state, identity, list, and minimal-profile rules are not duplicated in the worker. Successful, no-op, UNKNOWN, opted-out-without-contact, no-marketing-contact, and protected-provider outcomes complete successfully because retrying cannot improve them. Configuration, authentication, access, validation, API, identity-conflict, and reconciliation-required outcomes are terminal. Network, timeout, rate-limit, and temporary provider failures retry with bounded backoff and max-attempt behavior; stale processing locks are recoverable.
 
 Existing MAILCHIMP references and jobs are preserved and never reinterpreted as BREVO jobs. The existing Mailchimp worker remains a separately invoked rollback/reference path and processes only rows explicitly owned by `MAILCHIMP`; operators should not run it against historical pending rows unless Mailchimp rollback processing is intentional.
 

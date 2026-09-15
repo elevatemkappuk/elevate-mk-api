@@ -1,5 +1,9 @@
 # Deployment
 
+Brevo-specific architecture and integration behavior are documented in
+[Brevo CRM integration](brevo-crm-integration.md). This document retains only
+the deployment and worker-operations guidance needed to run it.
+
 Railway should run the Django migrations before starting the web process. The
 versioned Railway configuration sets this Start Command:
 
