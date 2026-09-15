@@ -115,3 +115,20 @@ Running migrations as part of the web process is suitable while the service
 has a single replica. If the service is later scaled to multiple replicas,
 consider moving migrations to a dedicated pre-deploy migration step so only
 one process applies schema changes before the replicas start.
+
+## Brevo worker service
+
+Run automatic Brevo marketing synchronization as a separate Railway worker
+process, not inside the web process:
+
+```text
+python manage.py process_brevo_sync_jobs --watch
+```
+
+The worker shares the application code and database with the web service and
+requires the active Brevo marketing settings, including `BREVO_API_KEY`,
+`BREVO_MARKETING_LIST_ID`, and `MARKETING_SYNC_PROVIDER=BREVO`. Configure
+`BREVO_SYNC_WORKER_POLL_SECONDS` (default `3`) and
+`BREVO_SYNC_WORKER_BATCH_SIZE` (default `20`, maximum `100`) when tuning is
+needed. It handles SIGINT/SIGTERM and preserves durable job state. Mailchimp
+jobs are not automatically processed.

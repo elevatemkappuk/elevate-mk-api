@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
 from pathlib import Path
+import math
 
 import environ
 
@@ -214,6 +215,26 @@ BREVO_MARKETING_WEBHOOK_USERNAME = env("BREVO_MARKETING_WEBHOOK_USERNAME", defau
 BREVO_MARKETING_WEBHOOK_PASSWORD = env("BREVO_MARKETING_WEBHOOK_PASSWORD", default="")
 MARKETING_SYNC_PROVIDER = env("MARKETING_SYNC_PROVIDER", default="BREVO")
 CRM_FRONTEND_URL = env("CRM_FRONTEND_URL", default="http://localhost:4200")
+
+
+def _positive_float_setting(name, default):
+    try:
+        value = float(env(name, default=str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if math.isfinite(value) and value > 0 else default
+
+
+def _positive_int_setting(name, default):
+    try:
+        value = int(env(name, default=str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+BREVO_SYNC_WORKER_POLL_SECONDS = _positive_float_setting("BREVO_SYNC_WORKER_POLL_SECONDS", 3.0)
+BREVO_SYNC_WORKER_BATCH_SIZE = _positive_int_setting("BREVO_SYNC_WORKER_BATCH_SIZE", 20)
 
 # Mailchimp Marketing API verification is backend-only. No Mailchimp operation
 # should be attempted without explicitly configured values.

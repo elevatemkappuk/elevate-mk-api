@@ -1,5 +1,8 @@
 from dataclasses import dataclass
 from datetime import timedelta
+import logging
+import math
+from threading import Event
 import re
 
 from django.db import transaction
@@ -25,6 +28,9 @@ EMAIL_MARKETING_PREFERENCE_SYNC = "EMAIL_MARKETING_PREFERENCE"
 STALE_PROCESSING_AFTER = timedelta(minutes=15)
 RETRY_BACKOFF_MINUTES = (1, 5, 15, 60)
 MAX_STORED_ERROR_LENGTH = 500
+MAX_WORKER_BATCH_SIZE = 100
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -44,6 +50,62 @@ def process_brevo_sync_jobs(*, limit=10, client=None):
             break
         results.append(result)
     return results
+
+
+def run_brevo_sync_worker(*, poll_seconds=None, batch_size=None, client=None, stop_event=None, sleep_fn=None, on_result=None):
+    """Continuously process the durable BREVO queue until stop_event is set."""
+    poll_seconds = _validated_poll_seconds(poll_seconds)
+    batch_size = _validated_batch_size(batch_size)
+    stop_event = stop_event or Event()
+
+    while not stop_event.is_set():
+        results = []
+        try:
+            results = process_brevo_sync_jobs(limit=batch_size, client=client)
+        except Exception:
+            logger.exception("Brevo sync worker batch failed; continuing.")
+
+        for result in results:
+            logger.info(
+                "Brevo sync job processed. job_id=%s status=%s attempts=%s outcome=%s error_code=%s",
+                result.job_id,
+                result.status,
+                result.attempts,
+                result.outcome or "",
+                result.error_code or "",
+            )
+            if on_result is not None:
+                on_result(result)
+
+        if not results:
+            if sleep_fn is not None:
+                sleep_fn(poll_seconds)
+            else:
+                stop_event.wait(poll_seconds)
+
+
+def _validated_poll_seconds(value):
+    if value is None:
+        from django.conf import settings
+
+        value = getattr(settings, "BREVO_SYNC_WORKER_POLL_SECONDS", 3.0)
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        value = 3.0
+    return value if math.isfinite(value) and value > 0 else 3.0
+
+
+def _validated_batch_size(value):
+    if value is None:
+        from django.conf import settings
+
+        value = getattr(settings, "BREVO_SYNC_WORKER_BATCH_SIZE", 20)
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        value = 20
+    return max(1, min(value, MAX_WORKER_BATCH_SIZE))
 
 
 def process_next_brevo_sync_job(*, client=None):

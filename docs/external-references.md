@@ -32,6 +32,17 @@ Email changes are not silently migrated: if a Person already has a BREVO referen
 
 ## Automatic Brevo preference jobs
 
+`python manage.py process_brevo_sync_jobs --watch` runs the durable BREVO preference queue continuously until SIGINT or SIGTERM. It polls with `BREVO_SYNC_WORKER_POLL_SECONDS` (default `3` seconds) and caps each batch with `BREVO_SYNC_WORKER_BATCH_SIZE` (default `20`, maximum `100`). It uses the same synchronization service as the one-shot command, so consent, provider-state protection, retries, and terminal failure classification are not duplicated. CRM preference requests enqueue durable work and do not wait for Brevo network calls.
+
+For local development, run Django in one terminal and the worker in another:
+
+```text
+Terminal 1: python manage.py runserver
+Terminal 2: python manage.py process_brevo_sync_jobs --watch
+```
+
+In Railway, deploy the worker as a separate process/service using `python manage.py process_brevo_sync_jobs --watch`. It shares the application, database, `BREVO_API_KEY`, `BREVO_MARKETING_LIST_ID`, and `MARKETING_SYNC_PROVIDER=BREVO` with the web service. Webhook Basic credentials are needed by the web service receiving inbound webhooks and should not be added to the worker unless shared variables are required. Mailchimp jobs are never consumed automatically, and transactional Brevo email remains independent.
+
 `python manage.py process_brevo_sync_jobs --limit 10` claims only pending `BREVO` `EMAIL_MARKETING_PREFERENCE` jobs. It calls the same `synchronize_person_to_brevo()` service used by the manual command, so consent, restrictive-state, identity, list, and minimal-profile rules are not duplicated in the worker. Successful, no-op, UNKNOWN, opted-out-without-contact, and protected-provider outcomes complete successfully because retrying cannot improve them. Configuration, authentication, access, validation, API, identity-conflict, and reconciliation-required outcomes are terminal. Network, timeout, rate-limit, and temporary provider failures retry with bounded backoff and max-attempt behavior; stale processing locks are recoverable.
 
 Existing MAILCHIMP references and jobs are preserved and never reinterpreted as BREVO jobs. The existing Mailchimp worker remains a separately invoked rollback/reference path and processes only rows explicitly owned by `MAILCHIMP`; operators should not run it against historical pending rows unless Mailchimp rollback processing is intentional.

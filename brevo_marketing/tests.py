@@ -1,6 +1,7 @@
 from io import StringIO
 import base64
 from datetime import datetime, timezone as datetime_timezone
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -20,7 +21,7 @@ from brevo_marketing.exceptions import (
     BrevoMarketingValidationError,
 )
 from brevo_marketing.services import inspect_brevo_marketing_configuration
-from brevo_marketing.jobs import process_next_brevo_sync_job
+from brevo_marketing.jobs import BrevoJobProcessResult, process_next_brevo_sync_job, run_brevo_sync_worker
 from brevo_marketing.routing import get_active_marketing_sync_provider
 from brevo_marketing.sync import BrevoPersonSyncOutcome, synchronize_person_to_brevo
 from external_references.models import ExternalPersonReference, ExternalPersonSyncJob
@@ -330,6 +331,22 @@ class BrevoSyncJobTests(TestCase):
         self.assertEqual(result.error_code, "BREVO_RECONCILIATION_REQUIRED")
         self.assertEqual(self.job.status, ExternalPersonSyncJob.Status.FAILED)
 
+    @patch("brevo_marketing.jobs.synchronize_person_to_brevo")
+    def test_one_failed_job_does_not_prevent_next_job_in_batch(self, synchronize):
+        other = Person.objects.create(first_name="Other", last_name="Example", primary_email="other@example.com")
+        record_opt_out(person=other)
+        synchronize.side_effect = [
+            BrevoMarketingRateLimitError("temporary"),
+            type("Result", (), {"outcome": BrevoPersonSyncOutcome.UPDATED_MARKETING_CONTACT})(),
+        ]
+
+        results = process_brevo_sync_jobs(limit=2, client=Mock())
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0].status, ExternalPersonSyncJob.Status.PENDING)
+        self.assertEqual(results[1].status, ExternalPersonSyncJob.Status.SUCCEEDED)
+        self.assertEqual(synchronize.call_count, 2)
+
     def test_worker_ignores_mailchimp_jobs(self):
         ExternalPersonSyncJob.objects.create(
             person=self.person,
@@ -345,6 +362,59 @@ class BrevoSyncJobTests(TestCase):
             ExternalPersonSyncJob.objects.get(provider="MAILCHIMP").status,
             ExternalPersonSyncJob.Status.PENDING,
         )
+
+    @patch("brevo_marketing.jobs.process_brevo_sync_jobs")
+    def test_watch_worker_uses_bounded_batch_and_processes_results(self, process_jobs):
+        stop_event = Event()
+        processed = []
+        process_jobs.return_value = [
+            BrevoJobProcessResult(job_id=1, status="SUCCEEDED", outcome="CREATED", attempts=1),
+            BrevoJobProcessResult(job_id=2, status="FAILED", error_code="BREVO_VALIDATION", attempts=1),
+        ]
+
+        run_brevo_sync_worker(
+            poll_seconds=3,
+            batch_size=2,
+            stop_event=stop_event,
+            on_result=lambda result: (processed.append(result), stop_event.set()),
+        )
+
+        process_jobs.assert_called_once_with(limit=2, client=None)
+        self.assertEqual([result.job_id for result in processed], [1, 2])
+
+    @patch("brevo_marketing.jobs.process_brevo_sync_jobs", return_value=[])
+    def test_watch_worker_polls_idle_queue_without_busy_loop(self, process_jobs):
+        stop_event = Event()
+        waits = []
+
+        def wait_once(seconds):
+            waits.append(seconds)
+            stop_event.set()
+
+        run_brevo_sync_worker(stop_event=stop_event, sleep_fn=wait_once)
+
+        process_jobs.assert_called_once()
+        self.assertEqual(waits, [3.0])
+
+    @patch("brevo_marketing.jobs.process_brevo_sync_jobs", side_effect=RuntimeError("database unavailable"))
+    def test_watch_worker_survives_outer_batch_failure_and_can_shutdown(self, process_jobs):
+        stop_event = Event()
+
+        run_brevo_sync_worker(
+            stop_event=stop_event,
+            sleep_fn=lambda seconds: stop_event.set(),
+        )
+
+        process_jobs.assert_called_once()
+
+    @patch("brevo_marketing.jobs.process_brevo_sync_jobs")
+    def test_watch_worker_honors_graceful_shutdown_before_claiming(self, process_jobs):
+        stop_event = Event()
+        stop_event.set()
+
+        run_brevo_sync_worker(stop_event=stop_event)
+
+        process_jobs.assert_not_called()
 
 
 @override_settings(
