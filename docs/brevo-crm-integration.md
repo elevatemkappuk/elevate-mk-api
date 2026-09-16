@@ -605,10 +605,65 @@ The following are non-implemented future milestones:
 5. Country-aware E.164 mobile normalization.
 6. Operational reconciliation and admin tooling where needed.
 
+## Audience selection and read-only preview
+
+Backend Audience Selection & Preview V1 is implemented as a stateless,
+provider-neutral read-only operation:
+
+```text
+POST /api/v1/marketing/audiences/preview/
+```
+
+It reuses the canonical People directory selection semantics for `q`,
+`relationship`, `location`, `industry`, `career_stage`, `interest`, `skill`,
+and `tag`. Preview is restricted to active BUSINESS People. Archived and
+TECHNICAL People never enter the selected population, and preview does not
+accept archived/all record-state selection.
+
+Selection and eligibility are separate. The backend classifies each selected
+Person using CRM data only:
+
+```text
+ELIGIBLE
+EXCLUDED_NO_EMAIL
+EXCLUDED_OPTED_OUT
+EXCLUDED_CONSENT_UNKNOWN
+```
+
+The primary exclusion precedence is deterministic:
+
+1. missing email;
+2. opted out;
+3. unknown consent.
+
+This gives each selected Person exactly one classification and prevents
+double-counting. The response provides `selected_count`, `eligible_count`,
+`excluded_count`, per-reason exclusion counts, normalized active selection
+criteria, and a database-paginated result view (`all`, `eligible`, or
+`excluded`). Aggregate counts are calculated over the full selected queryset
+and remain unchanged by result view or page.
+
+The preview response exposes only the normal staff-visible Person identity
+fields needed for identification, plus classification and exclusion reason.
+It does not expose provider IDs or provider responses.
+
+Preview performs no Brevo or Mailchimp requests and does not create or mutate
+People, preferences, preference history, webhook receipts, external
+references, synchronization jobs, audit events, audience definitions, or
+snapshots. Provider restrictive state remains a synchronization/deliverability
+concern rather than CRM eligibility.
+
+The selection and eligibility service is intentionally reusable by a future
+bulk Brevo synchronization operation. A future bulk operation must re-evaluate
+the current CRM state immediately before creating provider work rather than
+treating a prior preview as an immutable consent decision. No Angular audience
+preview UI, bulk sync, campaign, saved audience, or snapshot is implemented by
+this milestone.
+
 ## Related documentation
 
-- [Staff CRM frontend guide](brevo-crm-frontend-guide.md)
-- [Staff business and operations guide](brevo-crm-business-guide.md)
+- [Staff CRM frontend guide](../../elevate-mk-crm/docs/brevo-crm-frontend-guide.md)
+- [Staff business and operations guide](../../elevate-mk-crm/docs/brevo-crm-business-guide.md)
 - [Provider-neutral external references](external-references.md)
 - [Provider-neutral marketing consent](marketing-consent.md)
 - [Deployment and operations](DEPLOYMENT.md)
