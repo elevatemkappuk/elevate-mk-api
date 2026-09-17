@@ -53,19 +53,22 @@ def _mark_duplicate_create_new_records(records):
             if value:
                 signal_records.setdefault((signal, value), []).append(record)
 
-    duplicate_records = {
-        record.id
-        for grouped_records in signal_records.values()
-        if len(grouped_records) > 1
-        for record in grouped_records
-    }
+    duplicate_signals_by_record = {}
+    for (signal, _value), grouped_records in signal_records.items():
+        if len(grouped_records) > 1:
+            for record in grouped_records:
+                duplicate_signals_by_record.setdefault(record.id, set()).add(signal.upper())
+    duplicate_records = set(duplicate_signals_by_record)
     if not duplicate_records:
         return False
 
     for record in records:
         if record.id in duplicate_records:
             _set_review(record, "DUPLICATE_CREATE_NEW_IDENTITY_SIGNAL")
-            record.save(update_fields=["resolved_person", "resolution_method", "resolution_reason", "status", "updated_at"])
+            evidence = dict(record.match_evidence or {})
+            evidence["intra_batch_conflict_signals"] = sorted(duplicate_signals_by_record[record.id])
+            record.match_evidence = evidence
+            record.save(update_fields=["resolved_person", "resolution_method", "resolution_reason", "status", "match_evidence", "updated_at"])
     return True
 
 

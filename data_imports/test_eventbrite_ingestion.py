@@ -274,6 +274,7 @@ class EventbriteUploadApiTests(APITestCase):
         self.assertEqual(set(response.data), {
             "id", "source_type", "source_filename", "status", "created_at", "started_at", "completed_at", "total_count",
             "review_required_count", "resolved_count", "invalid_count", "committed_count", "auto_match_count", "new_person_count",
+            "blocking_conflict_count",
         })
 
     def test_corrupt_and_invalid_structure_fail_safely_and_preserve_failed_batch(self):

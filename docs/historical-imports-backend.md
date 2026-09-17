@@ -70,6 +70,8 @@ Analysis considers BUSINESS Persons only, including archived BUSINESS Persons. T
 
 `DIFFERENT_PERSON` reconciliation preserves reviewed collision evidence. Mobile-only collisions can be confirmed as different people; an email collision requires explicit strong confirmation. Authoritative import re-evaluates that evidence, so a changed candidate set produces a stale-review conflict rather than an unsafe mutation.
 
+Intra-batch create-new collisions on normalized email or mobile are blocking source-data conflicts in V1. They are not actionable `SAME_PERSON`/`DIFFERENT_PERSON` reviews: staged rows are not merged, and strong-identity duplicates are not overridden. The batch remains non-importable until the source data is corrected and uploaded as a new batch.
+
 ## Reconciliation API
 
 All endpoints are under `/api/v1/`, require an authenticated session and active operational `CRM_ADMIN`; frontend visibility is not authorization.

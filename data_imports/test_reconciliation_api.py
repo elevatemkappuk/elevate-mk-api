@@ -172,6 +172,30 @@ class ImportReconciliationApiTests(APITestCase):
         self.assertEqual(set(audit_event.metadata), {"import_batch_id", "import_record_id", "resolution_method", "resolved_person_id"})
         self.assertNotIn("source@example.com", str(audit_event.metadata))
 
+    def test_intra_batch_conflict_is_exposed_and_cannot_use_crm_resolution_actions(self):
+        record = ImportRecord.objects.create(
+            batch=self.batch,
+            source_row_identifier="collision-row",
+            source_fingerprint="c" * 64,
+            normalized_data={"first_name": "Source", "last_name": "Record", "email": "source@example.com"},
+            status=ImportRecord.Status.REVIEW_REQUIRED,
+            resolution_reason="DUPLICATE_CREATE_NEW_IDENTITY_SIGNAL",
+            match_evidence={"intra_batch_conflict_signals": ["EMAIL"]},
+        )
+        self.authenticate_as(self.admin)
+        detail = self.client.get(f"/api/v1/imports/{self.batch.id}/review/{record.id}/")
+        self.assertEqual(detail.status_code, status.HTTP_200_OK)
+        self.assertTrue(detail.data["blocking_conflict"])
+        self.assertEqual(detail.data["conflict_signals"], ["EMAIL"])
+
+        response = self.client.post(
+            f"/api/v1/imports/{self.batch.id}/review/{record.id}/resolve/",
+            {"resolution": "DIFFERENT_PERSON"}, format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        record.refresh_from_db()
+        self.assertEqual(record.status, ImportRecord.Status.REVIEW_REQUIRED)
+
     def test_same_person_rejects_non_candidates_and_technical_people(self):
         record = self.create_review_record()
         non_candidate = Person.objects.create(first_name="Other", last_name="Person")

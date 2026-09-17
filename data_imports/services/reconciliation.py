@@ -29,6 +29,10 @@ def resolve_import_record(*, batch_id, record_id, action, person_id, reviewed_by
             raise ImportRecord.DoesNotExist
         if record.status != ImportRecord.Status.REVIEW_REQUIRED:
             raise ReconciliationConflict("This import record is no longer awaiting review.")
+        if record.resolution_reason == "DUPLICATE_CREATE_NEW_IDENTITY_SIGNAL":
+            raise ReconciliationValidationError(
+                "This record has a blocking intra-batch identity conflict. Correct the source data and upload a new import batch."
+            )
 
         if action == "SAME_PERSON":
             resolved_person = _validated_candidate(record, person_id)
