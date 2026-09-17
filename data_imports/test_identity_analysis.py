@@ -49,6 +49,38 @@ class IdentityAnalysisTests(TestCase):
         self.batch.refresh_from_db()
         self.assertEqual(self.batch.status, ImportBatch.Status.READY_FOR_IMPORT)
 
+    def test_duplicate_create_new_email_signals_require_review(self):
+        first = self.record(email=" Duplicate@Example.com ", first_name="First")
+        second = self.record(email="duplicate@example.com", first_name="Second")
+
+        analyze_import_batch(self.batch)
+
+        first.refresh_from_db(); second.refresh_from_db(); self.batch.refresh_from_db()
+        self.assertEqual(self.batch.status, ImportBatch.Status.READY_FOR_REVIEW)
+        self.assertEqual(first.status, ImportRecord.Status.REVIEW_REQUIRED)
+        self.assertEqual(second.status, ImportRecord.Status.REVIEW_REQUIRED)
+        self.assertEqual(first.resolution_reason, "DUPLICATE_CREATE_NEW_IDENTITY_SIGNAL")
+
+    def test_duplicate_create_new_mobile_signals_require_review_after_normalization(self):
+        first = self.record(mobile="07912 345 67", first_name="First")
+        second = self.record(mobile="0791234567", first_name="Second")
+
+        analyze_import_batch(self.batch)
+
+        first.refresh_from_db(); second.refresh_from_db(); self.batch.refresh_from_db()
+        self.assertEqual(self.batch.status, ImportBatch.Status.READY_FOR_REVIEW)
+        self.assertEqual(first.status, ImportRecord.Status.REVIEW_REQUIRED)
+        self.assertEqual(second.status, ImportRecord.Status.REVIEW_REQUIRED)
+
+    def test_distinct_create_new_identity_signals_remain_importable(self):
+        self.record(email="first@example.com", mobile="0790000001")
+        self.record(email="second@example.com", mobile="0790000002")
+
+        analyze_import_batch(self.batch)
+
+        self.batch.refresh_from_db()
+        self.assertEqual(self.batch.status, ImportBatch.Status.READY_FOR_IMPORT)
+
     def test_profile_drift_does_not_block_email_auto_match_and_analysis_is_repeatable(self):
         self.person()
         record = self.record(email="amina@example.com", first_name="Amina", last_name="Zulu", industry="Different", job_title="Different")

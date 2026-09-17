@@ -114,6 +114,71 @@ class MembershipFormUploadApiTests(APITestCase):
         self.assertEqual(Membership.objects.count(), before_memberships)
         self.assertEqual(ProfessionalProfile.objects.count(), before_profiles)
 
+    def test_all_new_membership_rows_are_ready_for_import(self):
+        rows = [
+            self.membership_row(
+                email=f"e2e-new-{index}@example.com",
+                mobile=f"079000{index:04d}",
+            )
+            for index in range(103)
+        ]
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.upload(self.workbook_file(rows=rows, filename="membership-all-new.xlsx"))
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        batch = ImportBatch.objects.get(pk=response.data["id"])
+        self.assertEqual(batch.status, ImportBatch.Status.READY_FOR_IMPORT)
+        self.assertEqual(batch.records.filter(status=ImportRecord.Status.RESOLVED).count(), 103)
+        self.assertEqual(batch.records.filter(resolution_method=ImportRecord.ResolutionMethod.NO_MATCH).count(), 103)
+        self.assertEqual(response.data["review_required_count"], 0)
+        self.assertEqual(response.data["new_person_count"], 103)
+
+        import_response = self.client.post(f"/api/v1/imports/{batch.id}/import/", {}, format="json")
+
+        self.assertEqual(import_response.status_code, status.HTTP_200_OK)
+        batch.refresh_from_db()
+        self.assertEqual(batch.status, ImportBatch.Status.IMPORTED)
+        self.assertEqual(import_response.data["result"]["processed_count"], 103)
+        self.assertEqual(import_response.data["result"]["people_created_count"], 103)
+        self.assertEqual(import_response.data["result"]["memberships_created_count"], 103)
+
+    def test_invalid_rows_are_skipped_while_valid_new_rows_import(self):
+        valid_rows = [
+            self.membership_row(
+                email=f"mixed-new-{index}@example.com",
+                mobile=f"078000{index:04d}",
+            )
+            for index in range(103)
+        ]
+        invalid_rows = [
+            self.membership_row(email=f"invalid-{index}", mobile=f"078100{index:04d}")
+            for index in range(5)
+        ]
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.upload(self.workbook_file(rows=[*valid_rows, *invalid_rows], filename="membership-mixed.xlsx"))
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        batch = ImportBatch.objects.get(pk=response.data["id"])
+        self.assertEqual(batch.status, ImportBatch.Status.READY_FOR_IMPORT)
+        self.assertEqual(response.data["total_count"], 108)
+        self.assertEqual(response.data["review_required_count"], 0)
+        self.assertEqual(response.data["new_person_count"], 103)
+        self.assertEqual(response.data["invalid_count"], 5)
+
+        import_response = self.client.post(f"/api/v1/imports/{batch.id}/import/", {}, format="json")
+
+        self.assertEqual(import_response.status_code, status.HTTP_200_OK)
+        batch.refresh_from_db()
+        self.assertEqual(batch.status, ImportBatch.Status.IMPORTED)
+        self.assertEqual(import_response.data["result"]["processed_count"], 103)
+        self.assertEqual(import_response.data["result"]["people_created_count"], 103)
+        self.assertEqual(import_response.data["result"]["memberships_created_count"], 103)
+        self.assertEqual(import_response.data["result"]["skipped_count"], 5)
+        self.assertEqual(batch.records.filter(status=ImportRecord.Status.COMMITTED).count(), 103)
+        self.assertEqual(batch.records.filter(status=ImportRecord.Status.INVALID, outcome=ImportRecord.Outcome.SKIPPED).count(), 5)
+
     def test_invalid_rows_remain_invalid_and_ambiguous_rows_require_review(self):
         Person.objects.create(first_name="One", last_name="Person", primary_email="duplicate@example.com")
         Person.objects.create(first_name="Two", last_name="Person", mobile="0791111111")

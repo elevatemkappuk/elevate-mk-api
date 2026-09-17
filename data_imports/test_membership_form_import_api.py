@@ -176,10 +176,19 @@ class MembershipFormImportApiTests(APITestCase):
         self.create_record(batch, method=ImportRecord.ResolutionMethod.NOT_RESOLVED)
         self.authenticate_as(self.admin)
 
-        response = self.client.post(self.import_url(batch), {}, format="json")
+        with self.assertLogs("data_imports.views", level="WARNING") as logs:
+            response = self.client.post(self.import_url(batch), {}, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
         self.assertNotIn("sensitive-1@example.com", str(response.data))
+        self.assertTrue(any(
+            "Historical import rejected by preflight guard:" in message
+            and f"batch_id={batch.id}" in message
+            and "status=READY_FOR_IMPORT" in message
+            and "source_type=MEMBERSHIP_FORM" in message
+            and "The batch contains an inconsistent resolution decision." in message
+            for message in logs.output
+        ))
 
     def test_repeat_post_cannot_duplicate_authoritative_data(self):
         batch = self.create_batch()

@@ -309,7 +309,37 @@ class ImportBatchImportView(ImportBatchQuerysetMixin, generics.GenericAPIView):
             raise NotFound("Not found.")
         except StaleCreateNewIdentityReview:
             raise ImportBatchImportStaleIdentityConflict
-        except (ImportBatchNotImportable, ImportBatchPreflightError):
+        except ImportBatchNotImportable as error:
+            rejected_batch = ImportBatch.objects.filter(pk=self.kwargs["batch_id"]).values("status", "source_type").first()
+            logger.warning(
+                "Historical import rejected by lifecycle guard: batch_id=%s status=%s source_type=%s reason=%s",
+                self.kwargs["batch_id"],
+                rejected_batch["status"] if rejected_batch else None,
+                rejected_batch["source_type"] if rejected_batch else None,
+                str(error).replace("\n", " "),
+                extra={
+                    "import_batch_id": self.kwargs["batch_id"],
+                    "batch_status": rejected_batch["status"] if rejected_batch else None,
+                    "source_type": rejected_batch["source_type"] if rejected_batch else None,
+                    "failure_reason": str(error),
+                },
+            )
+            raise ImportBatchImportConflict
+        except ImportBatchPreflightError as error:
+            rejected_batch = ImportBatch.objects.filter(pk=self.kwargs["batch_id"]).values("status", "source_type").first()
+            logger.warning(
+                "Historical import rejected by preflight guard: batch_id=%s status=%s source_type=%s reason=%s",
+                self.kwargs["batch_id"],
+                rejected_batch["status"] if rejected_batch else None,
+                rejected_batch["source_type"] if rejected_batch else None,
+                str(error).replace("\n", " "),
+                extra={
+                    "import_batch_id": self.kwargs["batch_id"],
+                    "batch_status": rejected_batch["status"] if rejected_batch else None,
+                    "source_type": rejected_batch["source_type"] if rejected_batch else None,
+                    "failure_reason": str(error),
+                },
+            )
             raise ImportBatchImportConflict
 
         batch = self.get_batch_queryset().get(pk=result.batch_id)
