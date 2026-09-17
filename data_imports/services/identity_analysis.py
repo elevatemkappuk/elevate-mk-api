@@ -25,7 +25,9 @@ def analyze_import_batch(batch):
             classification = analyze_import_record(record)
             review_required = review_required or classification == ImportRecord.Status.REVIEW_REQUIRED
         if _mark_duplicate_create_new_records(batch.records.filter(status=ImportRecord.Status.RESOLVED)):
-            review_required = True
+            batch.status = ImportBatch.Status.FAILED
+            batch.save(update_fields=["status", "updated_at"])
+            return batch
         batch.status = (
             ImportBatch.Status.READY_FOR_REVIEW
             if review_required
@@ -64,7 +66,10 @@ def _mark_duplicate_create_new_records(records):
 
     for record in records:
         if record.id in duplicate_records:
-            _set_review(record, "DUPLICATE_CREATE_NEW_IDENTITY_SIGNAL")
+            record.resolved_person = None
+            record.resolution_method = ImportRecord.ResolutionMethod.NOT_RESOLVED
+            record.resolution_reason = "DUPLICATE_CREATE_NEW_IDENTITY_SIGNAL"
+            record.status = ImportRecord.Status.FAILED
             evidence = dict(record.match_evidence or {})
             evidence["intra_batch_conflict_signals"] = sorted(duplicate_signals_by_record[record.id])
             record.match_evidence = evidence

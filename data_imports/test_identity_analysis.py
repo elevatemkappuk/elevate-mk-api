@@ -56,9 +56,9 @@ class IdentityAnalysisTests(TestCase):
         analyze_import_batch(self.batch)
 
         first.refresh_from_db(); second.refresh_from_db(); self.batch.refresh_from_db()
-        self.assertEqual(self.batch.status, ImportBatch.Status.READY_FOR_REVIEW)
-        self.assertEqual(first.status, ImportRecord.Status.REVIEW_REQUIRED)
-        self.assertEqual(second.status, ImportRecord.Status.REVIEW_REQUIRED)
+        self.assertEqual(self.batch.status, ImportBatch.Status.FAILED)
+        self.assertEqual(first.status, ImportRecord.Status.FAILED)
+        self.assertEqual(second.status, ImportRecord.Status.FAILED)
         self.assertEqual(first.resolution_reason, "DUPLICATE_CREATE_NEW_IDENTITY_SIGNAL")
 
     def test_duplicate_create_new_mobile_signals_require_review_after_normalization(self):
@@ -68,9 +68,9 @@ class IdentityAnalysisTests(TestCase):
         analyze_import_batch(self.batch)
 
         first.refresh_from_db(); second.refresh_from_db(); self.batch.refresh_from_db()
-        self.assertEqual(self.batch.status, ImportBatch.Status.READY_FOR_REVIEW)
-        self.assertEqual(first.status, ImportRecord.Status.REVIEW_REQUIRED)
-        self.assertEqual(second.status, ImportRecord.Status.REVIEW_REQUIRED)
+        self.assertEqual(self.batch.status, ImportBatch.Status.FAILED)
+        self.assertEqual(first.status, ImportRecord.Status.FAILED)
+        self.assertEqual(second.status, ImportRecord.Status.FAILED)
 
     def test_distinct_create_new_identity_signals_remain_importable(self):
         self.record(email="first@example.com", mobile="0790000001")

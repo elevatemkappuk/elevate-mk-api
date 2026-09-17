@@ -66,6 +66,7 @@ class ImportBatchSerializer(serializers.ModelSerializer):
     auto_match_count = serializers.IntegerField(read_only=True)
     new_person_count = serializers.IntegerField(read_only=True)
     blocking_conflict_count = serializers.IntegerField(read_only=True)
+    blocking_conflict_signals = serializers.SerializerMethodField()
 
     class Meta:
         model = ImportBatch
@@ -85,7 +86,16 @@ class ImportBatchSerializer(serializers.ModelSerializer):
             "auto_match_count",
             "new_person_count",
             "blocking_conflict_count",
+            "blocking_conflict_signals",
         )
+
+    def get_blocking_conflict_signals(self, batch) -> list[str]:
+        signals = set()
+        for evidence in batch.records.filter(resolution_reason="DUPLICATE_CREATE_NEW_IDENTITY_SIGNAL").values_list("match_evidence", flat=True):
+            for signal in (evidence or {}).get("intra_batch_conflict_signals", []):
+                if signal in {"EMAIL", "MOBILE"}:
+                    signals.add(signal)
+        return sorted(signals)
 
 
 class ImportResultSummarySerializer(serializers.Serializer):
@@ -200,8 +210,6 @@ class ImportReviewRecordSerializer(serializers.ModelSerializer):
     source = serializers.SerializerMethodField()
     candidates = serializers.SerializerMethodField()
     validation_errors = serializers.SerializerMethodField()
-    blocking_conflict = serializers.SerializerMethodField()
-    conflict_signals = serializers.SerializerMethodField()
 
     class Meta:
         model = ImportRecord
@@ -214,8 +222,6 @@ class ImportReviewRecordSerializer(serializers.ModelSerializer):
             "source",
             "candidates",
             "validation_errors",
-            "blocking_conflict",
-            "conflict_signals",
         )
 
     @extend_schema_field(ImportSourceSerializer)
@@ -263,15 +269,6 @@ class ImportReviewRecordSerializer(serializers.ModelSerializer):
             if message:
                 errors.append({"field": field, "code": code, "message": message})
         return errors
-
-    def get_blocking_conflict(self, record) -> bool:
-        return record.resolution_reason == "DUPLICATE_CREATE_NEW_IDENTITY_SIGNAL"
-
-    def get_conflict_signals(self, record) -> list[str]:
-        if not self.get_blocking_conflict(record):
-            return []
-        signals = (record.match_evidence or {}).get("intra_batch_conflict_signals", [])
-        return [signal for signal in signals if signal in {"EMAIL", "MOBILE"}]
 
 
 class ImportReviewDetailSerializer(ImportReviewRecordSerializer):
