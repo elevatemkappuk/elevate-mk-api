@@ -13,9 +13,18 @@ The `Backend validation` workflow runs on pull requests targeting `staging` or
 uses PostgreSQL-backed Django system, migration, OpenAPI schema, and core
 contract validation. Its selected contract tests cover authentication/CSRF,
 session-protected `/auth/me/`, OpenAPI endpoints, and staff authorization; it
-does not replace the full backend test suite. Future Railway Wait for CI will
-gate deployments on the corresponding push check. Full backend tests will be
-implemented separately for production promotion.
+does not replace the full backend test suite. Railway Wait for CI should remain
+gated by this `Backend validation` push check rather than the full suite.
+
+## Full backend tests
+
+The `Full backend tests` workflow runs automatically for pull requests
+targeting `master` and can also be started manually with `workflow_dispatch`.
+It runs the complete Django test suite against PostgreSQL with
+`--parallel 4`. It intentionally does not run on staging pushes, so normal
+staging deployment validation remains fast. Production promotion on the
+`staging` to `master` pull request should require both `Backend validation` and
+`Full backend tests`.
 
 Railway should run the Django migrations before starting the web process. The
 versioned Railway configuration sets this Start Command:
