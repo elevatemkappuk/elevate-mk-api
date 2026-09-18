@@ -1,22 +1,5 @@
 # Deployment
 
-The authoritative backend runtime is Python 3.13, declared in `.python-version`.
-Railway staging and production were confirmed on Python 3.13.15 when this pin
-was established. GitHub Actions should use Python 3.13 as well, and local
-development should preferably use Python 3.13 for parity. Existing Python 3.14
-virtual environments do not need to be rebuilt immediately.
-
-## CI validation
-
-The `Backend validation` workflow runs on pull requests targeting `staging` or
-`master`, and on pushes to `staging` or `master`. It is intentionally fast and
-uses PostgreSQL-backed Django system, migration, OpenAPI schema, and core
-contract validation. Its selected contract tests cover authentication/CSRF,
-session-protected `/auth/me/`, OpenAPI endpoints, and staff authorization; it
-does not replace the full backend test suite. Future Railway Wait for CI will
-gate deployments on the corresponding push check. Full backend tests will be
-implemented separately for production promotion.
-
 Railway should run the Django migrations before starting the web process. The
 versioned Railway configuration sets this Start Command:
 
