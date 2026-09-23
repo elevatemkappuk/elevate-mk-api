@@ -26,6 +26,18 @@ staging deployment validation remains fast. Production promotion on the
 `staging` to `master` pull request should require both `Backend validation` and
 `Full backend tests`.
 
+## Staging API smoke
+
+The `Staging API smoke` workflow runs after a successful Railway
+`deployment_status` event whose exact environment is `positive-embrace / staging`.
+It checks out `deployment.sha` and targets the explicit staging API URL
+`https://elevate-mk-api-staging.up.railway.app`. The smoke is anonymous and
+read-only: it verifies CSRF bootstrap, OpenAPI availability, and unauthenticated
+authentication protection. It does not replace `Backend validation` or `Full
+backend tests`. These are post-deployment verification checks and do not gate
+the Railway deployment itself. Production smoke is not implemented yet. The temporary
+deployment-status inspector has been removed.
+
 Railway should run the Django migrations before starting the web process. The
 versioned Railway configuration sets this Start Command:
 

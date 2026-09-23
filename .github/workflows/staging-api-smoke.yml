@@ -1,0 +1,86 @@
+name: Staging API smoke
+
+on:
+  deployment_status:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Staging API smoke
+    if: >-
+      github.event.deployment_status.state == 'success' &&
+      github.event.deployment.environment == 'positive-embrace / staging'
+    runs-on: ubuntu-latest
+    env:
+      STAGING_API_BASE_URL: https://elevate-mk-api-staging.up.railway.app
+
+    steps:
+      - name: Check out deployed revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.deployment.sha }}
+          fetch-depth: 1
+
+      - name: Run anonymous read-only API smoke checks
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from http.cookiejar import CookieJar
+          from urllib.error import HTTPError, URLError
+          from urllib.request import HTTPCookieProcessor, Request, build_opener
+
+          expected_base_url = "https://elevate-mk-api-staging.up.railway.app"
+          base_url = os.environ["STAGING_API_BASE_URL"]
+
+          if base_url != expected_base_url:
+              raise SystemExit("Refusing smoke requests: unexpected staging API base URL")
+
+          cookie_jar = CookieJar()
+          opener = build_opener(HTTPCookieProcessor(cookie_jar))
+
+          def get(path, expected_status, *, parse_json=False):
+              request = Request(
+                  f"{base_url}{path}",
+                  headers={"Accept": "application/json"},
+                  method="GET",
+              )
+              try:
+                  with opener.open(request, timeout=15) as response:
+                      status = response.status
+                      body = response.read()
+              except HTTPError as error:
+                  status = error.code
+                  body = error.read()
+              except (TimeoutError, URLError) as error:
+                  raise SystemExit(f"{path}: request failed ({error.__class__.__name__})") from error
+
+              if status != expected_status:
+                  raise SystemExit(f"{path}: expected HTTP {expected_status}, got {status}")
+
+              if not parse_json:
+                  return None
+
+              try:
+                  return json.loads(body)
+              except json.JSONDecodeError as error:
+                  raise SystemExit(f"{path}: response was not valid JSON") from error
+
+          csrf = get("/api/v1/auth/csrf/", 200, parse_json=True)
+          if not isinstance(csrf, dict) or not isinstance(csrf.get("csrf_token"), str) or not csrf["csrf_token"]:
+              raise SystemExit("CSRF bootstrap: missing non-empty csrf_token")
+          if not any(cookie.name == "csrftoken" for cookie in cookie_jar):
+              raise SystemExit("CSRF bootstrap: csrftoken cookie was not issued")
+          print("CSRF bootstrap: passed")
+
+          schema = get("/api/schema/?format=json", 200, parse_json=True)
+          if not isinstance(schema, dict) or not isinstance(schema.get("openapi"), str) or not schema["openapi"].startswith("3."):
+              raise SystemExit("OpenAPI schema: missing valid OpenAPI version")
+          print("OpenAPI schema: passed")
+
+          get("/api/v1/auth/me/", 401)
+          print("Authentication protection: passed")
+          print("Staging API smoke: passed")
+          PY
