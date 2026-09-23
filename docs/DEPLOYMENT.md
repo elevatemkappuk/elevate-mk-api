@@ -35,8 +35,18 @@ It checks out `deployment.sha` and targets the explicit staging API URL
 read-only: it verifies CSRF bootstrap, OpenAPI availability, and unauthenticated
 authentication protection. It does not replace `Backend validation` or `Full
 backend tests`. These are post-deployment verification checks and do not gate
-the Railway deployment itself. Production smoke is not implemented yet. The temporary
-deployment-status inspector has been removed.
+the Railway deployment itself.
+
+## Production API smoke
+
+The `Production API smoke` workflow runs after a successful Railway
+`deployment_status` event whose exact environment is
+`positive-embrace / production`. It checks out `deployment.sha` and targets
+`https://elevate-mk-api-production.up.railway.app`. Like staging, it performs
+only anonymous, read-only CSRF bootstrap, OpenAPI, and unauthenticated
+authentication-protection checks. The empirically confirmed Railway environment
+identifiers are `positive-embrace / staging` and `positive-embrace / production`;
+the temporary deployment-status inspector has been removed.
 
 Railway should run the Django migrations before starting the web process. The
 versioned Railway configuration sets this Start Command:
