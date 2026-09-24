@@ -24,24 +24,28 @@ class AudiencePreviewApiTests(TestCase):
             password="password123",
             person_first_name="Audience",
             person_last_name="Admin",
+            person_record_type=Person.RecordType.TECHNICAL,
         )
         self.manager = User.objects.create_user(
             email="audience-manager@example.com",
             password="password123",
             person_first_name="Audience",
             person_last_name="Manager",
+            person_record_type=Person.RecordType.TECHNICAL,
         )
         self.viewer = User.objects.create_user(
             email="audience-viewer@example.com",
             password="password123",
             person_first_name="Audience",
             person_last_name="Viewer",
+            person_record_type=Person.RecordType.TECHNICAL,
         )
         self.nonstaff = User.objects.create_user(
             email="audience-nonstaff@example.com",
             password="password123",
             person_first_name="Audience",
             person_last_name="Nonstaff",
+            person_record_type=Person.RecordType.TECHNICAL,
         )
         for user, role in (
             (self.admin, StaffRole.CRM_ADMIN),

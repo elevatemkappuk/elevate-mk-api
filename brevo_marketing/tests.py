@@ -21,7 +21,7 @@ from brevo_marketing.exceptions import (
     BrevoMarketingValidationError,
 )
 from brevo_marketing.services import inspect_brevo_marketing_configuration
-from brevo_marketing.jobs import BrevoJobProcessResult, process_next_brevo_sync_job, run_brevo_sync_worker
+from brevo_marketing.jobs import BrevoJobProcessResult, process_brevo_sync_jobs, process_next_brevo_sync_job, run_brevo_sync_worker
 from brevo_marketing.routing import get_active_marketing_sync_provider
 from brevo_marketing.sync import BrevoPersonSyncOutcome, synchronize_person_profile_to_brevo, synchronize_person_to_brevo
 from external_references.models import ExternalPersonReference, ExternalPersonSyncJob

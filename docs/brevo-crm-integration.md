@@ -3,8 +3,8 @@
 This is the canonical technical reference for the implemented Elevate MK CRM
 integration with Brevo Marketing. It describes the current Django API,
 durable synchronization jobs, worker, contact mapping, and inbound marketing
-unsubscribe webhook. It is not a design for unimplemented campaign, audience,
-or bidirectional-profile features.
+unsubscribe webhook, and read-only Audience Preview. It is not a design for
+unimplemented campaign or bidirectional-profile features.
 
 ## 1. Purpose and scope
 
@@ -535,8 +535,8 @@ command reports safe outcome/contact-reference metadata and is not bulk sync.
 Automated focused tests exist under `brevo_marketing/tests.py` and
 `people/tests.py` for client behavior, consent synchronization, profile
 mapping, worker processing, coalescing, webhook authentication/replay, and
-provider isolation. The accumulated/full test suite has intentionally not been
-run during the incremental implementation work.
+provider isolation. The pre-staging hardening checkpoint runs the accumulated
+backend and frontend suites before release.
 
 The implemented paths cover the following behaviors:
 
@@ -580,7 +580,8 @@ analytics are not inbound CRM integrations.
 
 ### Audience and campaign functionality
 
-Audience selection/preview, bulk audience synchronization, saved segments,
+Audience selection/preview is implemented as a read-only, provider-neutral
+backend and Staff CRM workflow. Bulk audience synchronization, saved segments,
 campaign workflows, tags, journeys, and background campaign automation are not
 implemented by this integration.
 
@@ -598,12 +599,11 @@ active automatic marketing provider.
 
 The following are non-implemented future milestones:
 
-1. Audience selection and preview.
-2. Bulk Brevo audience/list synchronization.
-3. CRM campaign workflow integration.
-4. Additional provider outcome webhooks where justified.
-5. Country-aware E.164 mobile normalization.
-6. Operational reconciliation and admin tooling where needed.
+1. Bulk Brevo audience/list synchronization.
+2. CRM campaign workflow integration.
+3. Additional provider outcome webhooks where justified.
+4. Country-aware E.164 mobile normalization.
+5. Operational reconciliation and admin tooling where needed.
 
 ## Audience selection and read-only preview
 
@@ -656,9 +656,9 @@ concern rather than CRM eligibility.
 The selection and eligibility service is intentionally reusable by a future
 bulk Brevo synchronization operation. A future bulk operation must re-evaluate
 the current CRM state immediately before creating provider work rather than
-treating a prior preview as an immutable consent decision. No Angular audience
-preview UI, bulk sync, campaign, saved audience, or snapshot is implemented by
-this milestone.
+treating a prior preview as an immutable consent decision. The Staff CRM
+Audience Preview UI is implemented; bulk sync, campaign, saved audience, and
+snapshot workflows remain out of scope.
 
 ## Related documentation
 
