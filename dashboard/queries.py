@@ -2,7 +2,7 @@
 from datetime import date, datetime, time
 
 from django.db.models import Count, F, Q
-from django.db.models.functions import TruncMonth
+from django.db.models.functions import Collate, TruncMonth
 from django.utils import timezone
 
 from data_imports.models import ImportBatch
@@ -43,10 +43,16 @@ def dashboard_projection():
         return [{"month": month.strftime("%Y-%m"), "count": counts.get(month.strftime("%Y-%m"), 0)} for month in months]
 
     locations = list(people.exclude(location__isnull=True).exclude(location__regex=r"^\s*$")
-                     .values(label=F("location")).annotate(count=Count("id")).order_by("-count", "label")[:5])
+                     .values(label=F("location"))
+                     .annotate(count=Count("id"))
+                     .order_by("-count", Collate(F("location"), "C"))[:5])
     industries = people.filter(professional_profile__industry__isnull=False).values(
         "professional_profile__industry_id", label=F("professional_profile__industry__name")
-    ).annotate(count=Count("id")).order_by("-count", "label", "professional_profile__industry_id")[:5]
+    ).annotate(count=Count("id")).order_by(
+        "-count",
+        Collate(F("professional_profile__industry__name"), "C"),
+        "professional_profile__industry_id",
+    )[:5]
     age_counts = dict(people.values("age_range").annotate(count=Count("id")).values_list("age_range", "count"))
     return {
         "overview": overview,

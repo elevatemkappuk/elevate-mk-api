@@ -2156,8 +2156,9 @@ Response sections:
   but retain stored labels without normalization. Industries use the current
   ProfessionalProfile relationship, exclude missing Industry, and include stored
   references even if a taxonomy entry is inactive. Top lists contain at most five
-  rows ordered by count descending then label ascending (Industry ID breaks equal
-  labels). Age ranges include every canonical Person choice in display order,
+  rows ordered by count descending, then by label using PostgreSQL's explicit `C`
+  collation (Industry ID breaks equal labels). Age ranges include every canonical
+  Person choice in display order,
   zero-filled; missing age values do not form an extra band.
 - `attention`: `imports_needing_review` counts ImportBatch rows with status
   READY_FOR_REVIEW, not source rows. `archived_people` counts archived BUSINESS

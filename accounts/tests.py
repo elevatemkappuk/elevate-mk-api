@@ -414,7 +414,18 @@ class AuthenticationApiTests(TestCase):
         self.assertIn("/api/v1/auth/login/", output)
 
 
-@override_settings(ROOT_URLCONF="config.urls")
+@override_settings(
+    ROOT_URLCONF="config.urls",
+    CORS_ALLOWED_ORIGINS=["http://localhost:4200"],
+    CORS_ALLOW_CREDENTIALS=True,
+    CSRF_TRUSTED_ORIGINS=["http://localhost:4200"],
+    SESSION_COOKIE_HTTPONLY=True,
+    CSRF_COOKIE_HTTPONLY=False,
+    SESSION_COOKIE_SAMESITE="Lax",
+    CSRF_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=False,
+    CSRF_COOKIE_SECURE=False,
+)
 class LocalBrowserDevelopmentConfigurationTests(TestCase):
     def setUp(self):
         self.client = APIClient()

@@ -4,6 +4,54 @@ Brevo-specific architecture and integration behavior are documented in
 [Brevo CRM integration](brevo-crm-integration.md). This document retains only
 the deployment and worker-operations guidance needed to run it.
 
+The authoritative backend runtime is Python 3.13, declared in `.python-version`.
+Railway staging and production were confirmed on Python 3.13.15 when this pin
+was established. GitHub Actions should use Python 3.13 as well, and local
+development should preferably use Python 3.13 for parity. Existing Python 3.14
+virtual environments do not need to be rebuilt immediately.
+
+## CI validation
+
+The `Backend validation` workflow runs on pull requests targeting `staging` or
+`master`, and on pushes to `staging` or `master`. It is intentionally fast and
+uses PostgreSQL-backed Django system, migration, OpenAPI schema, and core
+contract validation. Its selected contract tests cover authentication/CSRF,
+session-protected `/auth/me/`, OpenAPI endpoints, and staff authorization; it
+does not replace the full backend test suite. Railway Wait for CI should remain
+gated by this `Backend validation` push check rather than the full suite.
+
+## Full backend tests
+
+The `Full backend tests` workflow runs automatically for pull requests
+targeting `master` and can also be started manually with `workflow_dispatch`.
+It runs the complete Django test suite against PostgreSQL with
+`--parallel 4`. It intentionally does not run on staging pushes, so normal
+staging deployment validation remains fast. Production promotion on the
+`staging` to `master` pull request should require both `Backend validation` and
+`Full backend tests`.
+
+## Staging API smoke
+
+The `Staging API smoke` workflow runs after a successful Railway
+`deployment_status` event whose exact environment is `positive-embrace / staging`.
+It checks out `deployment.sha` and targets the explicit staging API URL
+`https://elevate-mk-api-staging.up.railway.app`. The smoke is anonymous and
+read-only: it verifies CSRF bootstrap, OpenAPI availability, and unauthenticated
+authentication protection. It does not replace `Backend validation` or `Full
+backend tests`. These are post-deployment verification checks and do not gate
+the Railway deployment itself.
+
+## Production API smoke
+
+The `Production API smoke` workflow runs after a successful Railway
+`deployment_status` event whose exact environment is
+`positive-embrace / production`. It checks out `deployment.sha` and targets
+`https://elevate-mk-api-production.up.railway.app`. Like staging, it performs
+only anonymous, read-only CSRF bootstrap, OpenAPI, and unauthenticated
+authentication-protection checks. The empirically confirmed Railway environment
+identifiers are `positive-embrace / staging` and `positive-embrace / production`;
+the temporary deployment-status inspector has been removed.
+
 Railway should run the Django migrations before starting the web process. The
 versioned Railway configuration sets this Start Command:
 
