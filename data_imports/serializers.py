@@ -49,6 +49,11 @@ IMPORT_BATCH_COUNT_ANNOTATIONS = {
         ),
         distinct=True,
     ),
+    "blocking_conflict_count": Count(
+        "records",
+        filter=Q(records__resolution_reason="DUPLICATE_CREATE_NEW_IDENTITY_SIGNAL"),
+        distinct=True,
+    ),
 }
 
 
@@ -60,6 +65,8 @@ class ImportBatchSerializer(serializers.ModelSerializer):
     committed_count = serializers.IntegerField(read_only=True)
     auto_match_count = serializers.IntegerField(read_only=True)
     new_person_count = serializers.IntegerField(read_only=True)
+    blocking_conflict_count = serializers.IntegerField(read_only=True)
+    blocking_conflict_signals = serializers.SerializerMethodField()
 
     class Meta:
         model = ImportBatch
@@ -78,7 +85,17 @@ class ImportBatchSerializer(serializers.ModelSerializer):
             "committed_count",
             "auto_match_count",
             "new_person_count",
+            "blocking_conflict_count",
+            "blocking_conflict_signals",
         )
+
+    def get_blocking_conflict_signals(self, batch) -> list[str]:
+        signals = set()
+        for evidence in batch.records.filter(resolution_reason="DUPLICATE_CREATE_NEW_IDENTITY_SIGNAL").values_list("match_evidence", flat=True):
+            for signal in (evidence or {}).get("intra_batch_conflict_signals", []):
+                if signal in {"EMAIL", "MOBILE"}:
+                    signals.add(signal)
+        return sorted(signals)
 
 
 class ImportResultSummarySerializer(serializers.Serializer):
