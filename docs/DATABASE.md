@@ -20,6 +20,7 @@ The current Elevate-owned models are:
 - `tags.Tag`
 - `tags.PersonTag`
 - `audit.AuditEvent`
+- `external_references.ExternalPersonReference`
 - `staff_access.StaffRole`
 - `staff_access.StaffRoleAssignment`
 - `data_imports.ImportBatch`

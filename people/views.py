@@ -13,6 +13,7 @@ from rest_framework.response import Response
 from audit.models import AuditEvent
 from audit.policies import build_person_audit_scope_q, filter_person_audit_visibility_for_user
 from audit.services import record_audit_event
+from brevo_marketing.jobs import PERSON_PROFILE_SYNC
 from audit.serializers import (
     PaginatedPersonAuditHistorySerializer,
     PersonAuditHistoryEventSerializer,
@@ -33,6 +34,7 @@ from people.serializers import (
     PersonUpdateSerializer,
 )
 from people.services import evaluate_create_new_identity, find_business_duplicate_people
+from external_references.services import enqueue_coalesced_person_sync_job
 from people.querying import PeopleDirectoryQuery
 from memberships.models import Membership
 from staff_access.models import StaffRole
@@ -293,7 +295,7 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
         audit_metadata = {"person_id": str(person.id)}
         if metadata:
             audit_metadata.update(metadata)
-        record_audit_event(
+        return record_audit_event(
             action=action,
             actor_user=actor_user,
             entity_type="Person",
@@ -472,9 +474,16 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
                 except DjangoValidationError as error:
                     raise serializers.ValidationError(error.message_dict)
                 person.save(update_fields=[*changes.keys(), "updated_at"])
-                PeopleListView.record_person_audit(
+                audit_event = PeopleListView.record_person_audit(
                     AuditEvent.Action.PERSON_UPDATED, request.user, person, changes
                 )
+                if set(changes).intersection({"primary_email", "first_name", "last_name", "mobile"}):
+                    enqueue_coalesced_person_sync_job(
+                        person=person,
+                        provider="BREVO",
+                        job_type=PERSON_PROFILE_SYNC,
+                        source_event_id=audit_event.id,
+                    )
 
         return Response(PersonListSerializer(person).data)
 

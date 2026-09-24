@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
 from pathlib import Path
+import math
 
 import environ
 
@@ -53,8 +54,12 @@ INSTALLED_APPS = [
     'tags',
     'notes',
     'notifications',
+    'brevo_marketing',
     'data_imports',
     'events',
+    'external_references',
+    'mailchimp',
+    'marketing_preferences',
     'corsheaders',
     'rest_framework',
     'drf_spectacular',
@@ -205,4 +210,34 @@ BREVO_SENDER_NAME = env("BREVO_SENDER_NAME", default="")
 BREVO_REPLY_TO_EMAIL = env("BREVO_REPLY_TO_EMAIL", default="")
 BREVO_REPLY_TO_NAME = env("BREVO_REPLY_TO_NAME", default="")
 BREVO_PASSWORD_RESET_TEMPLATE_ID = env("BREVO_PASSWORD_RESET_TEMPLATE_ID", default="")
+BREVO_MARKETING_LIST_ID = env("BREVO_MARKETING_LIST_ID", default="")
+BREVO_MARKETING_WEBHOOK_USERNAME = env("BREVO_MARKETING_WEBHOOK_USERNAME", default="")
+BREVO_MARKETING_WEBHOOK_PASSWORD = env("BREVO_MARKETING_WEBHOOK_PASSWORD", default="")
+MARKETING_SYNC_PROVIDER = env("MARKETING_SYNC_PROVIDER", default="BREVO")
 CRM_FRONTEND_URL = env("CRM_FRONTEND_URL", default="http://localhost:4200")
+
+
+def _positive_float_setting(name, default):
+    try:
+        value = float(env(name, default=str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if math.isfinite(value) and value > 0 else default
+
+
+def _positive_int_setting(name, default):
+    try:
+        value = int(env(name, default=str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+BREVO_SYNC_WORKER_POLL_SECONDS = _positive_float_setting("BREVO_SYNC_WORKER_POLL_SECONDS", 3.0)
+BREVO_SYNC_WORKER_BATCH_SIZE = _positive_int_setting("BREVO_SYNC_WORKER_BATCH_SIZE", 20)
+
+# Mailchimp Marketing API verification is backend-only. No Mailchimp operation
+# should be attempted without explicitly configured values.
+MAILCHIMP_API_KEY = env("MAILCHIMP_API_KEY", default="")
+MAILCHIMP_SERVER_PREFIX = env("MAILCHIMP_SERVER_PREFIX", default="")
+MAILCHIMP_AUDIENCE_ID = env("MAILCHIMP_AUDIENCE_ID", default="")

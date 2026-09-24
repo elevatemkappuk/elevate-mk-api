@@ -5,6 +5,7 @@ from data_imports.models import ImportBatch, ImportRecord
 from data_imports.services.normalization import clean_text, normalize_mobile
 from data_imports.services.source_data import person_identity_source
 from people.models import Person
+from people.services import normalize_email as canonical_email, normalize_mobile as canonical_mobile
 
 
 def analyze_import_batch(batch):
@@ -23,6 +24,10 @@ def analyze_import_batch(batch):
         for record in records:
             classification = analyze_import_record(record)
             review_required = review_required or classification == ImportRecord.Status.REVIEW_REQUIRED
+        if _mark_duplicate_create_new_records(batch.records.filter(status=ImportRecord.Status.RESOLVED)):
+            batch.status = ImportBatch.Status.FAILED
+            batch.save(update_fields=["status", "updated_at"])
+            return batch
         batch.status = (
             ImportBatch.Status.READY_FOR_REVIEW
             if review_required
@@ -30,6 +35,46 @@ def analyze_import_batch(batch):
         )
         batch.save(update_fields=["status", "updated_at"])
     return batch
+
+
+def _mark_duplicate_create_new_records(records):
+    """Require review when create-new rows share an identity signal within a batch."""
+    signal_records = {}
+    for record in records:
+        if record.resolution_method not in (
+            ImportRecord.ResolutionMethod.NO_MATCH,
+            ImportRecord.ResolutionMethod.STAFF_CREATE_NEW,
+        ):
+            continue
+        source = record.normalized_data or {}
+        signals = (
+            ("email", canonical_email(source.get("email"))),
+            ("mobile", canonical_mobile(source.get("mobile"))),
+        )
+        for signal, value in signals:
+            if value:
+                signal_records.setdefault((signal, value), []).append(record)
+
+    duplicate_signals_by_record = {}
+    for (signal, _value), grouped_records in signal_records.items():
+        if len(grouped_records) > 1:
+            for record in grouped_records:
+                duplicate_signals_by_record.setdefault(record.id, set()).add(signal.upper())
+    duplicate_records = set(duplicate_signals_by_record)
+    if not duplicate_records:
+        return False
+
+    for record in records:
+        if record.id in duplicate_records:
+            record.resolved_person = None
+            record.resolution_method = ImportRecord.ResolutionMethod.NOT_RESOLVED
+            record.resolution_reason = "DUPLICATE_CREATE_NEW_IDENTITY_SIGNAL"
+            record.status = ImportRecord.Status.FAILED
+            evidence = dict(record.match_evidence or {})
+            evidence["intra_batch_conflict_signals"] = sorted(duplicate_signals_by_record[record.id])
+            record.match_evidence = evidence
+            record.save(update_fields=["resolved_person", "resolution_method", "resolution_reason", "status", "match_evidence", "updated_at"])
+    return True
 
 
 def analyze_import_record(record):

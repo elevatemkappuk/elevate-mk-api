@@ -39,6 +39,8 @@ PERSON_AUDIT_DESCRIPTION_OVERRIDES = {
     AuditEvent.Action.NOTE_UPDATED: "Internal note updated",
     AuditEvent.Action.NOTE_ARCHIVED: "Internal note archived",
     AuditEvent.Action.NOTE_RESTORED: "Internal note restored",
+    AuditEvent.Action.MARKETING_PREFERENCE_OPTED_IN: "Marketing preference opted in",
+    AuditEvent.Action.MARKETING_PREFERENCE_OPTED_OUT: "Marketing preference opted out",
 }
 PERSON_AUDIT_ALLOWED_CHANGE_FIELDS_BY_ENTITY_TYPE = {
     "Membership": frozenset({"status", "joined_at", "ended_at", "membership_source"}),
@@ -48,6 +50,7 @@ PERSON_AUDIT_ALLOWED_CHANGE_FIELDS_BY_ENTITY_TYPE = {
     "PersonTag": frozenset({"is_active"}),
     "InternalNote": frozenset({"created", "archived"}),
     "Person": frozenset({"created", "archived", "first_name", "last_name", "primary_email", "mobile", "location", "age_range", "gender"}),
+    "MarketingPreference": frozenset({"state", "source"}),
 }
 
 

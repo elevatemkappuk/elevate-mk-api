@@ -12,6 +12,8 @@ from skills.models import Skill
 from skills.serializers import SkillSummarySerializer
 from tags.models import Tag
 from tags.serializers import TagSummarySerializer
+from marketing_preferences.serializers import MarketingPreferenceSerializer
+from marketing_preferences.services import get_effective_marketing_preference
 
 
 class PersonListQuerySerializer(serializers.Serializer):
@@ -242,6 +244,13 @@ class PersonOverviewSerializer(serializers.Serializer):
     skills = serializers.SerializerMethodField()
     interests = serializers.SerializerMethodField()
     tags = serializers.SerializerMethodField()
+    marketing_preference = serializers.SerializerMethodField()
+
+    @extend_schema_field(MarketingPreferenceSerializer)
+    def get_marketing_preference(self, instance):
+        return MarketingPreferenceSerializer(
+            get_effective_marketing_preference(person=instance)
+        ).data
 
     @extend_schema_field(PersonRelationshipSerializer)
     def get_relationship(self, instance):

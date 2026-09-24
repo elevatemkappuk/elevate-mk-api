@@ -1,5 +1,9 @@
 # Deployment
 
+Brevo-specific architecture and integration behavior are documented in
+[Brevo CRM integration](brevo-crm-integration.md). This document retains only
+the deployment and worker-operations guidance needed to run it.
+
 The authoritative backend runtime is Python 3.13, declared in `.python-version`.
 Railway staging and production were confirmed on Python 3.13.15 when this pin
 was established. GitHub Actions should use Python 3.13 as well, and local
@@ -117,7 +121,7 @@ follows:
 | `CRM_FRONTEND_URL` | `https://<crm-production-domain>` | `https://elevate-mk-crm-staging.up.railway.app` |
 | `DJANGO_DEBUG` (`DEBUG`) | `False` | `False` |
 | `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` | Production database credentials and host | Staging database credentials and host |
-| `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME`, `BREVO_REPLY_TO_EMAIL`, `BREVO_REPLY_TO_NAME`, `BREVO_PASSWORD_RESET_TEMPLATE_ID` | Production Brevo credentials and template ID | Staging Brevo credentials and template ID |
+| `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME`, `BREVO_REPLY_TO_EMAIL`, `BREVO_REPLY_TO_NAME`, `BREVO_PASSWORD_RESET_TEMPLATE_ID`, `BREVO_MARKETING_LIST_ID`, `MARKETING_SYNC_PROVIDER`, `BREVO_MARKETING_WEBHOOK_USERNAME`, `BREVO_MARKETING_WEBHOOK_PASSWORD` | Production Brevo credentials, template ID, approved marketing list ID, `BREVO` provider selection, and webhook Basic credentials | Staging Brevo credentials, template ID, approved marketing list ID, `BREVO` provider selection, and webhook Basic credentials |
 | `SECURE_SSL_REDIRECT` | `True` | `True` |
 | `CSRF_COOKIE_SAMESITE` | `None` | `None` |
 | `SESSION_COOKIE_SAMESITE` | `None` | `None` |
@@ -163,3 +167,20 @@ Running migrations as part of the web process is suitable while the service
 has a single replica. If the service is later scaled to multiple replicas,
 consider moving migrations to a dedicated pre-deploy migration step so only
 one process applies schema changes before the replicas start.
+
+## Brevo worker service
+
+Run automatic Brevo marketing synchronization as a separate Railway worker
+process, not inside the web process:
+
+```text
+python manage.py process_brevo_sync_jobs --watch
+```
+
+The worker shares the application code and database with the web service and
+requires the active Brevo marketing settings, including `BREVO_API_KEY`,
+`BREVO_MARKETING_LIST_ID`, and `MARKETING_SYNC_PROVIDER=BREVO`. Configure
+`BREVO_SYNC_WORKER_POLL_SECONDS` (default `3`) and
+`BREVO_SYNC_WORKER_BATCH_SIZE` (default `20`, maximum `100`) when tuning is
+needed. It handles SIGINT/SIGTERM and preserves durable job state. Mailchimp
+jobs are not automatically processed.

@@ -10,6 +10,7 @@ from accounts.models import User
 from audit.models import AuditEvent
 from interests.models import Interest, PersonInterest
 from memberships.models import Membership
+from external_references.models import ExternalPersonSyncJob
 from people.admin import PersonAdmin
 from people.models import Person
 from professional_profiles.models import Industry, ProfessionalProfile
@@ -1033,7 +1034,7 @@ class PersonOverviewApiTests(TestCase):
         PersonTag.objects.create(person=self.active_member_person, tag=self.vip_tag, assigned_by=self.admin_user)
 
         self.authenticate(self.admin_user)
-        with self.assertNumQueries(5):
+        with self.assertNumQueries(6):
             response = self.client.get(self.get_url(self.active_member_person.id))
 
         self.assertEqual(response.status_code, 200)
@@ -1098,6 +1099,29 @@ class PersonWriteLifecycleApiTests(TestCase):
         event = AuditEvent.objects.get(action=AuditEvent.Action.PERSON_CREATED, entity_id=str(person.id))
         self.assertEqual(event.actor_user, self.admin_user)
         self.assertEqual(event.metadata, {"person_id": str(person.id)})
+
+    def test_profile_field_edit_enqueues_coalesced_brevo_profile_job(self):
+        person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")
+        self.authenticate(self.admin_user)
+
+        response = self.client.patch(self.detail_url(person.id), {"first_name": "Sofia"}, format="json")
+
+        self.assertEqual(response.status_code, 200)
+        job = ExternalPersonSyncJob.objects.get(person=person)
+        self.assertEqual(job.provider, "BREVO")
+        self.assertEqual(job.job_type, "PERSON_PROFILE")
+
+        self.client.patch(self.detail_url(person.id), {"mobile": "+265991234567"}, format="json")
+
+        self.assertEqual(ExternalPersonSyncJob.objects.filter(person=person, job_type="PERSON_PROFILE").count(), 1)
+
+    def test_unrelated_or_identical_person_edit_does_not_enqueue_profile_job(self):
+        person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")
+        self.authenticate(self.admin_user)
+
+        self.assertEqual(self.client.patch(self.detail_url(person.id), {"location": "Milton Keynes"}, format="json").status_code, 200)
+        self.assertEqual(self.client.patch(self.detail_url(person.id), {"first_name": "Amina"}, format="json").status_code, 200)
+        self.assertFalse(ExternalPersonSyncJob.objects.filter(person=person, job_type="PERSON_PROFILE").exists())
 
     def test_manager_can_create_contact_and_viewer_nonstaff_and_anonymous_are_denied(self):
         self.authenticate(self.manager_user)
