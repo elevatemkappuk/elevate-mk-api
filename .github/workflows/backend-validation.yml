@@ -75,6 +75,10 @@ jobs:
           python manage.py test
           accounts.tests.AuthenticationApiTests
           staff_access.tests.StaffPermissionTests
+          marketing_preferences.tests.MarketingPreferenceServiceTests.test_meaningful_opt_out_and_later_opt_in_queue_one_job_per_history_event
+          brevo_marketing.tests.BrevoSyncJobTests.test_worker_processes_brevo_job_and_completes_business_outcomes
+          brevo_marketing.tests.BrevoMarketingWebhookTests.test_authenticated_unsubscribe_records_brevo_opt_out_without_echo_job
+          marketing_preferences.test_audience_preview.AudiencePreviewApiTests.test_authorization_matches_people_read_access
           --noinput -v 1
         # Intentionally limited deployment-contract coverage; this does not replace
         # the full backend test suite, which will be implemented separately.
