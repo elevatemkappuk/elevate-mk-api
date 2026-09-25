@@ -27,6 +27,12 @@ preparation, adds ready contacts, and creates a Brevo draft from the configured
 starter template. The broad `BREVO_MARKETING_LIST_ID` is never used as the
 campaign recipient target.
 
+`BREVO_MARKETING_CAMPAIGN_FOLDER_ID` is optional. Brevo email campaign drafts
+do not receive a folder field. For the required contact-list creation, a blank
+setting causes the client to read the actual folder of the configured base
+marketing list; no folder ID is invented or defaulted. A configured positive
+folder ID continues to be used directly.
+
 Provider preparation uses `PROVIDER_PREPARING`, `PREPARED`,
 `RECONCILIATION_REQUIRED`, `PROVIDER_FAILED`, and `NO_READY_RECIPIENTS` while
 the Campaign carries the corresponding public lifecycle state. Retries reuse

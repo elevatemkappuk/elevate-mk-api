@@ -186,7 +186,7 @@ Settings are loaded from the backend environment in `config/settings.py`.
 | --- | --- | --- | --- |
 | `BREVO_API_KEY` | Brevo API authentication | Empty by default; required for Brevo API operations | Worker, manual/diagnostic marketing commands, and transactional Brevo operations |
 | `BREVO_MARKETING_LIST_ID` | Initial marketing list and optional webhook list scope | Empty by default; must be a positive integer for list-based sync and supplied-list webhook validation | Worker and webhook web process |
-| `BREVO_MARKETING_CAMPAIGN_FOLDER_ID` | Brevo folder for Campaign V1 execution lists | Empty by default; required for provider preparation and must be a positive integer | Web process/provider preparation |
+| `BREVO_MARKETING_CAMPAIGN_FOLDER_ID` | Optional Brevo contact folder for Campaign V1 execution lists | Blank/unset is valid; when blank, preparation derives the actual folder of `BREVO_MARKETING_LIST_ID`; configured values must be positive integers | Web process/provider preparation |
 | `BREVO_MARKETING_STARTER_TEMPLATE_ID` | Brevo template used for Campaign V1 drafts | Empty by default; required for provider preparation and must be a positive integer | Web process/provider preparation |
 | `MARKETING_SYNC_PROVIDER` | Active marketing provider selector | `BREVO`; unsupported values fail checks/runtime | Web and worker |
 | `BREVO_MARKETING_WEBHOOK_USERNAME` | Inbound webhook Basic Auth username | Empty by default; required to accept webhook traffic | Web process |
@@ -707,6 +707,11 @@ Brevo owns content editing, test sends, scheduling, sending, and delivery.
 Frontend campaign workflow, post-prepared opt-out removal, automatic list
 cleanup, saved audiences, tags, journeys, and background campaign automation
 remain unimplemented.
+
+Brevo email campaign creation does not receive a folder field. The optional
+`BREVO_MARKETING_CAMPAIGN_FOLDER_ID` only controls placement of the dedicated
+contact list. When it is blank, the provider client reads the actual folder of
+the configured base marketing list; it never invents or defaults a folder ID.
 
 ### Deployment
 

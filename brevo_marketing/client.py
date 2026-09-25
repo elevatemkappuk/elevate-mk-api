@@ -36,6 +36,7 @@ class BrevoContactList:
     total_subscribers: int | None
     total_blacklisted: int | None
     unique_subscribers: int | None
+    folder_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -174,6 +175,15 @@ class BrevoMarketingClient:
         return tuple(results)
 
     def get_campaign_folder_id(self):
+        if self.campaign_folder_id in (None, ""):
+            marketing_list_id = self.get_marketing_list_id()
+            response = self._call(lambda: self._client.contacts.get_list(marketing_list_id))
+            folder_id = getattr(response, "folder_id", None)
+            if isinstance(folder_id, int) and folder_id > 0:
+                return folder_id
+            raise BrevoMarketingConfigurationError(
+                "Brevo campaign preparation could not determine the configured marketing list folder."
+            )
         try:
             value = int(str(self.campaign_folder_id).strip())
         except (TypeError, ValueError) as error:
@@ -192,7 +202,7 @@ class BrevoMarketingClient:
         list_id = getattr(response, "id", None)
         if not isinstance(list_id, int) or list_id <= 0:
             raise BrevoMarketingAPIError("Brevo returned an invalid campaign list identity.")
-        return BrevoContactList(list_id=list_id, name=name, total_subscribers=0, total_blacklisted=0, unique_subscribers=0)
+        return BrevoContactList(list_id=list_id, name=name, total_subscribers=0, total_blacklisted=0, unique_subscribers=0, folder_id=folder_id)
 
     def add_contact_to_list(self, *, list_id, contact_id):
         self._call(lambda: self._client.contacts.add_contact_to_list(
@@ -276,6 +286,7 @@ class BrevoMarketingClient:
             total_subscribers=BrevoMarketingClient._safe_count(getattr(item, "total_subscribers", None)),
             total_blacklisted=BrevoMarketingClient._safe_count(getattr(item, "total_blacklisted", None)),
             unique_subscribers=BrevoMarketingClient._safe_count(getattr(item, "unique_subscribers", None)),
+            folder_id=BrevoMarketingClient._safe_count(getattr(item, "folder_id", None)),
         )
 
     @staticmethod
