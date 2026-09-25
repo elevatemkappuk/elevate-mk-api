@@ -4,8 +4,9 @@ from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import transaction
 
+from audit.models import AuditEvent
 from brevo_marketing.client import BrevoContact, BrevoMarketingClient
-from brevo_marketing.exceptions import BrevoMarketingIdentityConflictError
+from brevo_marketing.exceptions import BrevoMarketingIdentityConflictError, BrevoMarketingValidationError
 from external_references.models import ExternalPersonReference
 from external_references.services import attach_person_reference
 from marketing_preferences.models import MarketingPreference
@@ -36,6 +37,9 @@ class BrevoPersonSyncOutcome:
     SKIPPED_NO_MARKETING_CONTACT = "SKIPPED_NO_MARKETING_CONTACT"
     UPDATED_PERSON_PROFILE = "UPDATED_PERSON_PROFILE"
     PROFILE_ALREADY_SYNCHRONIZED = "PROFILE_ALREADY_SYNCHRONIZED"
+    EMAIL_MIGRATION_UPDATED = "EMAIL_MIGRATION_UPDATED"
+    EMAIL_MIGRATION_ALREADY_SYNCHRONIZED = "EMAIL_MIGRATION_ALREADY_SYNCHRONIZED"
+    EMAIL_MIGRATION_SUPERSEDED = "EMAIL_MIGRATION_SUPERSEDED"
 
 
 @dataclass(frozen=True)
@@ -196,6 +200,124 @@ def synchronize_person_to_brevo(*, person_id, client=None, actor_user=None):
         reference_id=reference.id,
         provider_state=_provider_state(contact, list_id),
         reason=mobile_reason,
+    )
+
+
+def _known_person_emails(person_id, previous_email, requested_email):
+    emails = {
+        value.strip().casefold()
+        for value in (previous_email, requested_email)
+        if value and value.strip()
+    }
+    for event in AuditEvent.objects.filter(entity_type="Person", entity_id=str(person_id)).only("changes"):
+        change = (event.changes or {}).get("primary_email") or {}
+        for value in (change.get("from"), change.get("to")):
+            if value and str(value).strip():
+                emails.add(str(value).strip().casefold())
+    return emails
+
+
+@transaction.atomic
+def synchronize_person_email_to_brevo(*, job, client=None):
+    """Safely migrate an existing Brevo contact's email by stable contact ID."""
+    person = Person.objects.select_for_update().get(pk=job.person_id)
+    requested_email = (job.requested_email or "").strip().casefold()
+    previous_email = (job.previous_email or "").strip().casefold()
+
+    if requested_email != _safe_email(person):
+        return BrevoPersonSyncResult(
+            person_id=person.id,
+            outcome=BrevoPersonSyncOutcome.EMAIL_MIGRATION_SUPERSEDED,
+            reason="CRM_EMAIL_CHANGED_AGAIN",
+        )
+    if person.record_type != Person.RecordType.BUSINESS:
+        return BrevoPersonSyncResult(person_id=person.id, outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED, reason="NOT_BUSINESS")
+    if person.archived_at is not None:
+        return BrevoPersonSyncResult(person_id=person.id, outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED, reason="ARCHIVED")
+    try:
+        validate_email(requested_email)
+    except ValidationError:
+        return BrevoPersonSyncResult(person_id=person.id, outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED, reason="CRM_EMAIL_INVALID")
+
+    preference = get_effective_marketing_preference(person=person)
+    if preference.state != MarketingPreference.State.OPTED_IN:
+        return BrevoPersonSyncResult(
+            person_id=person.id,
+            outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED,
+            reason=f"MARKETING_CONSENT_{preference.state}",
+        )
+
+    reference = ExternalPersonReference.objects.select_for_update().filter(
+        person=person,
+        provider=BREVO_PROVIDER,
+        reference_type=MARKETING_CONTACT_REFERENCE_TYPE,
+        status=ExternalPersonReference.Status.ACTIVE,
+    ).first()
+    if reference is None:
+        return BrevoPersonSyncResult(person_id=person.id, outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED, reason="NO_ACTIVE_BREVO_REFERENCE")
+
+    client = client or BrevoMarketingClient.from_settings()
+    contact = client.get_contact_by_id(reference.external_id)
+    if contact is None:
+        return BrevoPersonSyncResult(
+            person_id=person.id,
+            outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED,
+            reference_id=reference.id,
+            reason="BREVO_CONTACT_NOT_FOUND_FOR_REFERENCE",
+        )
+    if contact.email not in _known_person_emails(person.id, previous_email, requested_email):
+        return BrevoPersonSyncResult(
+            person_id=person.id,
+            outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED,
+            contact_id=contact.contact_id,
+            reference_id=reference.id,
+            reason="BREVO_CONTACT_EMAIL_IDENTITY_UNKNOWN",
+        )
+    if contact.email_blacklisted or contact.list_unsubscribed:
+        return BrevoPersonSyncResult(
+            person_id=person.id,
+            outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED,
+            contact_id=contact.contact_id,
+            reference_id=reference.id,
+            reason="BREVO_CONTACT_RESTRICTED",
+        )
+
+    target = client.get_contact(requested_email)
+    if target is not None and target.contact_id != contact.contact_id:
+        return BrevoPersonSyncResult(
+            person_id=person.id,
+            outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED,
+            contact_id=contact.contact_id,
+            reference_id=reference.id,
+            reason="BREVO_TARGET_EMAIL_ALREADY_OWNED",
+        )
+    if contact.email == requested_email:
+        return BrevoPersonSyncResult(
+            person_id=person.id,
+            outcome=BrevoPersonSyncOutcome.EMAIL_MIGRATION_ALREADY_SYNCHRONIZED,
+            contact_id=contact.contact_id,
+            reference_id=reference.id,
+        )
+
+    try:
+        client.update_contact(contact_id=contact.contact_id, attributes={"EMAIL": requested_email})
+    except BrevoMarketingValidationError as error:
+        raise BrevoMarketingIdentityConflictError("Brevo rejected the email identity migration.") from error
+
+    verified = client.get_contact_by_id(contact.contact_id)
+    if verified is None or verified.email != requested_email:
+        return BrevoPersonSyncResult(
+            person_id=person.id,
+            outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED,
+            contact_id=contact.contact_id,
+            reference_id=reference.id,
+            reason="BREVO_EMAIL_MIGRATION_NOT_VERIFIED",
+        )
+    return BrevoPersonSyncResult(
+        person_id=person.id,
+        outcome=BrevoPersonSyncOutcome.EMAIL_MIGRATION_UPDATED,
+        contact_id=verified.contact_id,
+        reference_id=reference.id,
     )
 
 

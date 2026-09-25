@@ -44,12 +44,30 @@ Mailchimp is frozen as a rollback/reference provider. `MAILCHIMP` jobs and
 references are not consumed by the automatic Brevo worker, and no new
 Mailchimp functionality is described here.
 
+### Staging-proven status
+
+The core CRM-to-Brevo marketing preference/profile flow and the Brevo inbound
+unsubscribe flow have been exercised successfully end-to-end in staging. The
+verified sequence is:
+
+```text
+CRM OPTED_IN -> durable Brevo job -> worker -> Brevo contact/list
+    -> campaign unsubscribe -> Brevo webhook -> CRM OPTED_OUT
+```
+
+The staging test also verified that a Person first-name change updates the
+same Brevo contact through a `PERSON_PROFILE` job. The provider-originated
+unsubscribe retained `source=BREVO` and created no outbound echo job.
+
+This is a staging verification statement, not a claim that Campaign V1,
+bulk campaign workflows, or automated journeys are implemented.
+
 ## 2. Systems of record and authority boundaries
 
 | Data or operation | Authoritative owner | Implemented direction |
 | --- | --- | --- |
 | Person identity | Elevate `people.Person` | Elevate → Brevo profile fields |
-| `primary_email` | Elevate CRM | Used as contact identity; email migration is conservative |
+| `primary_email` | Elevate CRM | Used as contact identity; eligible changes use controlled ID-based migration |
 | `first_name`, `last_name` | Elevate CRM | Elevate → `FIRSTNAME`, `LASTNAME` |
 | `mobile` | Elevate CRM | Elevate → `SMS` only when safely representable |
 | Relationships, membership, events, tickets, professional data | Elevate CRM/domain apps | Not synchronized by this integration |
@@ -149,6 +167,18 @@ Settings are loaded from the backend environment in `config/settings.py`.
 | `BREVO_MARKETING_WEBHOOK_PASSWORD` | Inbound webhook Basic Auth password | Empty by default; required to accept webhook traffic | Web process |
 | `BREVO_SYNC_WORKER_POLL_SECONDS` | Idle worker polling interval | Positive value; default `3.0` seconds | Worker |
 | `BREVO_SYNC_WORKER_BATCH_SIZE` | Maximum jobs claimed per polling batch | Positive value; default `20`, capped at `100` by worker validation | Worker |
+
+Staging uses dedicated Brevo resources and configuration within the Brevo
+account; it is not represented as a separate Brevo environment. The current
+staging marketing list is:
+
+```text
+ELEVATE STAGING | Marketing Contacts
+List ID: 4
+```
+
+This documentation intentionally excludes API keys, webhook passwords,
+Authorization headers, and other secrets.
 
 `BREVO_API_KEY` is an API credential and is never printed, persisted in
 references, or included in operational output. Webhook Basic credentials are
@@ -367,11 +397,10 @@ CRM OPTED_OUT -> new BREVO synchronization job
 ## 14. Person profile synchronization
 
 `PERSON_PROFILE` jobs are created in the authoritative `PersonDetailView.patch`
-path after a successful Person update. Only changes to `primary_email`,
-`first_name`, `last_name`, or `mobile` trigger them. Unrelated changes and
-identical saves do not. A pending profile job for that Person is reused rather
-than accumulating duplicate pending work. Jobs store no profile PII snapshot;
-the worker reads the current Person.
+path after a successful Person update. Changes to `first_name`, `last_name`, or
+`mobile` trigger them. Unrelated changes and identical saves do not. A pending
+profile job for that Person is reused rather than accumulating duplicate pending
+work. Jobs store no profile PII snapshot; the worker reads the current Person.
 
 Profile synchronization requires an active Brevo marketing
 `ExternalPersonReference`. It never creates a contact or reference merely
@@ -386,7 +415,7 @@ unsafe mobile is omitted and returns the safe reason
 MarketingPreference, consent, list membership, blocklisting, or list-unsubscribe
 state. Successful updates use `UPDATED_PERSON_PROFILE`.
 
-## 15. Email identity changes and reconciliation
+## 15. Email identity changes and controlled migration
 
 Email is higher risk than names or mobile. Profile synchronization resolves by
 the existing stable Brevo contact ID, then verifies that the current valid CRM
@@ -395,10 +424,33 @@ search for a replacement contact and does not send `EMAIL` in a profile
 attribute update.
 
 If the contact is missing, the CRM email is invalid, or CRM/provider email
-identity differs, the result is `RECONCILIATION_REQUIRED`. The system does not
-fuzzy-match, use `forceMerge`, create a duplicate, silently move a reference,
-or perform an automatic email migration that could weaken provider
-restrictions.
+identity differs, ordinary profile synchronization returns
+`RECONCILIATION_REQUIRED`. It does not fuzzy-match, use `forceMerge`, create a
+duplicate, or silently move a reference.
+
+Primary-email edits create a separate `PERSON_EMAIL_MIGRATION` job with an
+immutable `previous_email` and `requested_email` snapshot. This job is processed
+before profile work for the same Person. A stale migration whose requested email
+is no longer current is marked superseded; the latest migration can use the
+Person's append-only email-change audit history to safely recognize intermediate
+CRM values such as A -> B -> C.
+
+Automatic migration is deliberately narrow. It requires an active BUSINESS
+Person, valid current email, EMAIL `OPTED_IN`, an active Brevo marketing-contact
+reference, an existing referenced contact, an unrestricted provider state, and
+no other Brevo contact already owning the requested email. The Brevo contact is
+updated by its stable numeric contact ID with only the `EMAIL` attribute, then
+re-read and verified. The existing `ExternalPersonReference` remains attached
+to that same contact ID.
+
+Missing references or contacts, invalid/blank email, archived or non-BUSINESS
+People, unknown or opted-out CRM consent, provider blocklisting/list
+unsubscription, unknown referenced identity, and target-email collisions end in
+`RECONCILIATION_REQUIRED` without mutation. The migration never creates consent
+or contacts, clears provider restrictions, uses `forceMerge`, deletes contacts,
+or creates an inbound/outbound echo. A retry after Brevo accepted the change is
+idempotent because the contact-ID lookup recognizes the requested email as
+already synchronized. Email-clear operations are not automatically migrated.
 
 ## 16. Automatic Brevo worker
 
@@ -409,7 +461,9 @@ python manage.py process_brevo_sync_jobs --watch
 ```
 
 It continuously claims eligible `BREVO` jobs of type
-`EMAIL_MARKETING_PREFERENCE` or `PERSON_PROFILE`, in bounded batches. The
+`EMAIL_MARKETING_PREFERENCE`, `PERSON_EMAIL_MIGRATION`, or `PERSON_PROFILE`, in
+bounded batches. Email migrations are prioritized before profile work so a
+combined edit has deterministic ordering. The
 default idle poll interval is three seconds and the default batch size is 20,
 with a maximum validated batch size of 100. Empty polls wait rather than
 busy-looping. A job failure is recorded and does not terminate the worker
@@ -481,11 +535,44 @@ Authentication:   Basic authentication
 Endpoint path:    /api/v1/webhooks/brevo/marketing/
 ```
 
+Brevo must be configured with the complete endpoint URL:
+
+```text
+https://<api-host>/api/v1/webhooks/brevo/marketing/
+```
+
+Configuring only `https://<api-host>/` is incorrect. During staging
+validation, that mistake caused Brevo to record the unsubscribe while its
+delivery failed; Railway showed no request to the marketing webhook route and
+CRM consent remained `OPTED_IN`. Correcting the URL allowed the next
+controlled unsubscribe to reach Django and record `OPTED_OUT`.
+
+Use HTTP Basic authentication with credentials supplied by environment
+configuration. Configure the Brevo event as **Marketing Email ->
+Unsubscribed**. Never store webhook credentials in repository documentation.
+
 Only the marketing unsubscribe event is consumed. Delivered, opened, clicked,
 bounced, transactional, SMS, and other provider events are not treated as
 implemented CRM-consent inputs.
 
-## 20. Production and Railway deployment
+## 20. Webhook troubleshooting
+
+| Symptom | First checks |
+| --- | --- |
+| Brevo contact does not appear | Check preference eligibility, the `ExternalPersonSyncJob`, worker status, provider configuration, and staging list configuration. |
+| Profile change does not appear in Brevo | Check the `PERSON_PROFILE` job and worker. Profile edits update an existing referenced contact; they do not create a new contact. |
+| Brevo shows unsubscribe/blocklist but CRM remains opted in | Inspect Brevo webhook delivery first. |
+| Brevo webhook dashboard shows Failed and Railway has no POST to the expected route | Verify the complete webhook URL before changing application code. |
+| `401` | Check HTTP Basic Auth configuration. |
+| `404` | Check the webhook route and configured URL. |
+| `400` | Check payload validation and parsing. |
+| `5xx` | Inspect application error output and retry delivery safely. |
+| Webhook succeeds but Person is unchanged | Check exact BUSINESS-email resolution, receipt processing, and event eligibility. |
+
+OpenAPI/schema-generation warnings for the raw `BrevoMarketingWebhookView` are
+not evidence that a webhook delivery failed.
+
+## 21. Production and Railway deployment
 
 The intended deployment separates web and worker processes:
 
@@ -504,7 +591,7 @@ documents this start command; a separate Railway worker service must still be
 created/configured operationally if it does not already exist. This document
 does not claim that deployment infrastructure is automatically provisioned.
 
-## 21. Management and diagnostic commands
+## 22. Management and diagnostic commands
 
 | Command | Purpose |
 | --- | --- |
@@ -516,7 +603,7 @@ does not claim that deployment infrastructure is automatically provisioned.
 The commands do not print API keys or webhook credentials. The one-Person
 command reports safe outcome/contact-reference metadata and is not bulk sync.
 
-## 22. Security and privacy
+## 23. Security and privacy
 
 - API keys and webhook credentials are environment-only.
 - Webhook credentials are not embedded in endpoint URLs.
@@ -530,7 +617,7 @@ command reports safe outcome/contact-reference metadata and is not bulk sync.
 - Provider restrictive state is not silently weakened by CRM opt-in or profile
   edits.
 
-## 23. Tested and proven integration behavior
+## 24. Tested and proven integration behavior
 
 Automated focused tests exist under `brevo_marketing/tests.py` and
 `people/tests.py` for client behavior, consent synchronization, profile
@@ -553,12 +640,13 @@ The implemented paths cover the following behaviors:
 - blank mobile clearing through an empty `SMS` attribute;
 - unsafe mobile omission without failing profile name synchronization.
 
-These are implemented behaviors, not a claim of a production deployment or a
-specific live contact/account result. Manual live validation should use a
-controlled existing Brevo contact and test surname/mobile before testing any
-email identity change.
+These implementation paths have been exercised end-to-end in the staging
+Brevo account, including contact creation/list membership, Person profile
+updates, and a real campaign unsubscribe propagating back to CRM. Manual
+validation outside staging should still use a controlled existing Brevo
+contact and test surname/mobile before testing any email identity change.
 
-## 24. Known limitations and TODOs
+## 25. Known limitations and TODOs
 
 ### Phone normalization
 
@@ -568,9 +656,10 @@ country information and must not blanket-convert a leading zero to `+44`.
 
 ### Email reconciliation
 
-Email identity migration remains deliberately conservative and requires manual
-reconciliation when the current CRM email does not match the referenced Brevo
-contact.
+Email identity migration remains deliberately conservative. Only the explicit
+`PERSON_EMAIL_MIGRATION` path can update an unrestricted, known, opted-in
+contact by stable ID; all other identity, consent, restriction, collision, and
+cleared-email cases require reconciliation.
 
 ### Inbound provider events
 
@@ -595,7 +684,7 @@ separate Railway worker service remains a deployment action.
 Mailchimp remains a frozen rollback/reference implementation and is not the
 active automatic marketing provider.
 
-## 25. Future integration roadmap
+## 26. Future integration roadmap
 
 The following are non-implemented future milestones:
 
