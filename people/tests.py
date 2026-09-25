@@ -24,7 +24,10 @@ from tags.models import PersonTag, Tag
 class PersonBrevoIntegrationApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
-        self.viewer = User.objects.create_user(email="brevo-viewer@example.com", password="testpass123")
+        self.viewer = User.objects.create_user(
+            email="brevo-viewer@example.com", password="testpass123",
+            person_first_name="Brevo", person_last_name="Viewer",
+        )
         StaffRoleAssignment.objects.assign_role(user=self.viewer, role=StaffRole.objects.get(code=StaffRole.CRM_VIEWER))
         self.person = Person.objects.create(first_name="Read", last_name="Only", primary_email="read@example.com")
         self.url = f"/api/v1/people/{self.person.id}/brevo-integration/"
@@ -38,7 +41,10 @@ class PersonBrevoIntegrationApiTests(TestCase):
         self.assertEqual(response.data["marketing_preference"]["state"], "UNKNOWN")
 
     def test_non_crm_user_is_forbidden(self):
-        user = User.objects.create_user(email="brevo-outsider@example.com", password="testpass123")
+        user = User.objects.create_user(
+            email="brevo-outsider@example.com", password="testpass123",
+            person_first_name="Brevo", person_last_name="Outsider",
+        )
         self.client.force_authenticate(user)
         self.assertEqual(self.client.get(self.url).status_code, 403)
 
