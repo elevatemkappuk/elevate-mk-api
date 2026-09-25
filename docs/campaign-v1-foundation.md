@@ -41,6 +41,38 @@ is retried with bounded backoff. A campaign draft is looked up by its
 deterministic name before creation; if the provider accepted a create request
 but the response was lost, this lookup is the available V1 recovery mechanism.
 
+### Reconciliation review and retry
+
+`RECONCILIATION_REQUIRED` intentionally blocks the whole Campaign V1
+preparation. It means that one or more included snapshot recipients could not
+be safely reconciled with current CRM consent and Brevo identity/provider
+state; it does not mean that a partial campaign is ready. No draft is created
+while any included recipient remains in that state.
+
+The recipient endpoint exposes snapshot names, decisions, outcomes, and only
+allowlisted safe `provider_error_code` values. It does not expose Brevo
+contact IDs, raw provider messages, or provider payloads. Relevant codes are:
+
+- `BREVO_CONTACT_RESTRICTED`: Brevo currently has a restrictive email state;
+  CRM opt-in does not automatically unblock or resubscribe it.
+- `BREVO_CONTACT_NOT_FOUND_FOR_EXISTING_REFERENCE`: an active CRM reference
+  points to a Brevo contact that can no longer be found.
+- `BREVO_CONTACT_IDENTITY_CONFLICT`: the CRM and Brevo identities cannot be
+  safely matched.
+
+After staff resolve the underlying issue through supported CRM/Brevo
+workflows, CRM administrators or managers may deliberately call the existing
+provider-preparation endpoint again. This is not automatic repair. The retry
+reuses the same immutable snapshot, preparation, dedicated list, and already
+completed recipient work, while re-evaluating unresolved recipients and
+current CRM EMAIL consent. If any included recipient still requires
+reconciliation, the campaign remains blocked and no draft is created. Once
+all included recipients are safe, normal draft lookup/idempotency proceeds.
+
+The recipient endpoint remains paginated. It accepts `page` and `page_size`
+with the existing maximum page size of 100, allowing Campaign review screens
+to retrieve the full snapshot without introducing an unbounded endpoint.
+
 Brevo visual editing, sending, scheduling, post-preparation consent removal,
 automatic list cleanup, and the frontend Campaign workflow remain outside this
 phase.

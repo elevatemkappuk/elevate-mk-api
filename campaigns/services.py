@@ -96,6 +96,14 @@ PROVIDER_RECONCILIATION_OUTCOMES = {
     BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED,
     BrevoPersonSyncOutcome.SKIPPED_PROTECTED_PROVIDER_STATE,
 }
+SAFE_RECONCILIATION_CODES = {
+    "BREVO_CONTACT_RESTRICTED",
+    "BREVO_CONTACT_NOT_FOUND_FOR_EXISTING_REFERENCE",
+    "BREVO_CONTACT_IDENTITY_CONFLICT",
+    "BREVO_CONTACT_EMAIL_IDENTITY_UNKNOWN",
+    "BREVO_CONTACT_EMAIL_MISMATCH",
+    "BREVO_TARGET_EMAIL_ALREADY_OWNED",
+}
 PROVIDER_BACKOFF_SECONDS = (0, 1, 3, 10, 30)
 
 
@@ -121,6 +129,14 @@ def _safe_provider_error(error):
     return " ".join(str(error or "Provider preparation failed.").split())[:500]
 
 
+def _safe_reconciliation_code(result):
+    if result.outcome == BrevoPersonSyncOutcome.SKIPPED_PROTECTED_PROVIDER_STATE:
+        return "BREVO_CONTACT_RESTRICTED"
+    if result.reason in SAFE_RECONCILIATION_CODES:
+        return result.reason
+    return "BREVO_RECONCILIATION_REQUIRED"
+
+
 def _mark_snapshot(snapshot, *, outcome, contact_id=None, error_code=None, error_message=None):
     snapshot.brevo_contact_id = contact_id
     snapshot.provider_outcome = outcome
@@ -140,12 +156,24 @@ def prepare_campaign_provider(*, campaign_id, actor_user=None, client=None, slee
         raise RuntimeError("The campaign has no current preparation.")
     if preparation.status == CampaignPreparation.Status.PROVIDER_PREPARING:
         raise RuntimeError("Provider preparation is already in progress.")
-    if preparation.status not in (CampaignPreparation.Status.SNAPSHOT_READY, CampaignPreparation.Status.PROVIDER_FAILED):
+    if preparation.status not in (
+        CampaignPreparation.Status.SNAPSHOT_READY,
+        CampaignPreparation.Status.PROVIDER_FAILED,
+        CampaignPreparation.Status.RECONCILIATION_REQUIRED,
+    ):
         raise RuntimeError("The current preparation is not ready for provider preparation.")
-    if campaign.status not in (Campaign.Status.SNAPSHOT_READY, Campaign.Status.PROVIDER_FAILED):
+    if campaign.status not in (
+        Campaign.Status.SNAPSHOT_READY,
+        Campaign.Status.PROVIDER_FAILED,
+        Campaign.Status.RECONCILIATION_REQUIRED,
+    ):
         raise RuntimeError("The campaign is not ready for provider preparation.")
 
-    was_retry = preparation.status == CampaignPreparation.Status.PROVIDER_FAILED
+    was_retry = preparation.status in (
+        CampaignPreparation.Status.PROVIDER_FAILED,
+        CampaignPreparation.Status.RECONCILIATION_REQUIRED,
+    )
+    was_reconciliation_retry = preparation.status == CampaignPreparation.Status.RECONCILIATION_REQUIRED
     preparation.status = CampaignPreparation.Status.PROVIDER_PREPARING
     preparation.provider_error_code = None
     preparation.provider_error_message = None
@@ -157,7 +185,7 @@ def prepare_campaign_provider(*, campaign_id, actor_user=None, client=None, slee
         entity_type="CampaignPreparation",
         entity_id=preparation.id,
         actor_user=actor_user,
-        metadata={"campaign_id": campaign.id, "preparation_id": preparation.id, "attempt_number": preparation.attempt_number},
+        metadata={"campaign_id": campaign.id, "preparation_id": preparation.id, "attempt_number": preparation.attempt_number, "retry_kind": "RECONCILIATION" if was_reconciliation_retry else "PROVIDER" if was_retry else "INITIAL"},
     )
 
     snapshots = list(preparation.recipient_snapshots.select_related("person").filter(decision=CampaignRecipientSnapshot.Decision.INCLUDED).order_by("id"))
@@ -170,7 +198,9 @@ def prepare_campaign_provider(*, campaign_id, actor_user=None, client=None, slee
         if preference.state != MarketingPreference.State.OPTED_IN:
             _mark_snapshot(snapshot, outcome="SKIPPED_CURRENT_CONSENT", error_code="CURRENT_CONSENT_NOT_OPTED_IN")
             continue
-        if snapshot.provider_outcome in {"RECONCILIATION_REQUIRED", "SKIPPED_CURRENT_CONSENT"}:
+        if snapshot.provider_outcome == "RECONCILIATION_REQUIRED" and not was_reconciliation_retry:
+            continue
+        if snapshot.provider_outcome == "SKIPPED_CURRENT_CONSENT":
             continue
         candidates.append(snapshot)
 
@@ -211,10 +241,14 @@ def prepare_campaign_provider(*, campaign_id, actor_user=None, client=None, slee
                 ready_count += 1
                 continue
             try:
-                if snapshot.brevo_contact_id is None:
+                should_resynchronize = (
+                    snapshot.brevo_contact_id is None
+                    or (was_reconciliation_retry and snapshot.provider_outcome == "RECONCILIATION_REQUIRED")
+                )
+                if should_resynchronize:
                     result = synchronize_person_to_brevo(person_id=snapshot.person_id, client=client, actor_user=actor_user)
                     if result.outcome in PROVIDER_RECONCILIATION_OUTCOMES or result.contact_id is None:
-                        _mark_snapshot(snapshot, outcome="RECONCILIATION_REQUIRED", contact_id=result.contact_id, error_code="BREVO_RECONCILIATION_REQUIRED", error_message=result.reason)
+                        _mark_snapshot(snapshot, outcome="RECONCILIATION_REQUIRED", contact_id=result.contact_id, error_code=_safe_reconciliation_code(result))
                         reconciliation_count += 1
                         continue
                     snapshot.brevo_contact_id = result.contact_id
@@ -223,7 +257,7 @@ def prepare_campaign_provider(*, campaign_id, actor_user=None, client=None, slee
                 _mark_snapshot(snapshot, outcome="ADDED_TO_CAMPAIGN_LIST", contact_id=snapshot.brevo_contact_id)
                 ready_count += 1
             except BrevoMarketingIdentityConflictError as error:
-                _mark_snapshot(snapshot, outcome="RECONCILIATION_REQUIRED", contact_id=snapshot.brevo_contact_id, error_code=_provider_error_code(error), error_message=_safe_provider_error(error))
+                _mark_snapshot(snapshot, outcome="RECONCILIATION_REQUIRED", contact_id=snapshot.brevo_contact_id, error_code="BREVO_CONTACT_IDENTITY_CONFLICT")
                 reconciliation_count += 1
             except BrevoMarketingTemporaryError as error:
                 _mark_snapshot(snapshot, outcome="PROVIDER_FAILED", contact_id=snapshot.brevo_contact_id, error_code=_provider_error_code(error), error_message=_safe_provider_error(error))
@@ -232,6 +266,8 @@ def prepare_campaign_provider(*, campaign_id, actor_user=None, client=None, slee
                 _mark_snapshot(snapshot, outcome="PROVIDER_FAILED", contact_id=snapshot.brevo_contact_id, error_code=_provider_error_code(error), error_message=_safe_provider_error(error))
                 raise
 
+        ready_count = sum(snapshot.provider_outcome == "ADDED_TO_CAMPAIGN_LIST" for snapshot in snapshots)
+        reconciliation_count = sum(snapshot.provider_outcome == "RECONCILIATION_REQUIRED" for snapshot in snapshots)
         if reconciliation_count:
             preparation.status = CampaignPreparation.Status.RECONCILIATION_REQUIRED
             preparation.completed_at = timezone.now()

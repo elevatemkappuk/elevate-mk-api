@@ -46,7 +46,10 @@ class CampaignPreparationSerializer(serializers.ModelSerializer):
         return obj.status == CampaignPreparation.Status.SNAPSHOT_READY
 
     def get_can_retry_provider_preparation(self, obj):
-        return obj.status == CampaignPreparation.Status.PROVIDER_FAILED
+        return obj.status in (
+            CampaignPreparation.Status.PROVIDER_FAILED,
+            CampaignPreparation.Status.RECONCILIATION_REQUIRED,
+        )
 
 
 class CampaignSerializer(serializers.ModelSerializer):

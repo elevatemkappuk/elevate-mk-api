@@ -241,7 +241,7 @@ def synchronize_person_to_brevo(*, person_id, client=None, actor_user=None):
         contact_id=contact.contact_id,
         reference_id=reference.id,
         provider_state=_provider_state(contact, list_id),
-        reason=mobile_reason,
+        reason=protected_state if operation == BrevoPersonSyncOutcome.SKIPPED_PROTECTED_PROVIDER_STATE else mobile_reason,
     )
 
 

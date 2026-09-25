@@ -10,7 +10,7 @@ from people.models import Person
 from staff_access.models import StaffRole, StaffRoleAssignment
 from accounts.models import User
 
-from .models import Campaign, CampaignRecipientSnapshot
+from .models import Campaign, CampaignPreparation, CampaignRecipientSnapshot
 from .services import prepare_campaign_provider
 from brevo_marketing.exceptions import BrevoMarketingPropagationDelay
 from brevo_marketing.sync import BrevoPersonSyncOutcome, BrevoPersonSyncResult
@@ -243,4 +243,165 @@ class CampaignFoundationApiTests(TestCase):
         client = self._provider_client()
         result = prepare_campaign_provider(campaign_id=campaign.id, actor_user=self.admin, client=client, sleep_fn=lambda _seconds: None)
         self.assertEqual(result.status, Campaign.Status.RECONCILIATION_REQUIRED)
+        self.assertEqual(campaign.current_preparation.recipient_snapshots.get(person=self.included).provider_error_code, "BREVO_CONTACT_RESTRICTED")
+        client.create_email_campaign_draft.assert_not_called()
+
+    @patch("campaigns.services.synchronize_person_to_brevo")
+    def test_missing_referenced_contact_persists_safe_reconciliation_code(self, sync):
+        campaign = self._snapshot_ready_campaign()
+        self._mark_reconciliation_required(campaign)
+        sync.return_value = BrevoPersonSyncResult(
+            person_id=self.included.id,
+            outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED,
+            reason="BREVO_CONTACT_NOT_FOUND_FOR_EXISTING_REFERENCE",
+        )
+        client = self._provider_client()
+
+        prepare_campaign_provider(campaign_id=campaign.id, actor_user=self.admin, client=client, sleep_fn=lambda _seconds: None)
+
+        snapshot = campaign.current_preparation.recipient_snapshots.get(person=self.included)
+        self.assertEqual(snapshot.provider_error_code, "BREVO_CONTACT_NOT_FOUND_FOR_EXISTING_REFERENCE")
+        self.assertIsNone(snapshot.provider_error_message)
+
+    def _mark_reconciliation_required(self, campaign, *, list_id=55):
+        preparation = campaign.current_preparation
+        preparation.brevo_list_id = list_id
+        preparation.status = CampaignPreparation.Status.RECONCILIATION_REQUIRED
+        preparation.save(update_fields=["brevo_list_id", "status", "updated_at"])
+        campaign.status = Campaign.Status.RECONCILIATION_REQUIRED
+        campaign.save(update_fields=["status", "updated_at"])
+        snapshot = preparation.recipient_snapshots.get(person=self.included)
+        snapshot.brevo_contact_id = 999
+        snapshot.provider_outcome = "RECONCILIATION_REQUIRED"
+        snapshot.provider_error_code = "BREVO_CONTACT_RESTRICTED"
+        snapshot.save(update_fields=["brevo_contact_id", "provider_outcome", "provider_error_code"])
+        return preparation, snapshot
+
+    @patch("campaigns.services.synchronize_person_to_brevo")
+    def test_reconciliation_retry_reuses_preparation_list_and_re_evaluates_recipient(self, sync):
+        campaign = self._snapshot_ready_campaign()
+        preparation, snapshot = self._mark_reconciliation_required(campaign)
+        sync.return_value = BrevoPersonSyncResult(person_id=self.included.id, outcome=BrevoPersonSyncOutcome.ALREADY_SYNCHRONIZED, contact_id=123)
+        client = self._provider_client()
+
+        result = prepare_campaign_provider(campaign_id=campaign.id, actor_user=self.admin, client=client, sleep_fn=lambda _seconds: None)
+
+        result.refresh_from_db()
+        preparation.refresh_from_db()
+        snapshot.refresh_from_db()
+        self.assertEqual(result.status, Campaign.Status.PREPARED)
+        self.assertEqual(preparation.status, CampaignPreparation.Status.PREPARED)
+        self.assertEqual(preparation.id, campaign.current_preparation_id)
+        self.assertEqual(preparation.brevo_list_id, 55)
+        self.assertEqual(snapshot.provider_outcome, "ADDED_TO_CAMPAIGN_LIST")
+        client.create_campaign_list.assert_not_called()
+        client.add_contact_to_list.assert_called_once_with(list_id=55, contact_id=123)
+        client.create_email_campaign_draft.assert_called_once()
+        sync.assert_called_once_with(person_id=self.included.id, client=client, actor_user=self.admin)
+        retry_event = AuditEvent.objects.filter(action=AuditEvent.Action.CAMPAIGN_PROVIDER_RETRY).latest("occurred_at")
+        self.assertEqual(retry_event.metadata["retry_kind"], "RECONCILIATION")
+
+    @patch("campaigns.services.synchronize_person_to_brevo")
+    def test_unresolved_reconciliation_is_safe_and_blocks_draft(self, sync):
+        campaign = self._snapshot_ready_campaign()
+        preparation, snapshot = self._mark_reconciliation_required(campaign)
+        sync.return_value = BrevoPersonSyncResult(person_id=self.included.id, outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED, reason="BREVO_CONTACT_RESTRICTED")
+        client = self._provider_client()
+
+        result = prepare_campaign_provider(campaign_id=campaign.id, actor_user=self.admin, client=client, sleep_fn=lambda _seconds: None)
+
+        result.refresh_from_db()
+        preparation.refresh_from_db()
+        snapshot.refresh_from_db()
+        self.assertEqual(result.status, Campaign.Status.RECONCILIATION_REQUIRED)
+        self.assertEqual(preparation.recipient_snapshots.filter(provider_outcome="ADDED_TO_CAMPAIGN_LIST").count(), 0)
+        self.assertEqual(snapshot.provider_outcome, "RECONCILIATION_REQUIRED")
+        self.assertEqual(snapshot.provider_error_code, "BREVO_CONTACT_RESTRICTED")
+        client.create_campaign_list.assert_not_called()
+        client.create_email_campaign_draft.assert_not_called()
+
+    def test_reconciliation_retry_is_available_to_manager_but_not_viewer(self):
+        campaign = self._snapshot_ready_campaign()
+        self._mark_reconciliation_required(campaign)
+        url = f"{self.create_url}{campaign.id}/prepare-provider/"
+        with patch("campaigns.views.prepare_campaign_provider", return_value=campaign):
+            self.authenticate(self.manager)
+            self.assertEqual(self.client.post(url, {}, format="json").status_code, 200)
+        self.authenticate(self.viewer)
+        self.assertEqual(self.client.post(url, {}, format="json").status_code, 403)
+
+    def test_recipient_api_exposes_safe_code_without_provider_identity_or_raw_message(self):
+        campaign = self._snapshot_ready_campaign()
+        preparation = campaign.current_preparation
+        snapshot = preparation.recipient_snapshots.get(person=self.included)
+        snapshot.provider_outcome = "RECONCILIATION_REQUIRED"
+        snapshot.provider_error_code = "BREVO_CONTACT_NOT_FOUND_FOR_EXISTING_REFERENCE"
+        snapshot.provider_error_message = "raw provider detail must not be exposed"
+        snapshot.brevo_contact_id = 123
+        snapshot.save(update_fields=["provider_outcome", "provider_error_code", "provider_error_message", "brevo_contact_id"])
+        self.authenticate(self.viewer)
+
+        response = self.client.get(f"{self.create_url}{campaign.id}/recipients/?page_size=100")
+
+        self.assertEqual(response.status_code, 200)
+        row = next(item for item in response.data["results"] if item["id"] == snapshot.id)
+        self.assertEqual(row["provider_error_code"], "BREVO_CONTACT_NOT_FOUND_FOR_EXISTING_REFERENCE")
+        self.assertNotIn("brevo_contact_id", row)
+        self.assertNotIn("provider_error_message", row)
+
+    @patch("campaigns.services.synchronize_person_to_brevo")
+    def test_reconciliation_retry_respects_current_consent_without_provider_sync(self, sync):
+        campaign = self._snapshot_ready_campaign()
+        preparation, snapshot = self._mark_reconciliation_required(campaign)
+        preference = MarketingPreference.objects.get(person=self.included)
+        preference.state = MarketingPreference.State.OPTED_OUT
+        preference.save(update_fields=["state", "updated_at"])
+        client = self._provider_client()
+
+        result = prepare_campaign_provider(campaign_id=campaign.id, actor_user=self.admin, client=client, sleep_fn=lambda _seconds: None)
+
+        result.refresh_from_db()
+        preparation.refresh_from_db()
+        snapshot.refresh_from_db()
+        self.assertEqual(result.status, Campaign.Status.NO_READY_RECIPIENTS)
+        self.assertEqual(snapshot.decision, CampaignRecipientSnapshot.Decision.INCLUDED)
+        self.assertEqual(snapshot.provider_outcome, "SKIPPED_CURRENT_CONSENT")
+        self.assertFalse(sync.called)
+        client.add_contact_to_list.assert_not_called()
+        client.create_email_campaign_draft.assert_not_called()
+
+    @patch("campaigns.services.synchronize_person_to_brevo")
+    def test_reconciliation_retry_reuses_completed_recipients_and_is_idempotent(self, sync):
+        other = Person.objects.create(first_name="Other", last_name="Included", primary_email="other-included@example.com")
+        self._preference(other, MarketingPreference.State.OPTED_IN)
+        campaign = self._snapshot_ready_campaign()
+        preparation, _snapshot = self._mark_reconciliation_required(campaign)
+        completed = preparation.recipient_snapshots.get(person=other)
+        completed.brevo_contact_id = 321
+        completed.provider_outcome = "ADDED_TO_CAMPAIGN_LIST"
+        completed.save(update_fields=["brevo_contact_id", "provider_outcome"])
+        sync.return_value = BrevoPersonSyncResult(person_id=self.included.id, outcome=BrevoPersonSyncOutcome.ALREADY_SYNCHRONIZED, contact_id=123)
+        client = self._provider_client()
+
+        first = prepare_campaign_provider(campaign_id=campaign.id, actor_user=self.admin, client=client, sleep_fn=lambda _seconds: None)
+        self.assertEqual(first.status, Campaign.Status.PREPARED)
+        self.assertEqual(sync.call_count, 1)
+        client.add_contact_to_list.assert_called_once_with(list_id=55, contact_id=123)
+
+        self.assertRaises(RuntimeError, prepare_campaign_provider, campaign_id=campaign.id, actor_user=self.admin, client=client, sleep_fn=lambda _seconds: None)
+
+    @patch("campaigns.services.synchronize_person_to_brevo")
+    def test_repeated_unresolved_reconciliation_retry_reuses_list_without_draft(self, sync):
+        campaign = self._snapshot_ready_campaign()
+        self._mark_reconciliation_required(campaign)
+        sync.return_value = BrevoPersonSyncResult(person_id=self.included.id, outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED, reason="BREVO_CONTACT_RESTRICTED")
+        client = self._provider_client()
+
+        first = prepare_campaign_provider(campaign_id=campaign.id, actor_user=self.admin, client=client, sleep_fn=lambda _seconds: None)
+        second = prepare_campaign_provider(campaign_id=campaign.id, actor_user=self.admin, client=client, sleep_fn=lambda _seconds: None)
+
+        self.assertEqual(first.status, Campaign.Status.RECONCILIATION_REQUIRED)
+        self.assertEqual(second.status, Campaign.Status.RECONCILIATION_REQUIRED)
+        self.assertEqual(sync.call_count, 2)
+        client.create_campaign_list.assert_not_called()
         client.create_email_campaign_draft.assert_not_called()
