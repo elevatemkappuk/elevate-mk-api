@@ -32,13 +32,40 @@ The first approved profile mapping is deliberately minimal: `Person.primary_emai
 
 One-Person synchronization uses normalized email lookup and Brevo's stable numeric contact ID for `ExternalPersonReference(provider=BREVO, reference_type=MARKETING_CONTACT)`. Existing contacts are reconciled before creation; identity/reference conflicts fail safely. New opted-in contacts are created with only the approved attributes and configured list membership. Existing non-restrictive opted-in contacts receive only missing approved attributes/list membership. Brevo email-campaign blocklisted contacts and contacts unsubscribed from the configured list are protected and are not automatically re-enabled. CRM `OPTED_OUT` does not create a missing contact; for an existing contact it sets Brevo's email-campaign blocklist only when no stronger provider state is already present. This does not alter Brevo transactional-email settings or CRM consent.
 
-Email changes are not silently migrated: if a Person already has a BREVO reference but lookup by the current CRM email finds no contact, synchronization returns `RECONCILIATION_REQUIRED`. This avoids creating duplicates or using an email update to bypass provider suppression. Brevo documents that updating a blocklisted contact's email can remove the blocklist and resubscribe it, so this first implementation does not perform automatic email migration.
+Primary-email changes create a separate `PERSON_EMAIL_MIGRATION` job with
+`previous_email` and `requested_email` snapshots; they are not folded into the
+coalesced profile job. The job can update the same stable Brevo contact ID only
+when the current BUSINESS Person is EMAIL `OPTED_IN`, the active reference and
+contact identity are known, the provider contact is unrestricted, and the
+requested email is not already owned by another contact. It re-reads the
+contact after updating and preserves the existing reference. Stale A -> B jobs
+are superseded when CRM is already at C, while the latest job can use append-only
+Person email audit history to recognize the legitimate A -> B -> C chain.
+
+Missing/ambiguous identity, invalid or cleared email, non-eligible lifecycle or
+record type, UNKNOWN/OPTED_OUT consent, provider blocklisting/list
+unsubscription, and target collisions return `RECONCILIATION_REQUIRED` without
+mutation. The migration never uses `forceMerge`, creates contacts or consent,
+clears provider restrictions, or moves a reference. Brevo documents that
+updating a blocklisted contact's email can remove the blocklist and resubscribe
+it, so restricted contacts are explicitly protected.
 
 ## Automatic Brevo preference jobs
 
 `python manage.py process_brevo_sync_jobs --watch` runs the durable BREVO preference queue continuously until SIGINT or SIGTERM. It polls with `BREVO_SYNC_WORKER_POLL_SECONDS` (default `3` seconds) and caps each batch with `BREVO_SYNC_WORKER_BATCH_SIZE` (default `20`, maximum `100`). It uses the same synchronization service as the one-shot command, so consent, provider-state protection, retries, and terminal failure classification are not duplicated. CRM preference requests enqueue durable work and do not wait for Brevo network calls.
 
-CRM edits to `Person.primary_email`, `first_name`, `last_name`, or `mobile` enqueue the provider-neutral `PERSON_PROFILE` job type after the authoritative Person update. A pending BREVO profile job for the same Person is coalesced, and the worker reads current CRM values when it runs. Profile work never creates a marketing contact or changes consent; without an active BREVO reference it completes as `SKIPPED_NO_MARKETING_CONTACT`. Existing referenced contacts receive only `FIRSTNAME`, `LASTNAME`, and safe `SMS` profile attributes. Blank values are sent as empty attributes to clear stale text/SMS values; unsafe local mobile values are omitted without failing name synchronization. Profile updates never alter email blocklisting/list-unsubscribe state. A changed or invalid CRM email that does not match the referenced contact returns `RECONCILIATION_REQUIRED` rather than migrating or duplicating the provider contact.
+CRM edits to `Person.first_name`, `last_name`, or `mobile` enqueue the
+provider-neutral `PERSON_PROFILE` job type after the authoritative Person update.
+A pending BREVO profile job for the same Person is coalesced, and the worker
+reads current CRM values when it runs. A `primary_email` edit creates the
+dedicated migration job described above; a combined edit creates both jobs, with
+migration processed first. Profile work never creates a marketing contact or
+changes consent; without an active BREVO reference it completes as
+`SKIPPED_NO_MARKETING_CONTACT`. Existing referenced contacts receive only
+`FIRSTNAME`, `LASTNAME`, and safe `SMS` profile attributes. Blank values are
+sent as empty attributes to clear stale text/SMS values; unsafe local mobile
+values are omitted without failing name synchronization. Profile updates never
+alter email blocklisting/list-unsubscribe state and do not migrate email.
 
 For local development, run Django in one terminal and the worker in another:
 
@@ -49,7 +76,17 @@ Terminal 2: python manage.py process_brevo_sync_jobs --watch
 
 In Railway, deploy the worker as a separate process/service using `python manage.py process_brevo_sync_jobs --watch`. It shares the application, database, `BREVO_API_KEY`, `BREVO_MARKETING_LIST_ID`, and `MARKETING_SYNC_PROVIDER=BREVO` with the web service. Webhook Basic credentials are needed by the web service receiving inbound webhooks and should not be added to the worker unless shared variables are required. Mailchimp jobs are never consumed automatically, and transactional Brevo email remains independent.
 
-The one-shot command claims pending `BREVO` jobs of type `EMAIL_MARKETING_PREFERENCE` or `PERSON_PROFILE`. It calls the same synchronization services used by the manual commands, so consent, profile, restrictive-state, identity, list, and minimal-profile rules are not duplicated in the worker. Successful, no-op, UNKNOWN, opted-out-without-contact, no-marketing-contact, and protected-provider outcomes complete successfully because retrying cannot improve them. Configuration, authentication, access, validation, API, identity-conflict, and reconciliation-required outcomes are terminal. Network, timeout, rate-limit, and temporary provider failures retry with bounded backoff and max-attempt behavior; stale processing locks are recoverable.
+The one-shot command claims pending `BREVO` jobs of type
+`EMAIL_MARKETING_PREFERENCE`, `PERSON_EMAIL_MIGRATION`, or `PERSON_PROFILE`.
+It calls the same synchronization services used by the manual commands, so
+consent, migration, profile, restrictive-state, identity, list, and
+minimal-profile rules are not duplicated in the worker. Successful, no-op,
+UNKNOWN, opted-out-without-contact, no-marketing-contact, and protected-provider
+outcomes complete successfully because retrying cannot improve them.
+Configuration, authentication, access, validation, API, identity-conflict, and
+reconciliation-required outcomes are terminal. Network, timeout, rate-limit,
+and temporary provider failures retry with bounded backoff and max-attempt
+behavior; stale processing locks are recoverable.
 
 Existing MAILCHIMP references and jobs are preserved and never reinterpreted as BREVO jobs. The existing Mailchimp worker remains a separately invoked rollback/reference path and processes only rows explicitly owned by `MAILCHIMP`; operators should not run it against historical pending rows unless Mailchimp rollback processing is intentional.
 

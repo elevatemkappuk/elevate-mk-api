@@ -8,9 +8,11 @@ from unittest.mock import Mock, patch
 import httpx
 from brevo import BadRequestError, UnauthorizedError
 from django.core.management import call_command
+from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase, TestCase, override_settings
 from rest_framework.test import APIClient
 
+from audit.models import AuditEvent
 from brevo_marketing.client import BrevoContact, BrevoMarketingClient
 from brevo_marketing.exceptions import (
     BrevoMarketingAuthenticationError,
@@ -21,9 +23,20 @@ from brevo_marketing.exceptions import (
     BrevoMarketingValidationError,
 )
 from brevo_marketing.services import inspect_brevo_marketing_configuration
-from brevo_marketing.jobs import BrevoJobProcessResult, process_brevo_sync_jobs, process_next_brevo_sync_job, run_brevo_sync_worker
+from brevo_marketing.jobs import (
+    BrevoJobProcessResult,
+    PERSON_EMAIL_MIGRATION_SYNC,
+    process_brevo_sync_jobs,
+    process_next_brevo_sync_job,
+    run_brevo_sync_worker,
+)
 from brevo_marketing.routing import get_active_marketing_sync_provider
-from brevo_marketing.sync import BrevoPersonSyncOutcome, synchronize_person_profile_to_brevo, synchronize_person_to_brevo
+from brevo_marketing.sync import (
+    BrevoPersonSyncOutcome,
+    synchronize_person_email_to_brevo,
+    synchronize_person_profile_to_brevo,
+    synchronize_person_to_brevo,
+)
 from external_references.models import ExternalPersonReference, ExternalPersonSyncJob
 from marketing_preferences.models import MarketingPreference, MarketingPreferenceHistory, MarketingWebhookReceipt
 from marketing_preferences.services import record_opt_in, record_opt_out
@@ -136,6 +149,41 @@ class FakeBrevoSyncClient:
 
     def update_contact(self, **kwargs):
         self.updated.append(kwargs)
+
+
+class FakeBrevoEmailMigrationClient:
+    def __init__(self, contact, target_contact=None, *, update_conflict=False):
+        self.contact = contact
+        self.target_contact = target_contact
+        self.update_conflict = update_conflict
+        self.updated = []
+
+    def get_contact_by_id(self, contact_id):
+        return self.contact if self.contact and self.contact.contact_id == int(contact_id) else None
+
+    def get_contact(self, email):
+        normalized = email.strip().casefold()
+        if self.contact and self.contact.email == normalized:
+            return self.contact
+        if self.target_contact and self.target_contact.email == normalized:
+            return self.target_contact
+        return None
+
+    def update_contact(self, **kwargs):
+        self.updated.append(kwargs)
+        if self.update_conflict:
+            raise BrevoMarketingValidationError("email already exists")
+        email = kwargs.get("attributes", {}).get("EMAIL")
+        if email:
+            self.contact = BrevoContact(
+                self.contact.contact_id,
+                email,
+                self.contact.attributes,
+                self.contact.list_ids,
+                self.contact.list_unsubscribed,
+                self.contact.email_blacklisted,
+                self.contact.sms_blacklisted,
+            )
 
 
 class BrevoPersonDatabaseSyncTests(TestCase):
@@ -346,6 +394,174 @@ class BrevoPersonDatabaseSyncTests(TestCase):
         self.assertEqual(result.outcome, BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED)
         self.assertFalse(client.updated)
 
+    def migration_job(self, person, previous_email="ava@example.com", requested_email="new@example.com"):
+        return ExternalPersonSyncJob.objects.create(
+            person=person,
+            provider="BREVO",
+            job_type=PERSON_EMAIL_MIGRATION_SYNC,
+            source_event_id=ExternalPersonSyncJob.objects.count() + 1000,
+            previous_email=previous_email,
+            requested_email=requested_email,
+        )
+
+    def migration_reference(self, person, contact_id=9):
+        return ExternalPersonReference.objects.create(
+            person=person,
+            provider="BREVO",
+            reference_type=ExternalPersonReference.ReferenceType.MARKETING_CONTACT,
+            external_id=str(contact_id),
+        )
+
+    def test_opted_in_email_migration_updates_same_contact_and_reference(self):
+        person = self.person()
+        record_opt_in(person=person)
+        reference = self.migration_reference(person)
+        person.primary_email = "new@example.com"
+        person.save(update_fields=["primary_email", "updated_at"])
+        job = self.migration_job(person)
+        client = FakeBrevoEmailMigrationClient(BrevoContact(9, "ava@example.com", {}, (), (), False, False))
+
+        result = synchronize_person_email_to_brevo(job=job, client=client)
+
+        self.assertEqual(result.outcome, BrevoPersonSyncOutcome.EMAIL_MIGRATION_UPDATED)
+        self.assertEqual(client.updated, [{"contact_id": 9, "attributes": {"EMAIL": "new@example.com"}}])
+        reference.refresh_from_db()
+        self.assertEqual(reference.external_id, "9")
+
+    def test_email_migration_rejects_target_owned_by_another_contact(self):
+        person = self.person()
+        record_opt_in(person=person)
+        self.migration_reference(person)
+        person.primary_email = "new@example.com"
+        person.save(update_fields=["primary_email", "updated_at"])
+        job = self.migration_job(person)
+        client = FakeBrevoEmailMigrationClient(
+            BrevoContact(9, "ava@example.com", {}, (), (), False, False),
+            BrevoContact(10, "new@example.com", {}, (), (), False, False),
+        )
+
+        result = synchronize_person_email_to_brevo(job=job, client=client)
+
+        self.assertEqual(result.outcome, BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED)
+        self.assertEqual(result.reason, "BREVO_TARGET_EMAIL_ALREADY_OWNED")
+        self.assertFalse(client.updated)
+
+    def test_email_migration_protects_restricted_provider_contact(self):
+        for contact_id, contact in enumerate((
+            BrevoContact(9, "ava@example.com", {}, (), (), True, False),
+            BrevoContact(10, "ava@example.com", {}, (), (2,), False, False),
+        ), start=9):
+            with self.subTest(contact=contact):
+                person = self.person(primary_email=f"new-{contact.email_blacklisted}-{bool(contact.list_unsubscribed)}@example.com")
+                record_opt_in(person=person)
+                self.migration_reference(person, contact_id=contact_id)
+                requested_email = person.primary_email
+                job = self.migration_job(person, requested_email=requested_email)
+                client = FakeBrevoEmailMigrationClient(contact)
+
+                result = synchronize_person_email_to_brevo(job=job, client=client)
+
+                self.assertEqual(result.outcome, BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED)
+                self.assertEqual(result.reason, "BREVO_CONTACT_RESTRICTED")
+                self.assertFalse(client.updated)
+
+    def test_email_migration_rejects_opted_out_and_unknown_consent(self):
+        for contact_id, state in enumerate((MarketingPreference.State.OPTED_OUT, MarketingPreference.State.UNKNOWN), start=9):
+            with self.subTest(state=state):
+                person = self.person(primary_email=f"{state.lower()}@example.com")
+                if state == MarketingPreference.State.OPTED_OUT:
+                    record_opt_out(person=person)
+                self.migration_reference(person, contact_id=contact_id)
+                job = self.migration_job(person, requested_email=person.primary_email)
+                client = FakeBrevoEmailMigrationClient(BrevoContact(contact_id, "ava@example.com", {}, (), (), False, False))
+
+                result = synchronize_person_email_to_brevo(job=job, client=client)
+
+                self.assertEqual(result.outcome, BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED)
+                self.assertFalse(client.updated)
+
+    def test_email_migration_requires_reference_and_existing_contact(self):
+        person = self.person(primary_email="new@example.com")
+        record_opt_in(person=person)
+        missing_reference_job = self.migration_job(person)
+        client = FakeBrevoEmailMigrationClient(BrevoContact(9, "ava@example.com", {}, (), (), False, False))
+
+        result = synchronize_person_email_to_brevo(job=missing_reference_job, client=client)
+
+        self.assertEqual(result.reason, "NO_ACTIVE_BREVO_REFERENCE")
+        self.migration_reference(person)
+        deleted_result = synchronize_person_email_to_brevo(job=self.migration_job(person), client=FakeBrevoEmailMigrationClient(None))
+        self.assertEqual(deleted_result.reason, "BREVO_CONTACT_NOT_FOUND_FOR_REFERENCE")
+
+    def test_email_migration_does_not_send_blank_email(self):
+        person = self.person(primary_email="")
+        record_opt_in(person=person)
+        self.migration_reference(person)
+        job = self.migration_job(person, requested_email="")
+        client = FakeBrevoEmailMigrationClient(BrevoContact(9, "ava@example.com", {}, (), (), False, False))
+
+        result = synchronize_person_email_to_brevo(job=job, client=client)
+
+        self.assertEqual(result.reason, "CRM_EMAIL_INVALID")
+        self.assertFalse(client.updated)
+
+    def test_stale_email_migration_is_superseded_and_latest_target_converges(self):
+        person = self.person(primary_email="c@example.com")
+        record_opt_in(person=person)
+        self.migration_reference(person)
+        AuditEvent.objects.create(
+            action=AuditEvent.Action.PERSON_UPDATED,
+            entity_type="Person",
+            entity_id=str(person.id),
+            changes={"primary_email": {"from": "ava@example.com", "to": "b@example.com"}},
+        )
+        AuditEvent.objects.create(
+            action=AuditEvent.Action.PERSON_UPDATED,
+            entity_type="Person",
+            entity_id=str(person.id),
+            changes={"primary_email": {"from": "b@example.com", "to": "c@example.com"}},
+        )
+        stale = self.migration_job(person, requested_email="b@example.com")
+        latest = self.migration_job(person, previous_email="b@example.com", requested_email="c@example.com")
+        client = FakeBrevoEmailMigrationClient(BrevoContact(9, "ava@example.com", {}, (), (), False, False))
+
+        stale_result = synchronize_person_email_to_brevo(job=stale, client=client)
+        latest_result = synchronize_person_email_to_brevo(job=latest, client=client)
+
+        self.assertEqual(stale_result.outcome, BrevoPersonSyncOutcome.EMAIL_MIGRATION_SUPERSEDED)
+        self.assertEqual(latest_result.outcome, BrevoPersonSyncOutcome.EMAIL_MIGRATION_UPDATED)
+        self.assertEqual(client.updated[-1]["attributes"], {"EMAIL": "c@example.com"})
+
+    def test_email_migration_retry_after_provider_acceptance_is_idempotent(self):
+        person = self.person(primary_email="new@example.com")
+        record_opt_in(person=person)
+        self.migration_reference(person)
+        job = self.migration_job(person)
+        client = FakeBrevoEmailMigrationClient(BrevoContact(9, "new@example.com", {}, (), (), False, False))
+
+        result = synchronize_person_email_to_brevo(job=job, client=client)
+
+        self.assertEqual(result.outcome, BrevoPersonSyncOutcome.EMAIL_MIGRATION_ALREADY_SYNCHRONIZED)
+        self.assertFalse(client.updated)
+
+    def test_email_migration_provider_collision_is_identity_conflict(self):
+        person = self.person(primary_email="new@example.com")
+        record_opt_in(person=person)
+        self.migration_reference(person)
+        job = self.migration_job(person)
+        client = FakeBrevoEmailMigrationClient(BrevoContact(9, "ava@example.com", {}, (), (), False, False), update_conflict=True)
+
+        with self.assertRaises(BrevoMarketingIdentityConflictError):
+            synchronize_person_email_to_brevo(job=job, client=client)
+
+    def test_email_migration_snapshots_are_immutable(self):
+        person = self.person(primary_email="new@example.com")
+        job = self.migration_job(person)
+        job.requested_email = "another@example.com"
+
+        with self.assertRaises(ValidationError):
+            job.save(update_fields=["requested_email", "updated_at"])
+
 
 class BrevoSyncJobTests(TestCase):
     def setUp(self):
@@ -382,6 +598,32 @@ class BrevoSyncJobTests(TestCase):
         self.assertEqual(result.status, ExternalPersonSyncJob.Status.SUCCEEDED)
         self.assertEqual(profile_job.status, ExternalPersonSyncJob.Status.SUCCEEDED)
         synchronize_profile.assert_called_once_with(person_id=self.person.id, client=synchronize_profile.call_args.kwargs["client"])
+
+    @patch("brevo_marketing.jobs.synchronize_person_email_to_brevo")
+    def test_worker_processes_person_email_migration_job(self, synchronize_email):
+        self.job.status = ExternalPersonSyncJob.Status.SUCCEEDED
+        self.job.save(update_fields=["status", "updated_at"])
+        migration_job = ExternalPersonSyncJob.objects.create(
+            person=self.person,
+            provider="BREVO",
+            job_type=PERSON_EMAIL_MIGRATION_SYNC,
+            source_event_id=999,
+            previous_email="ava@example.com",
+            requested_email="new@example.com",
+        )
+        synchronize_email.return_value = type(
+            "Result", (), {"outcome": BrevoPersonSyncOutcome.EMAIL_MIGRATION_UPDATED}
+        )()
+
+        result = process_next_brevo_sync_job(client=Mock())
+
+        migration_job.refresh_from_db()
+        self.assertEqual(result.status, ExternalPersonSyncJob.Status.SUCCEEDED)
+        self.assertEqual(migration_job.status, ExternalPersonSyncJob.Status.SUCCEEDED)
+        synchronize_email.assert_called_once_with(
+            job=migration_job,
+            client=synchronize_email.call_args.kwargs["client"],
+        )
 
     @patch("brevo_marketing.jobs.synchronize_person_to_brevo")
     def test_worker_retries_temporary_provider_failure(self, synchronize):

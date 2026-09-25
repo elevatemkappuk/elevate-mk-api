@@ -1115,6 +1115,53 @@ class PersonWriteLifecycleApiTests(TestCase):
 
         self.assertEqual(ExternalPersonSyncJob.objects.filter(person=person, job_type="PERSON_PROFILE").count(), 1)
 
+    def test_email_edit_enqueues_dedicated_migration_snapshot_without_profile_job(self):
+        person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")
+        self.authenticate(self.admin_user)
+
+        response = self.client.patch(
+            self.detail_url(person.id),
+            {"primary_email": "new@example.com"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        job = ExternalPersonSyncJob.objects.get(person=person)
+        self.assertEqual(job.provider, "BREVO")
+        self.assertEqual(job.job_type, "PERSON_EMAIL_MIGRATION")
+        self.assertEqual(job.previous_email, "amina@example.com")
+        self.assertEqual(job.requested_email, "new@example.com")
+        self.assertFalse(ExternalPersonSyncJob.objects.filter(person=person, job_type="PERSON_PROFILE").exists())
+
+    def test_combined_email_and_profile_edit_creates_separate_jobs(self):
+        person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")
+        self.authenticate(self.admin_user)
+
+        response = self.client.patch(
+            self.detail_url(person.id),
+            {"primary_email": "new@example.com", "first_name": "Sofia"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            set(ExternalPersonSyncJob.objects.filter(person=person).values_list("job_type", flat=True)),
+            {"PERSON_EMAIL_MIGRATION", "PERSON_PROFILE"},
+        )
+
+    def test_identical_email_edit_does_not_enqueue_email_migration(self):
+        person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")
+        self.authenticate(self.admin_user)
+
+        response = self.client.patch(
+            self.detail_url(person.id),
+            {"primary_email": "AMINA@example.com"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(ExternalPersonSyncJob.objects.filter(person=person, job_type="PERSON_EMAIL_MIGRATION").exists())
+
     def test_unrelated_or_identical_person_edit_does_not_enqueue_profile_job(self):
         person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")
         self.authenticate(self.admin_user)

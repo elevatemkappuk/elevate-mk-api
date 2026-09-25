@@ -84,6 +84,8 @@ class ExternalPersonSyncJob(models.Model):
     provider = models.CharField(max_length=100)
     job_type = models.CharField(max_length=100)
     source_event_id = models.PositiveBigIntegerField()
+    previous_email = models.EmailField(null=True, blank=True)
+    requested_email = models.EmailField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     available_at = models.DateTimeField(default=timezone.now)
     attempts = models.PositiveIntegerField(default=0)
@@ -111,6 +113,13 @@ class ExternalPersonSyncJob(models.Model):
     def save(self, *args, **kwargs):
         self.provider = self.provider.strip().upper()
         self.job_type = self.job_type.strip().upper()
+        if self.pk is not None:
+            snapshot = type(self).objects.filter(pk=self.pk).values("previous_email", "requested_email").first()
+            if snapshot and (
+                snapshot["previous_email"] != self.previous_email
+                or snapshot["requested_email"] != self.requested_email
+            ):
+                raise ValidationError("Sync job email snapshots are immutable.")
         super().save(*args, **kwargs)
 
     def __str__(self):
