@@ -60,6 +60,7 @@ INSTALLED_APPS = [
     'external_references',
     'mailchimp',
     'marketing_preferences',
+    'campaigns',
     'corsheaders',
     'rest_framework',
     'drf_spectacular',

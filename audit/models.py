@@ -59,6 +59,10 @@ class AuditEvent(models.Model):
         EXTERNAL_PERSON_REFERENCE_REVOKED = "EXTERNAL_PERSON_REFERENCE_REVOKED", "External person reference revoked"
         MARKETING_PREFERENCE_OPTED_IN = "MARKETING_PREFERENCE_OPTED_IN", "Marketing preference opted in"
         MARKETING_PREFERENCE_OPTED_OUT = "MARKETING_PREFERENCE_OPTED_OUT", "Marketing preference opted out"
+        CAMPAIGN_CREATED = "CAMPAIGN_CREATED", "Campaign created"
+        CAMPAIGN_PREPARATION_STARTED = "CAMPAIGN_PREPARATION_STARTED", "Campaign preparation started"
+        CAMPAIGN_RECIPIENT_SNAPSHOT_CREATED = "CAMPAIGN_RECIPIENT_SNAPSHOT_CREATED", "Campaign recipient snapshot created"
+        CAMPAIGN_PREPARATION_SNAPSHOT_READY = "CAMPAIGN_PREPARATION_SNAPSHOT_READY", "Campaign preparation snapshot ready"
 
     actor_user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
