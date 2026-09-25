@@ -20,6 +20,36 @@ from skills.models import PersonSkill, Skill
 from tags.models import PersonTag, Tag
 
 
+@override_settings(ROOT_URLCONF="config.urls")
+class PersonBrevoIntegrationApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.viewer = User.objects.create_user(email="brevo-viewer@example.com", password="testpass123")
+        StaffRoleAssignment.objects.assign_role(user=self.viewer, role=StaffRole.objects.get(code=StaffRole.CRM_VIEWER))
+        self.person = Person.objects.create(first_name="Read", last_name="Only", primary_email="read@example.com")
+        self.url = f"/api/v1/people/{self.person.id}/brevo-integration/"
+
+    def test_viewer_can_read_safe_not_connected_projection(self):
+        self.client.force_authenticate(self.viewer)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["provider"], "BREVO")
+        self.assertEqual(response.data["integration"]["status"], "NOT_CONNECTED")
+        self.assertEqual(response.data["marketing_preference"]["state"], "UNKNOWN")
+
+    def test_non_crm_user_is_forbidden(self):
+        user = User.objects.create_user(email="brevo-outsider@example.com", password="testpass123")
+        self.client.force_authenticate(user)
+        self.assertEqual(self.client.get(self.url).status_code, 403)
+
+    def test_technical_person_is_not_exposed(self):
+        technical = Person.objects.create(
+            first_name="Technical", last_name="Only", record_type=Person.RecordType.TECHNICAL,
+        )
+        self.client.force_authenticate(self.viewer)
+        self.assertEqual(self.client.get(f"/api/v1/people/{technical.id}/brevo-integration/").status_code, 404)
+
+
 class PersonModelTests(TestCase):
     def test_person_can_exist_without_user(self):
         person = Person.objects.create(first_name="Taylor", last_name="Jordan")

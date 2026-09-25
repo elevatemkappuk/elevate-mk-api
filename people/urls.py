@@ -7,6 +7,7 @@ from people.views import (
     PersonDetailView,
     PersonMemberCreateView,
     PersonOverviewDetailView,
+    PersonBrevoIntegrationView,
     PersonRestoreView,
 )
 
@@ -18,5 +19,6 @@ urlpatterns = [
     path("people/<int:person_id>/restore/", PersonRestoreView.as_view(), name="people-restore"),
     path("people/<int:person_id>/", PersonDetailView.as_view(), name="people-detail"),
     path("people/<int:person_id>/overview/", PersonOverviewDetailView.as_view(), name="people-overview-detail"),
+    path("people/<int:person_id>/brevo-integration/", PersonBrevoIntegrationView.as_view(), name="people-brevo-integration"),
     path("people/<int:person_id>/audit-history/", PersonAuditHistoryView.as_view(), name="people-audit-history"),
 ]

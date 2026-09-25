@@ -14,6 +14,7 @@ from audit.models import AuditEvent
 from audit.policies import build_person_audit_scope_q, filter_person_audit_visibility_for_user
 from audit.services import record_audit_event
 from brevo_marketing.jobs import PERSON_EMAIL_MIGRATION_SYNC, PERSON_PROFILE_SYNC
+from brevo_marketing.inspection import inspect_person_brevo_integration
 from audit.serializers import (
     PaginatedPersonAuditHistorySerializer,
     PersonAuditHistoryEventSerializer,
@@ -31,6 +32,7 @@ from people.serializers import (
     PersonListSerializer,
     PersonMemberCreateSerializer,
     PersonOverviewSerializer,
+    PersonBrevoIntegrationSerializer,
     PersonUpdateSerializer,
 )
 from people.services import evaluate_create_new_identity, find_business_duplicate_people
@@ -38,7 +40,7 @@ from external_references.services import enqueue_coalesced_person_sync_job, enqu
 from people.querying import PeopleDirectoryQuery
 from memberships.models import Membership
 from staff_access.models import StaffRole
-from staff_access.permissions import HasActiveStaffRoleCodes
+from staff_access.permissions import HasActiveStaffRoleCodes, user_has_any_active_staff_role
 from skills.models import PersonSkill
 from tags.models import PersonTag
 
@@ -691,6 +693,33 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
             Prefetch("person_interests", queryset=active_person_interests, to_attr="active_person_interests"),
             Prefetch("person_tags", queryset=active_person_tags, to_attr="active_person_tags"),
         )
+
+
+class PersonBrevoIntegrationView(BusinessPersonQuerysetMixin, generics.GenericAPIView):
+    permission_classes = [IsAuthenticated, HasPeopleAccess]
+    serializer_class = PersonBrevoIntegrationSerializer
+
+    @extend_schema(
+        operation_id="person_brevo_integration_retrieve",
+        summary="Inspect a Person's Brevo integration",
+        description=(
+            "Returns a safe, read-only Brevo integration projection. It never synchronizes a contact, changes consent, "
+            "changes a reference, changes list membership, or creates provider work."
+        ),
+        responses={200: PersonBrevoIntegrationSerializer},
+        tags=["People", "Brevo"],
+    )
+    def get(self, request, *args, **kwargs):
+        person = self.get_business_person_or_404()
+        inspection = inspect_person_brevo_integration(
+            person=person,
+            can_reconcile=user_has_any_active_staff_role(request.user, (StaffRole.CRM_ADMIN,)),
+        )
+        return Response(self.get_serializer({
+            "provider": "BREVO",
+            "marketing_preference": inspection.marketing_preference,
+            "integration": inspection.integration,
+        }).data)
 
 
 class PersonAuditHistoryPagination(PageNumberPagination):

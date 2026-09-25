@@ -24,6 +24,7 @@ from brevo_marketing.exceptions import (
     BrevoMarketingValidationError,
 )
 from brevo_marketing.services import inspect_brevo_marketing_configuration
+from brevo_marketing.inspection import inspect_person_brevo_integration
 from brevo_marketing.jobs import (
     BrevoJobProcessResult,
     PERSON_EMAIL_MIGRATION_SYNC,
@@ -42,6 +43,132 @@ from external_references.models import ExternalPersonReference, ExternalPersonSy
 from marketing_preferences.models import MarketingPreference, MarketingPreferenceHistory, MarketingWebhookReceipt
 from marketing_preferences.services import record_opt_in, record_opt_out
 from people.models import Person
+
+
+class PersonBrevoInspectionTests(TestCase):
+    def setUp(self):
+        self.person = Person.objects.create(
+            first_name="Inspection",
+            last_name="Subject",
+            primary_email="inspection@example.com",
+        )
+
+    def reference(self, external_id="42"):
+        return ExternalPersonReference.objects.create(
+            person=self.person,
+            provider="BREVO",
+            reference_type=ExternalPersonReference.ReferenceType.MARKETING_CONTACT,
+            external_id=external_id,
+        )
+
+    def contact(self, **kwargs):
+        values = {
+            "contact_id": 42,
+            "email": "inspection@example.com",
+            "attributes": {},
+            "list_ids": (2,),
+            "list_unsubscribed": (),
+            "email_blacklisted": False,
+            "sms_blacklisted": False,
+        }
+        values.update(kwargs)
+        return BrevoContact(**values)
+
+    def client(self, contact):
+        client = Mock()
+        client.get_contact_by_id.return_value = contact
+        client.get_marketing_list_id.return_value = 2
+        return client
+
+    def test_no_active_reference_is_not_connected_without_provider_call(self):
+        client = self.client(None)
+        result = inspect_person_brevo_integration(person=self.person, client=client)
+
+        self.assertEqual(result.integration.status, "NOT_CONNECTED")
+        client.get_contact_by_id.assert_not_called()
+
+    def test_missing_contact_is_admin_reconcilable(self):
+        result = inspect_person_brevo_integration(person=self.person, can_reconcile=True, client=self.client(None))
+        self.assertEqual(result.integration.status, "NOT_CONNECTED")
+
+        self.reference()
+        result = inspect_person_brevo_integration(person=self.person, can_reconcile=True, client=self.client(None))
+        self.assertEqual(result.integration.status, "CONTACT_MISSING")
+        self.assertTrue(result.integration.can_reconcile)
+        self.assertEqual(result.integration.reason_code, "BREVO_CONTACT_NOT_FOUND_FOR_EXISTING_REFERENCE")
+
+    def test_missing_contact_is_not_reconcilable_for_non_admin(self):
+        self.reference()
+        result = inspect_person_brevo_integration(person=self.person, client=self.client(None))
+        self.assertEqual(result.integration.status, "CONTACT_MISSING")
+        self.assertFalse(result.integration.can_reconcile)
+
+    def test_connected_contact_requires_matching_identity(self):
+        self.reference()
+        result = inspect_person_brevo_integration(person=self.person, client=self.client(self.contact()))
+        self.assertEqual(result.integration.status, "CONNECTED")
+        self.assertIsNone(result.integration.reason_code)
+
+    def test_restricted_email_contact_is_read_only(self):
+        self.reference()
+        result = inspect_person_brevo_integration(
+            person=self.person,
+            client=self.client(self.contact(email_blacklisted=True)),
+        )
+        self.assertEqual(result.integration.status, "RESTRICTED")
+        self.assertFalse(result.integration.can_reconcile)
+        self.assertIn("will not automatically unblock", result.integration.explanation)
+
+    def test_restricted_list_contact_is_read_only(self):
+        self.reference()
+        result = inspect_person_brevo_integration(
+            person=self.person,
+            client=self.client(self.contact(list_unsubscribed=(2,))),
+        )
+        self.assertEqual(result.integration.status, "RESTRICTED")
+
+    def test_email_mismatch_is_identity_conflict(self):
+        self.reference()
+        result = inspect_person_brevo_integration(
+            person=self.person,
+            client=self.client(self.contact(email="other@example.com")),
+        )
+        self.assertEqual(result.integration.status, "IDENTITY_CONFLICT")
+        self.assertEqual(result.integration.reason_code, "BREVO_CONTACT_IDENTITY_CONFLICT")
+
+    def test_contact_linked_to_another_person_is_identity_conflict(self):
+        self.reference()
+        other = Person.objects.create(first_name="Other", last_name="Person", primary_email="other@example.com")
+        ExternalPersonReference.objects.create(
+            person=other,
+            provider="BREVO",
+            reference_type=ExternalPersonReference.ReferenceType.MARKETING_CONTACT,
+            external_id="42",
+        )
+        result = inspect_person_brevo_integration(person=self.person, client=self.client(self.contact()))
+        self.assertEqual(result.integration.status, "IDENTITY_CONFLICT")
+
+    def test_missing_current_email_is_identity_conflict(self):
+        self.reference()
+        self.person.primary_email = ""
+        self.person.save(update_fields=["primary_email", "updated_at"])
+        result = inspect_person_brevo_integration(person=self.person, client=self.client(self.contact()))
+        self.assertEqual(result.integration.status, "IDENTITY_CONFLICT")
+
+    def test_provider_error_is_safe_unknown(self):
+        self.reference()
+        client = self.client(None)
+        from brevo_marketing.exceptions import BrevoMarketingTemporaryError
+        client.get_contact_by_id.side_effect = BrevoMarketingTemporaryError("secret raw error")
+        result = inspect_person_brevo_integration(person=self.person, client=client)
+        self.assertEqual(result.integration.status, "UNKNOWN")
+        self.assertNotIn("secret", result.integration.explanation)
+
+    def test_inspection_does_not_create_or_modify_references(self):
+        self.reference()
+        before = list(ExternalPersonReference.objects.values_list("id", "status", "external_id"))
+        inspect_person_brevo_integration(person=self.person, client=self.client(self.contact()))
+        self.assertEqual(before, list(ExternalPersonReference.objects.values_list("id", "status", "external_id")))
 
 
 class BrevoMarketingClientTests(SimpleTestCase):

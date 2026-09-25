@@ -206,6 +206,29 @@ List ID: 4
 This documentation intentionally excludes API keys, webhook passwords,
 Authorization headers, and other secrets.
 
+### Read-only Person integration inspection
+
+CRM staff with an active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` role may
+inspect one Person's safe Brevo integration projection at:
+
+```text
+GET /api/v1/people/{person_id}/brevo-integration/
+```
+
+The response includes the effective EMAIL marketing preference and a bounded
+integration state: `CONNECTED`, `RESTRICTED`, `CONTACT_MISSING`,
+`IDENTITY_CONFLICT`, `NOT_CONNECTED`, or `UNKNOWN`. It intentionally omits
+Brevo contact IDs, external reference IDs, credentials, raw provider errors,
+and provider payloads. `CONTACT_MISSING` is marked `can_reconcile` only for a
+CRM administrator; this is an indication for a future explicit repair flow,
+not an automatic repair action. Restrictive Brevo state remains protected:
+Elevate does not automatically unblock or resubscribe a contact.
+
+This endpoint is read-only. It does not synchronize contacts, change CRM
+consent, alter references or list membership, enqueue jobs, or change campaign
+state. A provider or transport failure is represented as a safe `UNKNOWN`
+inspection result.
+
 `BREVO_API_KEY` is an API credential and is never printed, persisted in
 references, or included in operational output. Webhook Basic credentials are
 separate inbound credentials configured both in the Elevate web environment

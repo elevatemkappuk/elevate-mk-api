@@ -344,3 +344,28 @@ class PersonOverviewSerializer(serializers.Serializer):
                 is_active=True,
             ).order_by("display_order", "name", "id")
         )
+
+
+class BrevoIntegrationStateSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=("CONNECTED", "RESTRICTED", "CONTACT_MISSING", "IDENTITY_CONFLICT", "NOT_CONNECTED", "UNKNOWN"))
+    reason_code = serializers.CharField(allow_null=True)
+    title = serializers.CharField()
+    explanation = serializers.CharField()
+    can_reconcile = serializers.BooleanField()
+
+
+class PersonBrevoIntegrationSerializer(serializers.Serializer):
+    provider = serializers.CharField()
+    marketing_preference = serializers.SerializerMethodField()
+    integration = BrevoIntegrationStateSerializer()
+
+    @extend_schema_field(MarketingPreferenceSerializer)
+    def get_marketing_preference(self, instance):
+        preference = instance["marketing_preference"]
+        return {
+            "channel": preference.channel,
+            "state": preference.state,
+            "source": preference.source,
+            "recorded_at": preference.recorded_at,
+            "recorded_by_id": preference.actor_user_id,
+        }
