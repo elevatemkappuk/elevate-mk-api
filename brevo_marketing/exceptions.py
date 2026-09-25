@@ -30,6 +30,14 @@ class BrevoMarketingValidationError(BrevoMarketingAPIError):
     """Brevo rejected a request because its payload failed validation."""
 
 
+def is_invalid_phone_error(error):
+    """Identify only Brevo's explicit invalid-phone validation response."""
+    if not isinstance(error, BrevoMarketingValidationError):
+        return False
+    message = " ".join(str(error).casefold().split())
+    return any(phrase in message for phrase in ("invalid phone number", "invalid phone", "invalid mobile"))
+
+
 class BrevoMarketingRateLimitError(BrevoMarketingTemporaryError):
     """Brevo rate-limited the request."""
 

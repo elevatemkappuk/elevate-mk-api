@@ -187,6 +187,30 @@ class CampaignFoundationApiTests(TestCase):
         client.add_contact_to_list.assert_called_once_with(list_id=55, contact_id=123)
 
     @patch("campaigns.services.synchronize_person_to_brevo")
+    def test_provider_retry_reuses_dedicated_list_and_added_recipient_after_partial_failure(self, sync):
+        campaign = self._snapshot_ready_campaign()
+        preparation = campaign.current_preparation
+        preparation.brevo_list_id = 55
+        preparation.status = "PROVIDER_FAILED"
+        preparation.save(update_fields=["brevo_list_id", "status", "updated_at"])
+        campaign.status = Campaign.Status.PROVIDER_FAILED
+        campaign.save(update_fields=["status", "updated_at"])
+        snapshot = preparation.recipient_snapshots.get(person=self.included)
+        snapshot.brevo_contact_id = 123
+        snapshot.provider_outcome = "ADDED_TO_CAMPAIGN_LIST"
+        snapshot.save(update_fields=["brevo_contact_id", "provider_outcome"])
+        client = self._provider_client()
+
+        result = prepare_campaign_provider(campaign_id=campaign.id, actor_user=self.admin, client=client, sleep_fn=lambda _seconds: None)
+
+        self.assertEqual(result.status, Campaign.Status.PREPARED)
+        client.create_campaign_list.assert_not_called()
+        client.add_contact_to_list.assert_not_called()
+        client.create_email_campaign_draft.assert_called_once()
+        self.assertEqual(client.create_email_campaign_draft.call_args.kwargs["list_id"], 55)
+        sync.assert_not_called()
+
+    @patch("campaigns.services.synchronize_person_to_brevo")
     def test_provider_preparation_reuses_existing_draft_without_creating_another(self, sync):
         campaign = self._snapshot_ready_campaign()
         sync.return_value = BrevoPersonSyncResult(person_id=self.included.id, outcome=BrevoPersonSyncOutcome.ALREADY_SYNCHRONIZED, contact_id=123)

@@ -256,6 +256,15 @@ profile synchronization so stale provider SMS data is cleared. Unsafe mobile
 values are omitted without failing a name/profile update. Mobile presence does
 not imply SMS consent or EMAIL marketing consent.
 
+Mobile/SMS is optional profile data. If Brevo specifically rejects a non-empty
+`SMS` value as an invalid phone during contact creation or an existing-contact
+profile update, synchronization retries that same operation once without
+`SMS`, preserving the email identity and other approved attributes. The CRM
+mobile value and CRM marketing consent are never changed by this fallback. Other
+validation, authentication, access, rate-limit, identity, and provider errors
+do not trigger the fallback. Country-aware E.164 normalization remains a
+separate future TODO.
+
 Full country-aware E.164 normalization is not implemented. The future TODO is
 to normalize known-country numbers safely before synchronization; the system
 must not convert every leading `0` to `+44` because Elevate may contain people
@@ -439,7 +448,10 @@ clear stale provider data. A safe international mobile is sent as `SMS`;
 unsafe mobile is omitted and returns the safe reason
 `MOBILE_OMITTED_UNSAFE_FORMAT`. Profile synchronization never changes
 MarketingPreference, consent, list membership, blocklisting, or list-unsubscribe
-state. Successful updates use `UPDATED_PERSON_PROFILE`.
+state. If Brevo rejects the optional non-empty `SMS` value as an invalid phone,
+the update is retried once without `SMS`; an intentionally empty `SMS` value
+still goes through unchanged to clear stale provider data. Successful updates
+use `UPDATED_PERSON_PROFILE`.
 
 ## 15. Email identity changes and controlled migration
 
