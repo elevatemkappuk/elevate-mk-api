@@ -113,7 +113,7 @@ class BrevoMarketingClientTests(SimpleTestCase):
 
         campaign_list = client.create_campaign_list(name="Elevate Campaign 1 | Update | Prep 1")
         client.add_contact_to_list(list_id=7, contact_id=123)
-        campaign = client.create_email_campaign_draft(name="Elevate Campaign 1 | Update | Prep 1", template_id="16", list_id=7)
+        campaign = client.create_email_campaign_draft(name="Elevate Campaign 1 | Update | Prep 1", subject="Campaign V1 Controlled Test", template_id="16", list_id=7)
 
         self.assertEqual(campaign_list.list_id, 7)
         self.assertEqual(campaign.campaign_id, 42)
@@ -121,8 +121,11 @@ class BrevoMarketingClientTests(SimpleTestCase):
         request = sdk.contacts.add_contact_to_list.call_args.kwargs["request"]
         self.assertEqual(request.ids, [123])
         request = sdk.email_campaigns.create_email_campaign.call_args.kwargs
+        self.assertEqual(request["subject"], "Campaign V1 Controlled Test")
         self.assertEqual(request["template_id"], 16)
         self.assertEqual(request["recipients"].list_ids, [7])
+        self.assertNotIn("scheduled_at", request)
+        self.assertNotIn("send_at_best_time", request)
 
     @override_settings(BREVO_SENDER_EMAIL="sender@example.com", BREVO_SENDER_NAME="Elevate MK", BREVO_MARKETING_STARTER_TEMPLATE_ID="16")
     def test_campaign_draft_creation_without_campaign_folder_omits_folder(self):
@@ -130,12 +133,22 @@ class BrevoMarketingClientTests(SimpleTestCase):
         sdk.email_campaigns.create_email_campaign.return_value = SimpleNamespace(id=42)
         client = BrevoMarketingClient(api_key="secret", campaign_folder_id="", sdk_factory=Mock(return_value=sdk))
 
-        campaign = client.create_email_campaign_draft(name="Elevate Campaign 1 | Update | Prep 1", template_id="16", list_id=7)
+        campaign = client.create_email_campaign_draft(name="Elevate Campaign 1 | Update | Prep 1", subject="Campaign V1 Controlled Test", template_id="16", list_id=7)
 
         self.assertEqual(campaign.campaign_id, 42)
         request = sdk.email_campaigns.create_email_campaign.call_args.kwargs
         self.assertNotIn("folder_id", request)
         self.assertNotIn("folderId", request)
+        self.assertEqual(request["subject"], "Campaign V1 Controlled Test")
+
+    def test_campaign_draft_rejects_blank_subject(self):
+        sdk = Mock()
+        client = BrevoMarketingClient(api_key="secret", sdk_factory=Mock(return_value=sdk))
+
+        with self.assertRaises(BrevoMarketingConfigurationError):
+            client.create_email_campaign_draft(name="Campaign", subject="  ", template_id="16", list_id=7)
+
+        sdk.email_campaigns.create_email_campaign.assert_not_called()
 
     def test_blank_campaign_folder_uses_the_configured_marketing_lists_actual_folder_for_list_creation(self):
         sdk = Mock()

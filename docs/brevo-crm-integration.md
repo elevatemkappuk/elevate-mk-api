@@ -703,7 +703,11 @@ reuses the established contact identity/synchronization path, creates a
 dedicated Brevo execution list, and creates a draft using the configured
 starter template. The broad marketing list is not the campaign recipient
 target. Elevate owns audience, consent, recipient evidence, and preparation;
-Brevo owns content editing, test sends, scheduling, sending, and delivery.
+Brevo owns content editing, test sends, scheduling, sending, and delivery. The
+draft request includes a deterministic, provider-required starter subject
+derived from the Elevate campaign name; it is an editable placeholder/default,
+not a new Elevate content field. The final subject and email content remain
+owned and editable in Brevo.
 Frontend campaign workflow, post-prepared opt-out removal, automatic list
 cleanup, saved audiences, tags, journeys, and background campaign automation
 remain unimplemented.

@@ -162,6 +162,8 @@ class CampaignFoundationApiTests(TestCase):
         self.assertNotEqual(client.add_contact_to_list.call_args.kwargs["list_id"], 2)
         client.create_email_campaign_draft.assert_called_once()
         self.assertEqual(client.create_email_campaign_draft.call_args.kwargs["list_id"], 55)
+        self.assertEqual(client.create_email_campaign_draft.call_args.kwargs["subject"], campaign.name)
+        self.assertEqual(client.create_email_campaign_draft.call_args.kwargs["template_id"], "16")
         self.assertEqual(preparation.recipient_snapshots.get(person=self.included).provider_outcome, "ADDED_TO_CAMPAIGN_LIST")
 
     @patch("campaigns.services.synchronize_person_to_brevo")
@@ -183,6 +185,20 @@ class CampaignFoundationApiTests(TestCase):
         client.create_campaign_list.assert_not_called()
         sync.assert_not_called()
         client.add_contact_to_list.assert_called_once_with(list_id=55, contact_id=123)
+
+    @patch("campaigns.services.synchronize_person_to_brevo")
+    def test_provider_preparation_reuses_existing_draft_without_creating_another(self, sync):
+        campaign = self._snapshot_ready_campaign()
+        sync.return_value = BrevoPersonSyncResult(person_id=self.included.id, outcome=BrevoPersonSyncOutcome.ALREADY_SYNCHRONIZED, contact_id=123)
+        client = self._provider_client()
+        client.find_draft_campaign_by_name.return_value = SimpleNamespace(campaign_id=88, status="draft")
+
+        result = prepare_campaign_provider(campaign_id=campaign.id, actor_user=self.admin, client=client, sleep_fn=lambda _seconds: None)
+
+        self.assertEqual(result.status, Campaign.Status.PREPARED)
+        self.assertEqual(result.current_preparation.brevo_campaign_id, 88)
+        client.create_email_campaign_draft.assert_not_called()
+        client.create_campaign_list.assert_called_once()
 
     @patch("campaigns.services.synchronize_person_to_brevo")
     def test_propagation_delay_retries_campaign_creation_and_unrelated_provider_failure_does_not_loop(self, sync):

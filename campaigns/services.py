@@ -255,7 +255,12 @@ def prepare_campaign_provider(*, campaign_id, actor_user=None, client=None, slee
             if campaign_draft is not None:
                 break
             try:
-                campaign_draft = client.create_email_campaign_draft(name=campaign_name, template_id=settings.BREVO_MARKETING_STARTER_TEMPLATE_ID, list_id=preparation.brevo_list_id)
+                campaign_draft = client.create_email_campaign_draft(
+                    name=campaign_name,
+                    subject=campaign.name,
+                    template_id=settings.BREVO_MARKETING_STARTER_TEMPLATE_ID,
+                    list_id=preparation.brevo_list_id,
+                )
                 break
             except BrevoMarketingPropagationDelay:
                 if index == len(backoff_seconds) - 1:

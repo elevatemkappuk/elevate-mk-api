@@ -227,7 +227,7 @@ class BrevoMarketingClient:
                 return None
             offset += len(items)
 
-    def create_email_campaign_draft(self, *, name, template_id, list_id):
+    def create_email_campaign_draft(self, *, name, subject, template_id, list_id):
         try:
             template_id = int(template_id)
         except (TypeError, ValueError) as error:
@@ -244,8 +244,12 @@ class BrevoMarketingClient:
         )
         if not sender.email:
             raise BrevoMarketingConfigurationError("Brevo campaign preparation requires BREVO_SENDER_EMAIL.")
+        subject = " ".join(str(subject or "").split())
+        if not subject:
+            raise BrevoMarketingConfigurationError("Brevo campaign preparation requires a non-empty draft subject.")
         response = self._call(lambda: self._client.email_campaigns.create_email_campaign(
             name=name,
+            subject=subject,
             sender=sender,
             recipients=CreateEmailCampaignRequestRecipients(listIds=[int(list_id)]),
             template_id=template_id,
