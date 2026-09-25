@@ -59,6 +59,30 @@ The staging test also verified that a Person first-name change updates the
 same Brevo contact through a `PERSON_PROFILE` job. The provider-originated
 unsubscribe retained `source=BREVO` and created no outbound echo job.
 
+Staging also proved the controlled primary-email migration path for an existing
+Brevo contact:
+
+```text
+CRM email A -> CRM email B
+    -> PERSON_EMAIL_MIGRATION snapshot job
+    -> Brevo lookup by stable numeric contact ID
+    -> Brevo email B on the same contact/reference
+```
+
+The migration is only automatic for an active BUSINESS Person with current
+EMAIL `OPTED_IN` consent, a known active reference, an unrestricted provider
+contact, and an unclaimed target email. The contact is re-read after the
+update, and the existing `ExternalPersonReference` remains linked to the same
+Brevo contact ID. A retry after provider acceptance is idempotent.
+
+Restricted contacts are not migrated. If Brevo reports the contact as
+email-blocklisted or unsubscribed from the configured list, the job completes
+as `RECONCILIATION_REQUIRED` without changing the email, clearing the provider
+restriction, resubscribing the contact, or moving the reference. The same
+reconciliation outcome applies to missing/ambiguous identity, target-email
+collisions, invalid or cleared CRM email, archived/non-BUSINESS People, and
+`UNKNOWN` or `OPTED_OUT` CRM consent.
+
 This is a staging verification statement, not a claim that Campaign V1,
 bulk campaign workflows, or automated journeys are implemented.
 
@@ -635,6 +659,8 @@ The implemented paths cover the following behaviors:
 - webhook unsubscribe recording CRM `OPTED_OUT` with source `BREVO`;
 - durable webhook receipt/replay protection;
 - no outbound Brevo echo job from a provider-originated unsubscribe;
+- controlled primary-email migration on the same stable Brevo contact ID;
+- restricted email-migration reconciliation without provider-state mutation;
 - profile surname/name updates through `PERSON_PROFILE`;
 - safe international mobile mapping to `SMS`;
 - blank mobile clearing through an empty `SMS` attribute;

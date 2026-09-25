@@ -50,6 +50,13 @@ clears provider restrictions, or moves a reference. Brevo documents that
 updating a blocklisted contact's email can remove the blocklist and resubscribe
 it, so restricted contacts are explicitly protected.
 
+This controlled migration path has been proven in staging for an existing
+contact: CRM email A changed to B, the worker updated Brevo by numeric contact
+ID, and the existing `ExternalPersonReference` remained attached to that same
+contact. A retry converges as an already-synchronized result. Restricted
+contacts deliberately take the reconciliation path and are not changed or
+resubscribed.
+
 ## Automatic Brevo preference jobs
 
 `python manage.py process_brevo_sync_jobs --watch` runs the durable BREVO preference queue continuously until SIGINT or SIGTERM. It polls with `BREVO_SYNC_WORKER_POLL_SECONDS` (default `3` seconds) and caps each batch with `BREVO_SYNC_WORKER_BATCH_SIZE` (default `20`, maximum `100`). It uses the same synchronization service as the one-shot command, so consent, provider-state protection, retries, and terminal failure classification are not duplicated. CRM preference requests enqueue durable work and do not wait for Brevo network calls.
