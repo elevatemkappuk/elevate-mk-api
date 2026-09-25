@@ -1,4 +1,5 @@
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+from types import SimpleNamespace
 
 from django.test import TestCase
 from rest_framework.test import APIClient
@@ -10,6 +11,9 @@ from staff_access.models import StaffRole, StaffRoleAssignment
 from accounts.models import User
 
 from .models import Campaign, CampaignRecipientSnapshot
+from .services import prepare_campaign_provider
+from brevo_marketing.exceptions import BrevoMarketingPropagationDelay
+from brevo_marketing.sync import BrevoPersonSyncOutcome, BrevoPersonSyncResult
 
 
 class CampaignFoundationApiTests(TestCase):
@@ -111,3 +115,92 @@ class CampaignFoundationApiTests(TestCase):
         self.authenticate(self.viewer)
         self.assertEqual(self.client.get(f"{self.create_url}{response.data['id']}/").status_code, 200)
         self.assertEqual(self.client.get(self.create_url).status_code, 200)
+
+    def _snapshot_ready_campaign(self):
+        response = self.create_campaign()
+        self.authenticate(self.admin)
+        self.assertEqual(self.client.post(f"{self.create_url}{response.data['id']}/prepare/", {}, format="json").status_code, 200)
+        return Campaign.objects.get(pk=response.data["id"])
+
+    def _provider_client(self):
+        client = Mock()
+        client.create_campaign_list.return_value = SimpleNamespace(list_id=55)
+        client.find_draft_campaign_by_name.return_value = None
+        client.create_email_campaign_draft.return_value = SimpleNamespace(campaign_id=77)
+        return client
+
+    @patch("campaigns.services.synchronize_person_to_brevo")
+    def test_provider_preparation_rechecks_consent_and_does_not_add_post_snapshot_opt_out(self, sync):
+        campaign = self._snapshot_ready_campaign()
+        preference = MarketingPreference.objects.get(person=self.included)
+        preference.state = MarketingPreference.State.OPTED_OUT
+        preference.save(update_fields=["state", "updated_at"])
+        client = self._provider_client()
+        result = prepare_campaign_provider(campaign_id=campaign.id, actor_user=self.admin, client=client, sleep_fn=lambda _seconds: None)
+        result.refresh_from_db()
+        self.assertEqual(result.status, Campaign.Status.NO_READY_RECIPIENTS)
+        self.assertEqual(result.current_preparation.status, "NO_READY_RECIPIENTS")
+        self.assertFalse(client.create_campaign_list.called)
+        self.assertFalse(sync.called)
+        snapshot = result.current_preparation.recipient_snapshots.get(person=self.included)
+        self.assertEqual(snapshot.decision, CampaignRecipientSnapshot.Decision.INCLUDED)
+        self.assertEqual(snapshot.provider_outcome, "SKIPPED_CURRENT_CONSENT")
+
+    @patch("campaigns.services.synchronize_person_to_brevo")
+    def test_provider_preparation_uses_dedicated_list_and_creates_prepared_draft(self, sync):
+        campaign = self._snapshot_ready_campaign()
+        sync.return_value = BrevoPersonSyncResult(person_id=self.included.id, outcome=BrevoPersonSyncOutcome.ALREADY_SYNCHRONIZED, contact_id=123)
+        client = self._provider_client()
+        result = prepare_campaign_provider(campaign_id=campaign.id, actor_user=self.admin, client=client, sleep_fn=lambda _seconds: None)
+        result.refresh_from_db()
+        preparation = result.current_preparation
+        self.assertEqual(result.status, Campaign.Status.PREPARED)
+        self.assertEqual(preparation.status, "PREPARED")
+        self.assertEqual(preparation.brevo_list_id, 55)
+        self.assertEqual(preparation.brevo_campaign_id, 77)
+        client.add_contact_to_list.assert_called_once_with(list_id=55, contact_id=123)
+        self.assertNotEqual(client.add_contact_to_list.call_args.kwargs["list_id"], 2)
+        client.create_email_campaign_draft.assert_called_once()
+        self.assertEqual(client.create_email_campaign_draft.call_args.kwargs["list_id"], 55)
+        self.assertEqual(preparation.recipient_snapshots.get(person=self.included).provider_outcome, "ADDED_TO_CAMPAIGN_LIST")
+
+    @patch("campaigns.services.synchronize_person_to_brevo")
+    def test_provider_retry_reuses_list_and_successful_contact(self, sync):
+        campaign = self._snapshot_ready_campaign()
+        preparation = campaign.current_preparation
+        preparation.brevo_list_id = 55
+        preparation.status = "PROVIDER_FAILED"
+        preparation.save(update_fields=["brevo_list_id", "status", "updated_at"])
+        campaign.status = Campaign.Status.PROVIDER_FAILED
+        campaign.save(update_fields=["status", "updated_at"])
+        snapshot = preparation.recipient_snapshots.get(person=self.included)
+        snapshot.brevo_contact_id = 123
+        snapshot.provider_outcome = "CONTACT_READY"
+        snapshot.save(update_fields=["brevo_contact_id", "provider_outcome"])
+        client = self._provider_client()
+        result = prepare_campaign_provider(campaign_id=campaign.id, actor_user=self.admin, client=client, sleep_fn=lambda _seconds: None)
+        self.assertEqual(result.status, Campaign.Status.PREPARED)
+        client.create_campaign_list.assert_not_called()
+        sync.assert_not_called()
+        client.add_contact_to_list.assert_called_once_with(list_id=55, contact_id=123)
+
+    @patch("campaigns.services.synchronize_person_to_brevo")
+    def test_propagation_delay_retries_campaign_creation_and_unrelated_provider_failure_does_not_loop(self, sync):
+        campaign = self._snapshot_ready_campaign()
+        sync.return_value = BrevoPersonSyncResult(person_id=self.included.id, outcome=BrevoPersonSyncOutcome.ALREADY_SYNCHRONIZED, contact_id=123)
+        client = self._provider_client()
+        client.create_email_campaign_draft.side_effect = [BrevoMarketingPropagationDelay("There are no contacts associated with the given recipients info"), SimpleNamespace(campaign_id=77)]
+        sleeps = []
+        result = prepare_campaign_provider(campaign_id=campaign.id, actor_user=self.admin, client=client, sleep_fn=sleeps.append, backoff_seconds=(0, 1))
+        self.assertEqual(result.status, Campaign.Status.PREPARED)
+        self.assertEqual(client.create_email_campaign_draft.call_count, 2)
+        self.assertEqual(sleeps, [1])
+
+    @patch("campaigns.services.synchronize_person_to_brevo")
+    def test_reconciliation_does_not_create_campaign_draft(self, sync):
+        campaign = self._snapshot_ready_campaign()
+        sync.return_value = BrevoPersonSyncResult(person_id=self.included.id, outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED, reason="BREVO_CONTACT_RESTRICTED")
+        client = self._provider_client()
+        result = prepare_campaign_provider(campaign_id=campaign.id, actor_user=self.admin, client=client, sleep_fn=lambda _seconds: None)
+        self.assertEqual(result.status, Campaign.Status.RECONCILIATION_REQUIRED)
+        client.create_email_campaign_draft.assert_not_called()

@@ -4,6 +4,9 @@ from dataclasses import dataclass
 import httpx
 from brevo import Brevo, ForbiddenError, NotFoundError, TooManyRequestsError, UnauthorizedError
 from brevo.core.api_error import ApiError
+from brevo.contacts.types.add_contact_to_list_request_body_ids import AddContactToListRequestBodyIds
+from brevo.email_campaigns.types.create_email_campaign_request_recipients import CreateEmailCampaignRequestRecipients
+from brevo.email_campaigns.types.create_email_campaign_request_sender import CreateEmailCampaignRequestSender
 from django.conf import settings
 
 from brevo_marketing.exceptions import (
@@ -11,6 +14,7 @@ from brevo_marketing.exceptions import (
     BrevoMarketingAccessError,
     BrevoMarketingAuthenticationError,
     BrevoMarketingConfigurationError,
+    BrevoMarketingPropagationDelay,
     BrevoMarketingTemporaryError,
     BrevoMarketingRateLimitError,
     BrevoMarketingValidationError,
@@ -35,6 +39,13 @@ class BrevoContactList:
 
 
 @dataclass(frozen=True)
+class BrevoEmailCampaign:
+    campaign_id: int
+    name: str
+    status: str | None = None
+
+
+@dataclass(frozen=True)
 class BrevoContact:
     contact_id: int
     email: str
@@ -48,9 +59,10 @@ class BrevoContact:
 class BrevoMarketingClient:
     """Brevo Contacts API facade for safe discovery and one-Person marketing sync."""
 
-    def __init__(self, *, api_key, marketing_list_id=None, sdk_factory=Brevo):
+    def __init__(self, *, api_key, marketing_list_id=None, campaign_folder_id=None, sdk_factory=Brevo):
         self.api_key = api_key
         self.marketing_list_id = marketing_list_id
+        self.campaign_folder_id = campaign_folder_id
         self._sdk_factory = sdk_factory
         self._validate_configuration()
         self._client = sdk_factory(api_key=api_key)
@@ -60,6 +72,7 @@ class BrevoMarketingClient:
         client = cls(
             api_key=settings.BREVO_API_KEY,
             marketing_list_id=settings.BREVO_MARKETING_LIST_ID,
+            campaign_folder_id=settings.BREVO_MARKETING_CAMPAIGN_FOLDER_ID,
         )
         if require_marketing_list:
             client.get_marketing_list_id()
@@ -160,6 +173,78 @@ class BrevoMarketingClient:
             offset += len(items)
         return tuple(results)
 
+    def get_campaign_folder_id(self):
+        try:
+            value = int(str(self.campaign_folder_id).strip())
+        except (TypeError, ValueError) as error:
+            raise BrevoMarketingConfigurationError(
+                "Brevo campaign preparation is not configured: BREVO_MARKETING_CAMPAIGN_FOLDER_ID must be a positive integer."
+            ) from error
+        if value <= 0:
+            raise BrevoMarketingConfigurationError(
+                "Brevo campaign preparation is not configured: BREVO_MARKETING_CAMPAIGN_FOLDER_ID must be a positive integer."
+            )
+        return value
+
+    def create_campaign_list(self, *, name):
+        folder_id = self.get_campaign_folder_id()
+        response = self._call(lambda: self._client.contacts.create_list(folder_id=folder_id, name=name))
+        list_id = getattr(response, "id", None)
+        if not isinstance(list_id, int) or list_id <= 0:
+            raise BrevoMarketingAPIError("Brevo returned an invalid campaign list identity.")
+        return BrevoContactList(list_id=list_id, name=name, total_subscribers=0, total_blacklisted=0, unique_subscribers=0)
+
+    def add_contact_to_list(self, *, list_id, contact_id):
+        self._call(lambda: self._client.contacts.add_contact_to_list(
+            list_id=int(list_id),
+            request=AddContactToListRequestBodyIds(ids=[int(contact_id)]),
+        ))
+
+    def find_draft_campaign_by_name(self, *, name):
+        offset = 0
+        while True:
+            response = self._call(lambda: self._client.email_campaigns.get_email_campaigns(
+                type="classic", status="draft", limit=50, offset=offset, sort="asc", exclude_html_content=True,
+            ))
+            items = getattr(response, "campaigns", None) or ()
+            for item in items:
+                if str(getattr(item, "name", "") or "") == name:
+                    campaign_id = getattr(item, "id", None)
+                    if isinstance(campaign_id, int) and campaign_id > 0:
+                        return BrevoEmailCampaign(campaign_id=campaign_id, name=name, status="draft")
+            count = getattr(response, "count", None)
+            if not items or not isinstance(count, int) or offset + len(items) >= count or len(items) < 50:
+                return None
+            offset += len(items)
+
+    def create_email_campaign_draft(self, *, name, template_id, list_id):
+        try:
+            template_id = int(template_id)
+        except (TypeError, ValueError) as error:
+            raise BrevoMarketingConfigurationError(
+                "Brevo campaign preparation is not configured: BREVO_MARKETING_STARTER_TEMPLATE_ID must be a positive integer."
+            ) from error
+        if template_id <= 0:
+            raise BrevoMarketingConfigurationError(
+                "Brevo campaign preparation is not configured: BREVO_MARKETING_STARTER_TEMPLATE_ID must be a positive integer."
+            )
+        sender = CreateEmailCampaignRequestSender(
+            email=str(settings.BREVO_SENDER_EMAIL).strip(),
+            name=str(settings.BREVO_SENDER_NAME).strip() or None,
+        )
+        if not sender.email:
+            raise BrevoMarketingConfigurationError("Brevo campaign preparation requires BREVO_SENDER_EMAIL.")
+        response = self._call(lambda: self._client.email_campaigns.create_email_campaign(
+            name=name,
+            sender=sender,
+            recipients=CreateEmailCampaignRequestRecipients(listIds=[int(list_id)]),
+            template_id=template_id,
+        ))
+        campaign_id = getattr(response, "id", None)
+        if not isinstance(campaign_id, int) or campaign_id <= 0:
+            raise BrevoMarketingAPIError("Brevo returned an invalid campaign identity.")
+        return BrevoEmailCampaign(campaign_id=campaign_id, name=name, status="draft")
+
     def _validate_configuration(self):
         if not self.api_key or not str(self.api_key).strip():
             raise BrevoMarketingConfigurationError(
@@ -218,7 +303,10 @@ class BrevoMarketingClient:
             if isinstance(status_code, int) and (status_code == 429 or status_code >= 500):
                 raise BrevoMarketingTemporaryError("Brevo temporarily could not complete the API request.") from error
             if status_code in {400, 422}:
-                raise BrevoMarketingValidationError(BrevoMarketingClient._safe_error_message(error)) from error
+                message = BrevoMarketingClient._safe_error_message(error)
+                if status_code == 400 and "invalid_parameter" in message and "There are no contacts associated with the given recipients info" in message:
+                    raise BrevoMarketingPropagationDelay(message) from error
+                raise BrevoMarketingValidationError(message) from error
             raise BrevoMarketingAPIError("Brevo rejected the marketing API request.") from error
         except Exception as error:
             raise BrevoMarketingAPIError("Brevo returned an unexpected marketing API failure.") from error

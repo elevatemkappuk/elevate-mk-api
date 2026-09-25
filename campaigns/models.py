@@ -14,7 +14,7 @@ class Campaign(models.Model):
         PREPARED = "PREPARED", "Prepared"
         RECONCILIATION_REQUIRED = "RECONCILIATION_REQUIRED", "Reconciliation required"
         PROVIDER_FAILED = "PROVIDER_FAILED", "Provider failed"
-        CONSENT_ACTION_REQUIRED = "CONSENT_ACTION_REQUIRED", "Consent action required"
+        NO_READY_RECIPIENTS = "NO_READY_RECIPIENTS", "No ready recipients"
 
     name = models.CharField(max_length=255)
     status = models.CharField(max_length=40, choices=Status.choices, default=Status.DRAFT, db_index=True)
@@ -44,6 +44,11 @@ class CampaignPreparation(models.Model):
         PREPARING = "PREPARING", "Preparing"
         SNAPSHOT_READY = "SNAPSHOT_READY", "CRM snapshot ready"
         FAILED = "FAILED", "Failed"
+        PROVIDER_PREPARING = "PROVIDER_PREPARING", "Provider preparing"
+        PREPARED = "PREPARED", "Prepared"
+        RECONCILIATION_REQUIRED = "RECONCILIATION_REQUIRED", "Reconciliation required"
+        PROVIDER_FAILED = "PROVIDER_FAILED", "Provider failed"
+        NO_READY_RECIPIENTS = "NO_READY_RECIPIENTS", "No ready recipients"
 
     campaign = models.ForeignKey(Campaign, on_delete=models.PROTECT, related_name="preparations")
     attempt_number = models.PositiveIntegerField()

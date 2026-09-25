@@ -26,10 +26,27 @@ class CampaignCreateSerializer(serializers.Serializer):
 
 
 class CampaignPreparationSerializer(serializers.ModelSerializer):
+    provider_ready_count = serializers.SerializerMethodField()
+    provider_issue_count = serializers.SerializerMethodField()
+    can_start_provider_preparation = serializers.SerializerMethodField()
+    can_retry_provider_preparation = serializers.SerializerMethodField()
+
     class Meta:
         model = CampaignPreparation
-        fields = ("id", "attempt_number", "status", "started_at", "completed_at", "selected_count", "included_count", "excluded_count", "brevo_list_id", "brevo_campaign_id", "brevo_editor_url", "provider_error_code", "provider_error_message")
+        fields = ("id", "attempt_number", "status", "started_at", "completed_at", "selected_count", "included_count", "excluded_count", "provider_ready_count", "provider_issue_count", "can_start_provider_preparation", "can_retry_provider_preparation", "brevo_list_id", "brevo_campaign_id", "brevo_editor_url", "provider_error_code", "provider_error_message")
         read_only_fields = fields
+
+    def get_provider_ready_count(self, obj):
+        return obj.recipient_snapshots.filter(provider_outcome="ADDED_TO_CAMPAIGN_LIST").count()
+
+    def get_provider_issue_count(self, obj):
+        return obj.recipient_snapshots.filter(provider_outcome__in=("RECONCILIATION_REQUIRED", "PROVIDER_FAILED")).count()
+
+    def get_can_start_provider_preparation(self, obj):
+        return obj.status == CampaignPreparation.Status.SNAPSHOT_READY
+
+    def get_can_retry_provider_preparation(self, obj):
+        return obj.status == CampaignPreparation.Status.PROVIDER_FAILED
 
 
 class CampaignSerializer(serializers.ModelSerializer):

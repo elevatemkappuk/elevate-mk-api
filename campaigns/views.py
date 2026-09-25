@@ -9,7 +9,7 @@ from rest_framework.response import Response
 from .models import Campaign, CampaignRecipientSnapshot
 from .permissions import HasCampaignAccess, HasCampaignWriteAccess
 from .serializers import CampaignCreateSerializer, CampaignRecipientSnapshotSerializer, CampaignSerializer
-from .services import prepare_campaign_snapshot
+from .services import prepare_campaign_provider, prepare_campaign_snapshot
 from audit.models import AuditEvent
 from audit.services import record_audit_event
 
@@ -72,6 +72,22 @@ class CampaignPrepareView(generics.GenericAPIView):
     def post(self, request, *args, **kwargs):
         try:
             campaign = prepare_campaign_snapshot(campaign_id=kwargs["campaign_id"], actor_user=request.user)
+        except Campaign.DoesNotExist:
+            raise NotFound("Campaign not found.")
+        except (RuntimeError, IntegrityError) as error:
+            raise CampaignPreparationConflict(str(error))
+        return Response(CampaignSerializer(campaign).data)
+
+
+class CampaignPrepareProviderView(generics.GenericAPIView):
+    queryset = Campaign.objects.all()
+    permission_classes = [IsAuthenticated, HasCampaignWriteAccess]
+    lookup_url_kwarg = "campaign_id"
+
+    @extend_schema(responses={200: CampaignSerializer, 404: OpenApiResponse(description="Campaign not found."), 409: OpenApiResponse(description="Provider preparation conflict.")}, tags=["Marketing Campaigns"])
+    def post(self, request, *args, **kwargs):
+        try:
+            campaign = prepare_campaign_provider(campaign_id=kwargs["campaign_id"], actor_user=request.user)
         except Campaign.DoesNotExist:
             raise NotFound("Campaign not found.")
         except (RuntimeError, IntegrityError) as error:

@@ -186,6 +186,8 @@ Settings are loaded from the backend environment in `config/settings.py`.
 | --- | --- | --- | --- |
 | `BREVO_API_KEY` | Brevo API authentication | Empty by default; required for Brevo API operations | Worker, manual/diagnostic marketing commands, and transactional Brevo operations |
 | `BREVO_MARKETING_LIST_ID` | Initial marketing list and optional webhook list scope | Empty by default; must be a positive integer for list-based sync and supplied-list webhook validation | Worker and webhook web process |
+| `BREVO_MARKETING_CAMPAIGN_FOLDER_ID` | Brevo folder for Campaign V1 execution lists | Empty by default; required for provider preparation and must be a positive integer | Web process/provider preparation |
+| `BREVO_MARKETING_STARTER_TEMPLATE_ID` | Brevo template used for Campaign V1 drafts | Empty by default; required for provider preparation and must be a positive integer | Web process/provider preparation |
 | `MARKETING_SYNC_PROVIDER` | Active marketing provider selector | `BREVO`; unsupported values fail checks/runtime | Web and worker |
 | `BREVO_MARKETING_WEBHOOK_USERNAME` | Inbound webhook Basic Auth username | Empty by default; required to accept webhook traffic | Web process |
 | `BREVO_MARKETING_WEBHOOK_PASSWORD` | Inbound webhook Basic Auth password | Empty by default; required to accept webhook traffic | Web process |
@@ -695,10 +697,16 @@ analytics are not inbound CRM integrations.
 
 ### Audience and campaign functionality
 
-Audience selection/preview is implemented as a read-only, provider-neutral
-backend and Staff CRM workflow. Bulk audience synchronization, saved segments,
-campaign workflows, tags, journeys, and background campaign automation are not
-implemented by this integration.
+Audience selection/preview is implemented as a provider-neutral backend and
+Staff CRM workflow. Campaign V1 provider preparation now re-checks CRM consent,
+reuses the established contact identity/synchronization path, creates a
+dedicated Brevo execution list, and creates a draft using the configured
+starter template. The broad marketing list is not the campaign recipient
+target. Elevate owns audience, consent, recipient evidence, and preparation;
+Brevo owns content editing, test sends, scheduling, sending, and delivery.
+Frontend campaign workflow, post-prepared opt-out removal, automatic list
+cleanup, saved audiences, tags, journeys, and background campaign automation
+remain unimplemented.
 
 ### Deployment
 

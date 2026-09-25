@@ -18,6 +18,10 @@ class BrevoMarketingTemporaryError(BrevoMarketingError):
     """Brevo or the network could not complete the request temporarily."""
 
 
+class BrevoMarketingPropagationDelay(BrevoMarketingTemporaryError):
+    """Brevo has not indexed newly-added list members yet."""
+
+
 class BrevoMarketingAPIError(BrevoMarketingError):
     """Brevo returned an otherwise controlled API failure."""
 

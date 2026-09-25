@@ -63,6 +63,14 @@ class AuditEvent(models.Model):
         CAMPAIGN_PREPARATION_STARTED = "CAMPAIGN_PREPARATION_STARTED", "Campaign preparation started"
         CAMPAIGN_RECIPIENT_SNAPSHOT_CREATED = "CAMPAIGN_RECIPIENT_SNAPSHOT_CREATED", "Campaign recipient snapshot created"
         CAMPAIGN_PREPARATION_SNAPSHOT_READY = "CAMPAIGN_PREPARATION_SNAPSHOT_READY", "Campaign preparation snapshot ready"
+        CAMPAIGN_PROVIDER_PREPARATION_STARTED = "CAMPAIGN_PROVIDER_PREPARATION_STARTED", "Campaign provider preparation started"
+        CAMPAIGN_BREVO_LIST_CREATED = "CAMPAIGN_BREVO_LIST_CREATED", "Campaign Brevo list created"
+        CAMPAIGN_LIST_POPULATED = "CAMPAIGN_LIST_POPULATED", "Campaign list populated"
+        CAMPAIGN_BREVO_DRAFT_CREATED = "CAMPAIGN_BREVO_DRAFT_CREATED", "Campaign Brevo draft created"
+        CAMPAIGN_PROVIDER_PREPARATION_COMPLETED = "CAMPAIGN_PROVIDER_PREPARATION_COMPLETED", "Campaign provider preparation completed"
+        CAMPAIGN_RECONCILIATION_REQUIRED = "CAMPAIGN_RECONCILIATION_REQUIRED", "Campaign reconciliation required"
+        CAMPAIGN_PROVIDER_FAILURE = "CAMPAIGN_PROVIDER_FAILURE", "Campaign provider failure"
+        CAMPAIGN_PROVIDER_RETRY = "CAMPAIGN_PROVIDER_RETRY", "Campaign provider retry"
 
     actor_user = models.ForeignKey(
         settings.AUTH_USER_MODEL,

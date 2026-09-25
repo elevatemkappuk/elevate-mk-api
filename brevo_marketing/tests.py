@@ -19,6 +19,7 @@ from brevo_marketing.exceptions import (
     BrevoMarketingConfigurationError,
     BrevoMarketingIdentityConflictError,
     BrevoMarketingRateLimitError,
+    BrevoMarketingPropagationDelay,
     BrevoMarketingTemporaryError,
     BrevoMarketingValidationError,
 )
@@ -101,6 +102,38 @@ class BrevoMarketingClientTests(SimpleTestCase):
 
         with self.assertRaises(BrevoMarketingConfigurationError):
             client.get_marketing_list_id()
+
+    @override_settings(BREVO_SENDER_EMAIL="sender@example.com", BREVO_SENDER_NAME="Elevate MK", BREVO_MARKETING_STARTER_TEMPLATE_ID="16")
+    def test_campaign_operations_use_dedicated_list_and_template(self):
+        sdk = Mock()
+        sdk.contacts.create_list.return_value = SimpleNamespace(id=7)
+        sdk.email_campaigns.get_email_campaigns.return_value = SimpleNamespace(count=0, campaigns=[])
+        sdk.email_campaigns.create_email_campaign.return_value = SimpleNamespace(id=42)
+        client = BrevoMarketingClient(api_key="secret", campaign_folder_id="9", sdk_factory=Mock(return_value=sdk))
+
+        campaign_list = client.create_campaign_list(name="Elevate Campaign 1 | Update | Prep 1")
+        client.add_contact_to_list(list_id=7, contact_id=123)
+        campaign = client.create_email_campaign_draft(name="Elevate Campaign 1 | Update | Prep 1", template_id="16", list_id=7)
+
+        self.assertEqual(campaign_list.list_id, 7)
+        self.assertEqual(campaign.campaign_id, 42)
+        sdk.contacts.create_list.assert_called_once_with(folder_id=9, name="Elevate Campaign 1 | Update | Prep 1")
+        request = sdk.contacts.add_contact_to_list.call_args.kwargs["request"]
+        self.assertEqual(request.ids, [123])
+        request = sdk.email_campaigns.create_email_campaign.call_args.kwargs
+        self.assertEqual(request["template_id"], 16)
+        self.assertEqual(request["recipients"].list_ids, [7])
+
+    def test_only_known_empty_recipients_response_is_propagation_delay(self):
+        sdk = Mock()
+        sdk.email_campaigns.get_email_campaigns.side_effect = BadRequestError(body={"code": "invalid_parameter", "message": "There are no contacts associated with the given recipients info"})
+        client = BrevoMarketingClient(api_key="secret", sdk_factory=Mock(return_value=sdk))
+        with self.assertRaises(BrevoMarketingPropagationDelay):
+            client.find_draft_campaign_by_name(name="campaign")
+
+        sdk.email_campaigns.get_email_campaigns.side_effect = BadRequestError(body={"code": "invalid_parameter", "message": "The campaign name is invalid"})
+        with self.assertRaises(BrevoMarketingValidationError):
+            client.find_draft_campaign_by_name(name="campaign")
 
     @override_settings(MARKETING_SYNC_PROVIDER="MAILCHIMP")
     def test_unsupported_active_provider_is_rejected(self):
