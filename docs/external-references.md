@@ -1,8 +1,10 @@
 # External person references
 
 For the complete Brevo-specific implementation reference, see
-[Brevo CRM integration](brevo-crm-integration.md). This document remains
-focused on provider-neutral external identity and durable-job concepts.
+[Brevo CRM integration](brevo-crm-integration.md). Campaign lifecycle and
+provider preparation are defined in the [Campaign V1 foundation](campaign-v1-foundation.md).
+This document remains focused on provider-neutral external identity and
+durable-job concepts.
 
 `external_references.ExternalPersonReference` stores provider-neutral identity links from Elevate CRM `people.Person` rows to external person records. It keeps external identifiers out of `Person`, so Elevate remains authoritative for name, email, mobile, lifecycle, and other CRM identity/contact data.
 
@@ -24,7 +26,7 @@ Verification failures are controlled as missing configuration, authentication fa
 
 ## Brevo marketing provider compatibility
 
-Brevo is the future marketing-provider implementation under evaluation while Mailchimp remains frozen as a rollback/reference implementation. The separate `brevo_marketing` client reuses the existing backend-only `BREVO_API_KEY` setting and keeps marketing operations separate from transactional email. The provider-neutral reference and job models already store a free-form normalized provider code, so no schema migration was required to support `BREVO`; existing `MAILCHIMP` references and jobs are unchanged.
+Brevo is the active marketing-provider implementation while Mailchimp remains frozen as a rollback/reference implementation. The separate `brevo_marketing` client reuses the existing backend-only `BREVO_API_KEY` setting and keeps marketing operations separate from transactional email. The provider-neutral reference and job models already store a free-form normalized provider code, so no schema migration was required to support `BREVO`; existing `MAILCHIMP` references and jobs are unchanged.
 
 `BREVO_MARKETING_LIST_ID` is an explicit backend environment setting. The manual command `python manage.py sync_brevo_marketing_person <person_id>` uses that configured list and never creates, renames, or deletes lists. `MARKETING_SYNC_PROVIDER` defaults to `BREVO` and is validated at Django check/runtime boundaries. New meaningful EMAIL preference changes enqueue BREVO jobs; automatic dual-provider synchronization is not enabled.
 
@@ -96,6 +98,24 @@ and temporary provider failures retry with bounded backoff and max-attempt
 behavior; stale processing locks are recoverable.
 
 Existing MAILCHIMP references and jobs are preserved and never reinterpreted as BREVO jobs. The existing Mailchimp worker remains a separately invoked rollback/reference path and processes only rows explicitly owned by `MAILCHIMP`; operators should not run it against historical pending rows unless Mailchimp rollback processing is intentional.
+
+## Campaign V1 identity boundary
+
+Campaign provider preparation reuses these stable references and synchronization
+rules. It may reuse an active `BREVO` / `MARKETING_CONTACT` reference, but it
+never guesses an identity, force-merges contacts, or silently relinks a stale
+reference. An unresolved reference, restrictive provider state, missing current
+CRM email, email identity mismatch, or contact linked to another Person is a
+safe reconciliation outcome. The campaign snapshot remains immutable evidence;
+the campaign-specific Brevo list is a separate operational recipient set.
+
+The read-only Person inspection endpoint is
+`GET /api/v1/people/{person_id}/brevo-integration/`. It exposes only safe
+status/reason information and never exposes provider IDs or raw payloads. It
+does not attach, revoke, relink, enqueue synchronization, or change consent.
+Campaign retry reuses the same preparation, snapshot, list, and completed work
+after an administrator or manager has resolved the underlying issue through a
+supported workflow.
 
 ## Inbound Brevo marketing unsubscribe
 

@@ -3,8 +3,10 @@
 This is the canonical technical reference for the implemented Elevate MK CRM
 integration with Brevo Marketing. It describes the current Django API,
 durable synchronization jobs, worker, contact mapping, and inbound marketing
-unsubscribe webhook, and read-only Audience Preview. It is not a design for
-unimplemented campaign or bidirectional-profile features.
+unsubscribe webhook, read-only Audience Preview, and Campaign V1 provider
+preparation. Campaign architecture and lifecycle are consolidated in the
+[Campaign V1 foundation](campaign-v1-foundation.md); this document is the
+provider and integration reference.
 
 ## 1. Purpose and scope
 
@@ -83,8 +85,9 @@ reconciliation outcome applies to missing/ambiguous identity, target-email
 collisions, invalid or cleared CRM email, archived/non-BUSINESS People, and
 `UNKNOWN` or `OPTED_OUT` CRM consent.
 
-This is a staging verification statement, not a claim that Campaign V1,
-bulk campaign workflows, or automated journeys are implemented.
+Campaign V1 is implemented for CRM audience preparation and Brevo draft
+preparation. It does not implement bulk synchronization, automated journeys,
+email design, sending, or scheduling inside Elevate.
 
 ## 2. Systems of record and authority boundaries
 
@@ -200,7 +203,6 @@ staging marketing list is:
 
 ```text
 ELEVATE STAGING | Marketing Contacts
-List ID: 4
 ```
 
 This documentation intentionally excludes API keys, webhook passwords,
@@ -219,8 +221,12 @@ The response includes the effective EMAIL marketing preference and a bounded
 integration state: `CONNECTED`, `RESTRICTED`, `CONTACT_MISSING`,
 `IDENTITY_CONFLICT`, `NOT_CONNECTED`, or `UNKNOWN`. It intentionally omits
 Brevo contact IDs, external reference IDs, credentials, raw provider errors,
-and provider payloads. `CONTACT_MISSING` is marked `can_reconcile` only for a
-CRM administrator; this is an indication for a future explicit repair flow,
+and provider payloads. The safe diagnostic reason codes include
+`BREVO_CONTACT_RESTRICTED`, `BREVO_CONTACT_NOT_FOUND_FOR_EXISTING_REFERENCE`,
+`BREVO_EMAIL_IDENTITY_MISMATCH`, `BREVO_CRM_EMAIL_MISSING`,
+`BREVO_CONTACT_LINKED_TO_OTHER_PERSON`, and the fallback
+`BREVO_CONTACT_IDENTITY_CONFLICT`. `CONTACT_MISSING` is marked
+`can_reconcile` only for a CRM administrator; this is a capability indicator,
 not an automatic repair action. Restrictive Brevo state remains protected:
 Elevate does not automatically unblock or resubscribe a contact.
 
@@ -743,9 +749,11 @@ draft request includes a deterministic, provider-required starter subject
 derived from the Elevate campaign name; it is an editable placeholder/default,
 not a new Elevate content field. The final subject and email content remain
 owned and editable in Brevo.
-Frontend campaign workflow, post-prepared opt-out removal, automatic list
-cleanup, saved audiences, tags, journeys, and background campaign automation
-remain unimplemented.
+The Staff CRM campaign workflow, reconciliation review, and safe retry are
+implemented. Post-`PREPARED` opt-out removal from the mutable provider list,
+automatic list cleanup, saved audiences, tags, journeys, and background
+campaign automation remain unimplemented. See the [Campaign V1 foundation](campaign-v1-foundation.md)
+for states, endpoint contract, retry/idempotency, and staff workflow.
 
 Brevo email campaign creation does not receive a folder field. The optional
 `BREVO_MARKETING_CAMPAIGN_FOLDER_ID` only controls placement of the dedicated
@@ -766,11 +774,11 @@ active automatic marketing provider.
 
 The following are non-implemented future milestones:
 
-1. Bulk Brevo audience/list synchronization.
-2. CRM campaign workflow integration.
+1. Country-aware E.164 mobile normalization.
+2. Explicit administrative identity repair/relink workflow.
 3. Additional provider outcome webhooks where justified.
-4. Country-aware E.164 mobile normalization.
-5. Operational reconciliation and admin tooling where needed.
+4. Post-`PREPARED` consent hardening and mutable-list removal.
+5. Saved audiences, tags, journeys, and other campaign automation.
 
 ## Audience selection and read-only preview
 
@@ -820,12 +828,12 @@ references, synchronization jobs, audit events, audience definitions, or
 snapshots. Provider restrictive state remains a synchronization/deliverability
 concern rather than CRM eligibility.
 
-The selection and eligibility service is intentionally reusable by a future
-bulk Brevo synchronization operation. A future bulk operation must re-evaluate
-the current CRM state immediately before creating provider work rather than
-treating a prior preview as an immutable consent decision. The Staff CRM
-Audience Preview UI is implemented; bulk sync, campaign, saved audience, and
-snapshot workflows remain out of scope.
+The selection and eligibility service is intentionally reusable by future bulk
+Brevo synchronization. Any future bulk operation must re-evaluate current CRM
+state immediately before creating provider work rather than treating a prior
+preview as an immutable consent decision. Audience Preview, Campaign V1
+snapshot creation, and Campaign V1 provider preparation are implemented;
+saved audiences, bulk sync, and campaign automation remain out of scope.
 
 ## Related documentation
 

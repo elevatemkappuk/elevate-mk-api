@@ -1,78 +1,148 @@
 # Campaign V1 foundation
 
-Implemented in Phase 1:
+Campaign V1 is the CRM-owned audience and preparation workflow. Elevate owns
+**WHO**: audience criteria, CRM consent eligibility, campaign records,
+immutable recipient evidence, current-state rechecks, provider identity
+resolution, dedicated recipient lists, draft preparation, and reconciliation
+visibility. Brevo owns **WHAT/WHEN**: email design, final content and subject,
+preview/test, scheduling, sending, and delivery.
 
-- provider-neutral campaign draft persistence;
-- normalized canonical audience criteria;
-- authoritative CRM-side preparation;
-- immutable recipient snapshots with preparation-time consent and exclusion reasons;
-- read-only campaign and recipient APIs;
-- campaign creation and preparation audit events.
+The Angular workflow is described in the [Staff CRM frontend guide](../../elevate-mk-crm/docs/brevo-crm-frontend-guide.md).
+Provider identity and consent rules are defined in the [Brevo integration guide](brevo-crm-integration.md).
 
-Phase 1 deliberately makes no Brevo API calls. Brevo campaign-specific lists,
-contact preparation, Brevo campaign drafts, editor links, provider retries,
-post-snapshot consent removal, and the frontend Campaign workflow are not yet
-implemented.
+## End-to-end workflow
 
-`SNAPSHOT_READY` is the Phase 1 state. It means the CRM recipient snapshot is
-complete; it does not mean that a Brevo execution target exists or that the
-campaign is ready to send.
+1. Staff use People criteria in Audience Preview.
+2. Preview reports selected, eligible, and excluded counts using CRM data only.
+3. An authorized Admin or Manager continues to Campaign creation and supplies
+   a campaign name. The normalized criteria are stored with the Campaign.
+4. **Prepare recipients** re-evaluates current CRM EMAIL consent and creates an
+   immutable `CampaignRecipientSnapshot` with selected, included, excluded,
+   and safe exclusion reasons.
+5. **Prepare in Brevo** re-checks current consent and provider identity,
+   synchronizes eligible contacts, creates or reuses one campaign-specific
+   list, and creates or reuses a Brevo draft.
+6. Staff edit, preview/test, schedule, and send from Brevo. Elevate does not
+   provide an email designer or send/schedule operation in V1.
 
-## Phase 2 provider preparation
+Audience Preview never calls Brevo, changes consent, creates contacts, or
+reserves an audience. A snapshot is historical CRM evidence; it is not the
+mutable provider recipient list. Provider preparation uses the dedicated list
+and never uses the broad `BREVO_MARKETING_LIST_ID` as the campaign target.
 
-Phase 2 adds `POST /api/v1/marketing/campaigns/{id}/prepare-provider/`. It
-re-checks current CRM consent, reuses the established Brevo contact identity
-and synchronization services, creates one dedicated Brevo list per
-preparation, adds ready contacts, and creates a Brevo draft from the configured
-starter template. The broad `BREVO_MARKETING_LIST_ID` is never used as the
-campaign recipient target.
+## API and lifecycle
 
-`BREVO_MARKETING_CAMPAIGN_FOLDER_ID` is optional. Brevo email campaign drafts
-do not receive a folder field. For the required contact-list creation, a blank
-setting causes the client to read the actual folder of the configured base
-marketing list; no folder ID is invented or defaulted. A configured positive
-folder ID continues to be used directly.
+The implemented endpoints are:
 
-Provider preparation uses `PROVIDER_PREPARING`, `PREPARED`,
-`RECONCILIATION_REQUIRED`, `PROVIDER_FAILED`, and `NO_READY_RECIPIENTS` while
-the Campaign carries the corresponding public lifecycle state. Retries reuse
-the same preparation and list. The known Brevo list-index propagation response
-is retried with bounded backoff. A campaign draft is looked up by its
-deterministic name before creation; if the provider accepted a create request
-but the response was lost, this lookup is the available V1 recovery mechanism.
+```text
+POST /api/v1/marketing/audiences/preview/
+POST /api/v1/marketing/campaigns/
+GET  /api/v1/marketing/campaigns/
+GET  /api/v1/marketing/campaigns/{id}/
+POST /api/v1/marketing/campaigns/{id}/prepare/
+POST /api/v1/marketing/campaigns/{id}/prepare-provider/
+GET  /api/v1/marketing/campaigns/{id}/recipients/
+```
 
-### Reconciliation review and retry
+CRM Admins and Managers may create campaigns, prepare snapshots, prepare in
+Brevo, and retry supported provider preparation. CRM Viewers have read-only
+campaign and recipient visibility. The recipients endpoint is paginated with
+a maximum page size of 100.
+
+Campaign and preparation states are intentionally distinct from a simple
+“ready to send” flag:
+
+| State | Meaning |
+| --- | --- |
+| `DRAFT` | Criteria and campaign name exist; no snapshot yet. |
+| `PREPARING` / `PROVIDER_PREPARING` | The relevant CRM or provider operation is running. |
+| `SNAPSHOT_READY` | The immutable CRM snapshot exists; this is not provider readiness. |
+| `PREPARED` | Included recipients are provider-ready and a Brevo draft exists or was reused. |
+| `PROVIDER_FAILED` | Provider preparation failed without a completed safe provider result. |
+| `RECONCILIATION_REQUIRED` | One or more included recipients need safe identity, consent, or provider-state review. The whole campaign remains blocked in V1. |
+| `NO_READY_RECIPIENTS` | No included recipient can be prepared safely. |
+
+Retries reuse the same `CampaignPreparation`, immutable snapshot, dedicated
+list, and completed recipient work. Draft lookup by deterministic name happens
+before draft creation. A known Brevo list-propagation/no-contacts condition
+uses only the existing bounded retry/backoff behavior. There is no automatic
+list cleanup, send, schedule, or partial campaign readiness.
+
+## Provider preparation contract
+
+The configured positive `BREVO_MARKETING_STARTER_TEMPLATE_ID` is required for
+draft creation. `BREVO_MARKETING_CAMPAIGN_FOLDER_ID` is optional because
+campaign folders are unavailable on the Brevo Free plan. When blank, no folder
+ID is invented or defaulted; dedicated-list creation derives the actual folder
+of the configured base list. A configured valid folder remains supported. The
+draft payload uses the Campaign name as a deterministic, provider-required
+editable starter subject. It is not a new Elevate content field; final subject
+and content remain owned by Brevo.
+
+Contact synchronization uses the established Brevo identity/reference rules:
+exact matching only, stable references, minimal approved profile fields, and
+no fuzzy identity matching or force merge. SMS is optional profile data. If
+Brevo rejects a non-empty optional SMS value specifically as an invalid phone,
+the same synchronization operation retries exactly once without SMS. CRM
+mobile and consent are unchanged. Country-aware E.164 normalization remains a
+separate future TODO.
+
+## Reconciliation review and retry
 
 `RECONCILIATION_REQUIRED` intentionally blocks the whole Campaign V1
-preparation. It means that one or more included snapshot recipients could not
-be safely reconciled with current CRM consent and Brevo identity/provider
-state; it does not mean that a partial campaign is ready. No draft is created
-while any included recipient remains in that state.
+preparation. It does not mean that a partial campaign is ready: no draft is
+created while any included recipient remains unresolved. Completed safe
+recipients remain auditable and reusable on retry, but unsafe recipients are
+never silently placed in the operational list.
 
-The recipient endpoint exposes snapshot names, decisions, outcomes, and only
-allowlisted safe `provider_error_code` values. It does not expose Brevo
-contact IDs, raw provider messages, or provider payloads. Relevant codes are:
+The recipient API exposes snapshot names, decisions, outcomes, and only safe
+allowlisted reason codes. It does not expose Brevo contact IDs, external
+reference IDs, raw provider messages, or credentials. Current live Person
+inspection uses these safe diagnostic codes:
 
-- `BREVO_CONTACT_RESTRICTED`: Brevo currently has a restrictive email state;
-  CRM opt-in does not automatically unblock or resubscribe it.
+- `BREVO_CONTACT_RESTRICTED`: Brevo has a restrictive email state; Elevate
+  will not automatically unblock or resubscribe it.
 - `BREVO_CONTACT_NOT_FOUND_FOR_EXISTING_REFERENCE`: an active CRM reference
-  points to a Brevo contact that can no longer be found.
-- `BREVO_CONTACT_IDENTITY_CONFLICT`: the CRM and Brevo identities cannot be
-  safely matched.
+  points to a provider contact that cannot be found.
+- `BREVO_EMAIL_IDENTITY_MISMATCH`: the linked contact's email identity differs
+  from the current CRM email.
+- `BREVO_CRM_EMAIL_MISSING`: a current usable CRM email is required to verify
+  the link.
+- `BREVO_CONTACT_LINKED_TO_OTHER_PERSON`: the contact is already linked to
+  another active CRM Person.
+- `BREVO_CONTACT_IDENTITY_CONFLICT`: safe fallback for other ambiguities.
 
-After staff resolve the underlying issue through supported CRM/Brevo
-workflows, CRM administrators or managers may deliberately call the existing
-provider-preparation endpoint again. This is not automatic repair. The retry
-reuses the same immutable snapshot, preparation, dedicated list, and already
-completed recipient work, while re-evaluating unresolved recipients and
-current CRM EMAIL consent. If any included recipient still requires
-reconciliation, the campaign remains blocked and no draft is created. Once
-all included recipients are safe, normal draft lookup/idempotency proceeds.
+Historical snapshot outcomes may retain the generic
+`BREVO_CONTACT_IDENTITY_CONFLICT`; documentation or live inspection must not
+rewrite historical snapshot evidence. After an administrator resolves an
+underlying issue through an existing supported workflow, Admins or Managers
+may deliberately retry provider preparation. The retry re-evaluates unresolved
+recipients and current CRM consent, preserves successful work, and proceeds to
+draft lookup/creation only when every included recipient is safe.
 
-The recipient endpoint remains paginated. It accepts `page` and `page_size`
-with the existing maximum page size of 100, allowing Campaign review screens
-to retrieve the full snapshot without introducing an unbounded endpoint.
+## Deliberate manual validation
 
-Brevo visual editing, sending, scheduling, post-preparation consent removal,
-automatic list cleanup, and the frontend Campaign workflow remain outside this
-phase.
+The controlled validation path has demonstrated the following without sending
+or scheduling a campaign:
+
+- a single-recipient preparation can reuse an existing Brevo contact, create
+  one dedicated list, populate it, and create a starter-template draft;
+- an invalid optional SMS response falls back to email-only synchronization
+  without changing CRM mobile or consent;
+- restrictive provider states, missing references, and identity mismatches
+  remain visible reconciliation cases and block the whole campaign;
+- a valid two-recipient preparation reaches `PREPARED`, with the dedicated
+  list containing exactly the two included snapshot recipients and the draft
+  targeting that list, with no excluded or extra recipient and no send or
+  schedule.
+
+## Scope and future work
+
+V1 does not include a full reconciliation management system, automatic
+unblock/resubscribe, force merge or automatic relink, saved audiences, tags,
+journeys, post-`PREPARED` consent removal from the mutable provider list,
+automatic list cleanup, campaign send/schedule controls, or a Brevo editor
+inside Elevate. Future work may add country-aware E.164 normalization,
+explicit administrative identity repair, stronger post-prepared consent
+hardening, and safe editor deep-linking. Folder handling should be revisited
+only if the Brevo plan exposes campaign folders.
