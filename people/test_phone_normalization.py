@@ -24,6 +24,12 @@ class ProviderPhoneNormalizationTests(unittest.TestCase):
         self.assert_normalized("+14155552671", "+14155552671")
         self.assert_normalized("+33612345678", "+33612345678")
 
+    def test_previously_used_controlled_test_number_follows_pinned_metadata(self):
+        result = normalize_phone_for_provider("+447911123456")
+
+        self.assertEqual(result.status, PhoneNormalizationStatus.NORMALIZED)
+        self.assertEqual(result.e164, "+447911123456")
+
     def test_national_numbers_require_explicit_region(self):
         ambiguous = normalize_phone_for_provider("07911 123456")
         self.assertEqual(ambiguous.status, PhoneNormalizationStatus.AMBIGUOUS)

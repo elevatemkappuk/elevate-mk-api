@@ -43,6 +43,7 @@ from external_references.models import ExternalPersonReference, ExternalPersonSy
 from marketing_preferences.models import MarketingPreference, MarketingPreferenceHistory, MarketingWebhookReceipt
 from marketing_preferences.services import record_opt_in, record_opt_out
 from people.models import Person
+from people.services import PhoneNormalizationStatus, normalize_phone_for_provider
 
 
 class PersonBrevoInspectionTests(TestCase):
@@ -657,6 +658,46 @@ class BrevoPersonDatabaseSyncTests(TestCase):
         self.assertEqual(client.updated[0]["attributes"], {"FIRSTNAME": "Sofia", "LASTNAME": "Smith", "SMS": "+265991234567"})
         self.assertEqual(result.reference_id, reference.id)
         self.assertFalse(MarketingPreference.objects.filter(person=person).exists())
+
+    def test_profile_sync_updates_missing_sms_when_names_already_match(self):
+        mobile = "+447911123456"
+        normalized = normalize_phone_for_provider(mobile)
+        self.assertEqual(normalized.status, PhoneNormalizationStatus.NORMALIZED)
+        self.assertIsNotNone(normalized.e164)
+
+        person = self.person(first_name="Sofia", last_name="Smith", mobile=mobile)
+        record_opt_in(person=person)
+        reference = self.profile_reference(person)
+        reference_before = {
+            "external_id": reference.external_id,
+            "status": reference.status,
+            "linked_at": reference.linked_at,
+        }
+        consent_before = MarketingPreference.objects.get(person=person).state
+        contact = BrevoContact(
+            9,
+            person.primary_email,
+            {"FIRSTNAME": "Sofia", "LASTNAME": "Smith"},
+            (), (), False, False,
+        )
+        client = FakeBrevoSyncClient(contact=contact)
+
+        result = synchronize_person_profile_to_brevo(person_id=person.id, client=client)
+
+        self.assertNotEqual(result.outcome, BrevoPersonSyncOutcome.PROFILE_ALREADY_SYNCHRONIZED)
+        self.assertEqual(result.outcome, BrevoPersonSyncOutcome.UPDATED_PERSON_PROFILE)
+        self.assertEqual(client.updated[0]["contact_id"], 9)
+        self.assertEqual(client.updated[0]["attributes"], {"SMS": normalized.e164})
+        self.assertEqual(contact.attributes["FIRSTNAME"], "Sofia")
+        self.assertEqual(contact.attributes["LASTNAME"], "Smith")
+        person.refresh_from_db()
+        self.assertEqual(person.mobile, mobile)
+        self.assertEqual(MarketingPreference.objects.get(person=person).state, consent_before)
+        reference.refresh_from_db()
+        self.assertEqual(
+            {"external_id": reference.external_id, "status": reference.status, "linked_at": reference.linked_at},
+            reference_before,
+        )
 
     def test_profile_sync_retries_rejected_optional_sms_without_sms(self):
         person = self.person(first_name="Sofia", last_name="Smith", mobile="+265991234567")
