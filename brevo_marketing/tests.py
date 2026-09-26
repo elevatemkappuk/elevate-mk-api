@@ -445,6 +445,26 @@ class BrevoPersonDatabaseSyncTests(TestCase):
         )
         self.assertNotIn("LANDLINE_NUMBER", client.created[0]["attributes"])
 
+    def test_zero_zero_international_mobile_is_sent_as_canonical_e164(self):
+        person = self.person(mobile="0044 7911 123456")
+        record_opt_in(person=person)
+        client = FakeBrevoSyncClient()
+
+        synchronize_person_to_brevo(person_id=person.id, client=client)
+
+        self.assertEqual(client.created[0]["attributes"]["SMS"], "+447911123456")
+
+    def test_invalid_optional_mobile_is_omitted_without_blocking_email_sync(self):
+        person = self.person(mobile="+44 7911 ext 2")
+        record_opt_in(person=person)
+        client = FakeBrevoSyncClient()
+
+        result = synchronize_person_to_brevo(person_id=person.id, client=client)
+
+        self.assertEqual(result.outcome, BrevoPersonSyncOutcome.CREATED_MARKETING_CONTACT)
+        self.assertEqual(result.reason, "MOBILE_OMITTED_UNSAFE_FORMAT")
+        self.assertNotIn("SMS", client.created[0]["attributes"])
+
     def test_invalid_optional_sms_on_create_retries_once_without_sms_and_links_reference(self):
         person = self.person(mobile="+265991234567")
         record_opt_in(person=person)
@@ -663,6 +683,16 @@ class BrevoPersonDatabaseSyncTests(TestCase):
         self.assertEqual(client.updated[0]["attributes"]["SMS"], "")
         self.assertEqual(len(client.updated), 1)
 
+    def test_profile_sync_whitespace_mobile_keeps_blank_clear_semantics(self):
+        person = self.person(mobile="   ")
+        self.profile_reference(person)
+        contact = BrevoContact(9, person.primary_email, {"FIRSTNAME": "Ava", "LASTNAME": "Example", "SMS": "+265991000000"}, (), (), False, False)
+        client = FakeBrevoSyncClient(contact=contact)
+
+        synchronize_person_profile_to_brevo(person_id=person.id, client=client)
+
+        self.assertEqual(client.updated[0]["attributes"]["SMS"], "")
+
     def test_profile_sync_clears_blank_attributes_and_omits_unsafe_mobile(self):
         person = self.person(first_name="", last_name="", mobile="0991000001")
         self.profile_reference(person)
@@ -675,6 +705,18 @@ class BrevoPersonDatabaseSyncTests(TestCase):
         self.assertEqual(result.reason, "MOBILE_OMITTED_UNSAFE_FORMAT")
         self.assertEqual(client.updated[0]["attributes"], {"FIRSTNAME": "", "LASTNAME": "",})
         self.assertNotIn("SMS", client.updated[0]["attributes"])
+
+    def test_profile_sync_omits_invalid_mobile_without_clearing_existing_sms(self):
+        person = self.person(first_name="Sofia", last_name="Smith", mobile="+44 7911 ext 2")
+        self.profile_reference(person)
+        contact = BrevoContact(9, person.primary_email, {"FIRSTNAME": "Sofia", "LASTNAME": "Smith", "SMS": "+447911123456"}, (), (), False, False)
+        client = FakeBrevoSyncClient(contact=contact)
+
+        result = synchronize_person_profile_to_brevo(person_id=person.id, client=client)
+
+        self.assertEqual(result.outcome, BrevoPersonSyncOutcome.PROFILE_ALREADY_SYNCHRONIZED)
+        self.assertEqual(result.reason, "MOBILE_OMITTED_UNSAFE_FORMAT")
+        self.assertFalse(client.updated)
 
     def test_profile_sync_clears_blank_mobile(self):
         person = self.person(mobile="")

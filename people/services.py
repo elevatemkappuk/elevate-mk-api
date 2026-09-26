@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from enum import Enum
+import re
 
+import phonenumbers
 from django.db.models import Q
 
 from people.models import Person
@@ -48,6 +50,68 @@ def normalize_mobile(value):
     if not value:
         return ""
     return "".join(character for character in value.strip() if character not in " -()")
+
+
+class PhoneNormalizationStatus(str, Enum):
+    EMPTY = "EMPTY"
+    NORMALIZED = "NORMALIZED"
+    AMBIGUOUS = "AMBIGUOUS"
+    INVALID = "INVALID"
+
+
+@dataclass(frozen=True)
+class PhoneNormalizationResult:
+    status: PhoneNormalizationStatus
+    e164: str | None = None
+    reason: str | None = None
+
+
+_PHONE_EXTENSION_PATTERN = re.compile(r"(?:#|;ext=|\b(?:ext|extension|x)\s*\.?\s*\d+)", re.IGNORECASE)
+_PHONE_ALLOWED_TYPES = {
+    phonenumbers.PhoneNumberType.MOBILE,
+    phonenumbers.PhoneNumberType.FIXED_LINE_OR_MOBILE,
+}
+
+
+def normalize_phone_for_provider(value, *, region=None):
+    """Normalize an SMS-capable number without guessing a country.
+
+    ``normalize_mobile`` remains the CRM identity/duplicate matcher. This helper
+    is only for provider-boundary normalization.
+    """
+    raw = "" if value is None else str(value).strip()
+    if not raw:
+        return PhoneNormalizationResult(PhoneNormalizationStatus.EMPTY)
+    if _PHONE_EXTENSION_PATTERN.search(raw):
+        return PhoneNormalizationResult(PhoneNormalizationStatus.INVALID, reason="UNSUPPORTED_EXTENSION")
+    if re.search(r"[A-Za-z]", raw):
+        return PhoneNormalizationResult(PhoneNormalizationStatus.INVALID, reason="ALPHABETIC_INPUT")
+
+    explicit_international = raw.startswith("+") or raw.startswith("00")
+    if explicit_international:
+        parse_value = "+" + raw[2:].lstrip() if raw.startswith("00") else raw
+        parse_region = None
+    else:
+        if region is None or not isinstance(region, str) or not re.fullmatch(r"[A-Za-z]{2}", region.strip()):
+            return PhoneNormalizationResult(PhoneNormalizationStatus.AMBIGUOUS, reason="NO_RELIABLE_REGION")
+        parse_value = raw
+        parse_region = region.strip().upper()
+
+    try:
+        parsed = phonenumbers.parse(parse_value, parse_region)
+    except phonenumbers.NumberParseException:
+        return PhoneNormalizationResult(PhoneNormalizationStatus.INVALID, reason="PARSE_FAILED")
+    if not phonenumbers.is_possible_number(parsed):
+        return PhoneNormalizationResult(PhoneNormalizationStatus.INVALID, reason="IMPOSSIBLE_NUMBER")
+    if not phonenumbers.is_valid_number(parsed):
+        return PhoneNormalizationResult(PhoneNormalizationStatus.INVALID, reason="INVALID_NUMBER")
+    if phonenumbers.number_type(parsed) not in _PHONE_ALLOWED_TYPES:
+        return PhoneNormalizationResult(PhoneNormalizationStatus.INVALID, reason="UNSUPPORTED_NUMBER_TYPE")
+
+    return PhoneNormalizationResult(
+        PhoneNormalizationStatus.NORMALIZED,
+        e164=phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164),
+    )
 
 
 def find_business_duplicate_people(*, primary_email="", mobile="", exclude_person_id=None):

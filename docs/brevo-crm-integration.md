@@ -265,25 +265,34 @@ reduces accidental authority leakage and provider-specific coupling.
 
 ## 6. Mobile number handling
 
-The current helper in `people.services.normalize_mobile` removes common visual
-separators only. Brevo synchronization then accepts a value only when it is
-already internationally representable:
+`people.services.normalize_mobile` remains the conservative CRM identity and
+duplicate-matching normalizer. It removes presentation separators only and is
+not an E.164 normalizer. Provider synchronization uses the separate
+`normalize_phone_for_provider` helper and its structured `EMPTY`, `NORMALIZED`,
+`AMBIGUOUS`, and `INVALID` result.
 
-- a `+` prefix followed by 7–15 digits; or
-- a `00` prefix followed by 7–15 digits.
-
-For example, the formatting-only transformation:
+Explicit international values are parsed with Google's `phonenumbers` library
+without assuming a region. A leading `00` is converted to `+`, and the value
+sent to Brevo is canonical E.164. For example:
 
 ```text
 +44 7911 123456 -> +447911123456
+0044 7911 123456 -> +447911123456
 ```
 
-is safe because the country code is already present. Ambiguous local values
-such as `0991000001` are not assigned a country and are omitted from the SMS
-payload. Blank mobile values are represented as an empty `SMS` attribute during
-profile synchronization so stale provider SMS data is cleared. Unsafe mobile
-values are omitted without failing a name/profile update. Mobile presence does
-not imply SMS consent or EMAIL marketing consent.
+National/local values require a reliable explicit ISO region. Elevate currently
+has no reliable per-Person phone-region field, so local values are classified
+as ambiguous and omitted; the system never assumes GB from location, postcode,
+organization, import history, or test data. The helper accepts mobile and
+`FIXED_LINE_OR_MOBILE` types and rejects known fixed-line, premium-rate,
+toll-free, shared-cost, VoIP, and other unsuitable types. Extensions are not
+silently stripped and are invalid for an SMS identity.
+
+`NORMALIZED` values are sent as SMS. `AMBIGUOUS` and `INVALID` values omit SMS
+without clearing an existing provider value. An intentionally blank CRM mobile
+continues to send an empty `SMS` attribute during profile synchronization so
+stale provider SMS data is cleared. Mobile presence or normalization does not
+create SMS or EMAIL marketing consent.
 
 Mobile/SMS is optional profile data. If Brevo specifically rejects a non-empty
 `SMS` value as an invalid phone during contact creation or an existing-contact
@@ -291,13 +300,13 @@ profile update, synchronization retries that same operation once without
 `SMS`, preserving the email identity and other approved attributes. The CRM
 mobile value and CRM marketing consent are never changed by this fallback. Other
 validation, authentication, access, rate-limit, identity, and provider errors
-do not trigger the fallback. Country-aware E.164 normalization remains a
-separate future TODO.
+do not trigger the fallback. The fallback remains required even for locally
+normalized E.164 values because Brevo remains an external validation boundary.
 
-Full country-aware E.164 normalization is not implemented. The future TODO is
-to normalize known-country numbers safely before synchronization; the system
-must not convert every leading `0` to `+44` because Elevate may contain people
-from multiple countries.
+CRM storage remains unchanged: Person.mobile is not rewritten, migrated, or
+made canonical. The existing Brevo invalid-phone fallback remains in place
+even after local validation because Brevo is still an external validation
+boundary. Future work may add explicit phone-region support to Person entry.
 
 ## 7. Marketing consent flow: CRM → Brevo
 
@@ -719,9 +728,11 @@ contact and test surname/mobile before testing any email identity change.
 
 ### Phone normalization
 
-Full country-aware E.164 normalization is not implemented. Ambiguous local
-numbers are omitted rather than guessed. Future work should use authoritative
-country information and must not blanket-convert a leading zero to `+44`.
+Brevo-bound phone values now use country-aware E.164 normalization. Person
+storage and CRM identity normalization remain unchanged. Ambiguous or invalid
+optional mobile values are omitted, while an otherwise eligible email Campaign
+recipient continues through provider preparation. A future read-only mobile
+audit command and explicit phone-region entry support remain separate TODOs.
 
 ### Email reconciliation
 
@@ -774,7 +785,7 @@ active automatic marketing provider.
 
 The following are non-implemented future milestones:
 
-1. Country-aware E.164 mobile normalization.
+1. Explicit phone-region support for national mobile entry.
 2. Explicit administrative identity repair/relink workflow.
 3. Additional provider outcome webhooks where justified.
 4. Post-`PREPARED` consent hardening and mutable-list removal.

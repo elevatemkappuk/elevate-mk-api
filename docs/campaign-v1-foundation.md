@@ -126,8 +126,12 @@ exact matching only, stable references, minimal approved profile fields, and
 no fuzzy identity matching or force merge. SMS is optional profile data. If
 Brevo rejects a non-empty optional SMS value specifically as an invalid phone,
 the same synchronization operation retries exactly once without SMS. CRM
-mobile and consent are unchanged. Country-aware E.164 normalization remains a
-separate future TODO.
+mobile and consent are unchanged. Provider-boundary E.164 normalization now
+canonicalizes explicit international values, requires reliable region context
+for national values, and omits ambiguous or invalid optional mobile values. An
+otherwise eligible email recipient is not excluded solely because SMS cannot be
+normalized. Blank mobile retains the intentional provider-side stale-SMS
+clearing behavior.
 
 ## Reconciliation review and retry
 
@@ -184,7 +188,8 @@ V1 does not include a full reconciliation management system, automatic
 unblock/resubscribe, force merge or automatic relink, saved audiences, tags,
 journeys, post-`PREPARED` consent removal from the mutable provider list,
 automatic list cleanup, campaign send/schedule controls, or a Brevo editor
-inside Elevate. Future work may add country-aware E.164 normalization,
+inside Elevate. Future work may add explicit phone-region support for national
+mobile entry,
 explicit administrative identity repair, stronger post-prepared consent
 hardening, and safe editor deep-linking. Folder handling should be revisited
 only if the Brevo plan exposes campaign folders.

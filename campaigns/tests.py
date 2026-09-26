@@ -12,7 +12,8 @@ from staff_access.models import StaffRole, StaffRoleAssignment
 from accounts.models import User
 
 from .models import Campaign, CampaignPreparation, CampaignRecipientSnapshot
-from .services import prepare_campaign_provider
+from .services import prepare_campaign_provider, prepare_campaign_snapshot
+from brevo_marketing.client import BrevoContact
 from brevo_marketing.exceptions import BrevoMarketingPropagationDelay
 from brevo_marketing.sync import BrevoPersonSyncOutcome, BrevoPersonSyncResult
 
@@ -129,6 +130,45 @@ class CampaignFoundationApiTests(TestCase):
         client.find_draft_campaign_by_name.return_value = None
         client.create_email_campaign_draft.return_value = SimpleNamespace(campaign_id=77)
         return client
+
+    def _prepare_email_only_campaign(self, mobile):
+        person = Person.objects.create(
+            first_name="ProviderPhone",
+            last_name="Boundary",
+            primary_email=f"provider-phone-{Person.objects.count()}@example.com",
+            mobile=mobile,
+        )
+        self._preference(person, MarketingPreference.State.OPTED_IN)
+        campaign = Campaign.objects.create(
+            name=f"Phone boundary {person.id}",
+            audience_selection={"q": "ProviderPhone", "relationship": [], "location": [], "industry": [], "career_stage": [], "interest": [], "skill": [], "tag": []},
+            audience_ordering="last_name",
+            created_by=self.admin,
+        )
+        prepare_campaign_snapshot(campaign_id=campaign.id, actor_user=self.admin)
+        client = self._provider_client()
+        client.get_marketing_list_id.return_value = 2
+        client.get_contact.return_value = None
+        client.create_contact.return_value = BrevoContact(
+            123 + person.id,
+            person.primary_email,
+            {"FIRSTNAME": person.first_name, "LASTNAME": person.last_name},
+            (2,), (), False, False,
+        )
+        result = prepare_campaign_provider(campaign_id=campaign.id, actor_user=self.admin, client=client, sleep_fn=lambda _seconds: None)
+        return result, client
+
+    def test_campaign_provider_preparation_keeps_ambiguous_mobile_email_only(self):
+        result, client = self._prepare_email_only_campaign("07911123456")
+
+        self.assertEqual(result.status, Campaign.Status.PREPARED)
+        self.assertNotIn("SMS", client.create_contact.call_args.kwargs["attributes"])
+
+    def test_campaign_provider_preparation_keeps_invalid_mobile_email_only(self):
+        result, client = self._prepare_email_only_campaign("+44 7911 ext 2")
+
+        self.assertEqual(result.status, Campaign.Status.PREPARED)
+        self.assertNotIn("SMS", client.create_contact.call_args.kwargs["attributes"])
 
     @patch("campaigns.services.synchronize_person_to_brevo")
     def test_provider_preparation_rechecks_consent_and_does_not_add_post_snapshot_opt_out(self, sync):
