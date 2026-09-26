@@ -6,7 +6,7 @@ from django.db import transaction
 
 from audit.models import AuditEvent
 from brevo_marketing.client import BrevoContact, BrevoMarketingClient
-from brevo_marketing.exceptions import BrevoMarketingIdentityConflictError, BrevoMarketingValidationError
+from brevo_marketing.exceptions import BrevoMarketingIdentityConflictError, BrevoMarketingValidationError, is_invalid_phone_error
 from external_references.models import ExternalPersonReference
 from external_references.services import attach_person_reference
 from marketing_preferences.models import MarketingPreference
@@ -85,6 +85,42 @@ def _same_approved_attributes(contact: BrevoContact, person):
     return all(contact.attributes.get(key, "") == value for key, value in _approved_attributes(person).items())
 
 
+def _attributes_without_sms(attributes):
+    return {key: value for key, value in attributes.items() if key != "SMS"}
+
+
+def _create_contact_with_optional_sms_fallback(*, client, email, attributes, list_id):
+    try:
+        return client.create_contact(email=email, attributes=attributes, list_id=list_id)
+    except BrevoMarketingValidationError as error:
+        if "SMS" not in attributes or not attributes["SMS"] or not is_invalid_phone_error(error):
+            raise
+        return client.create_contact(
+            email=email,
+            attributes=_attributes_without_sms(attributes),
+            list_id=list_id,
+        )
+
+
+def _update_contact_with_optional_sms_fallback(*, client, contact_id, attributes=None, list_id=None, email_blacklisted=None):
+    try:
+        client.update_contact(
+            contact_id=contact_id,
+            attributes=attributes,
+            list_id=list_id,
+            email_blacklisted=email_blacklisted,
+        )
+    except BrevoMarketingValidationError as error:
+        if not attributes or not attributes.get("SMS") or not is_invalid_phone_error(error):
+            raise
+        client.update_contact(
+            contact_id=contact_id,
+            attributes=_attributes_without_sms(attributes),
+            list_id=list_id,
+            email_blacklisted=email_blacklisted,
+        )
+
+
 def _provider_state(contact, list_id):
     if contact.email_blacklisted:
         return "EMAIL_CAMPAIGN_BLOCKLISTED"
@@ -137,7 +173,12 @@ def synchronize_person_to_brevo(*, person_id, client=None, actor_user=None):
                 outcome=BrevoPersonSyncOutcome.SKIPPED_CONSENT_OPTED_OUT_NO_CONTACT,
                 reason="NO_BREVO_CONTACT",
             )
-        contact = client.create_contact(email=email, attributes=_approved_attributes(person), list_id=list_id)
+        contact = _create_contact_with_optional_sms_fallback(
+            client=client,
+            email=email,
+            attributes=_approved_attributes(person),
+            list_id=list_id,
+        )
         operation = BrevoPersonSyncOutcome.CREATED_MARKETING_CONTACT
     else:
         if contact.email and contact.email != email:
@@ -175,7 +216,8 @@ def synchronize_person_to_brevo(*, person_id, client=None, actor_user=None):
             needs_attributes = not _same_approved_attributes(contact, person)
             needs_list = list_id not in contact.list_ids
             if needs_attributes or needs_list:
-                client.update_contact(
+                _update_contact_with_optional_sms_fallback(
+                    client=client,
                     contact_id=contact.contact_id,
                     attributes=_approved_attributes(person) if needs_attributes else None,
                     list_id=list_id if needs_list else None,
@@ -199,7 +241,7 @@ def synchronize_person_to_brevo(*, person_id, client=None, actor_user=None):
         contact_id=contact.contact_id,
         reference_id=reference.id,
         provider_state=_provider_state(contact, list_id),
-        reason=mobile_reason,
+        reason=protected_state if operation == BrevoPersonSyncOutcome.SKIPPED_PROTECTED_PROVIDER_STATE else mobile_reason,
     )
 
 
@@ -393,7 +435,11 @@ def synchronize_person_profile_to_brevo(*, person_id, client=None):
         if (contact.attributes.get(key) or "") != value
     }
     if changed_attributes:
-        client.update_contact(contact_id=contact.contact_id, attributes=changed_attributes)
+        _update_contact_with_optional_sms_fallback(
+            client=client,
+            contact_id=contact.contact_id,
+            attributes=changed_attributes,
+        )
         outcome = BrevoPersonSyncOutcome.UPDATED_PERSON_PROFILE
     else:
         outcome = BrevoPersonSyncOutcome.PROFILE_ALREADY_SYNCHRONIZED

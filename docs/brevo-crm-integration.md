@@ -3,8 +3,10 @@
 This is the canonical technical reference for the implemented Elevate MK CRM
 integration with Brevo Marketing. It describes the current Django API,
 durable synchronization jobs, worker, contact mapping, and inbound marketing
-unsubscribe webhook, and read-only Audience Preview. It is not a design for
-unimplemented campaign or bidirectional-profile features.
+unsubscribe webhook, read-only Audience Preview, and Campaign V1 provider
+preparation. Campaign architecture and lifecycle are consolidated in the
+[Campaign V1 foundation](campaign-v1-foundation.md); this document is the
+provider and integration reference.
 
 ## 1. Purpose and scope
 
@@ -59,8 +61,33 @@ The staging test also verified that a Person first-name change updates the
 same Brevo contact through a `PERSON_PROFILE` job. The provider-originated
 unsubscribe retained `source=BREVO` and created no outbound echo job.
 
-This is a staging verification statement, not a claim that Campaign V1,
-bulk campaign workflows, or automated journeys are implemented.
+Staging also proved the controlled primary-email migration path for an existing
+Brevo contact:
+
+```text
+CRM email A -> CRM email B
+    -> PERSON_EMAIL_MIGRATION snapshot job
+    -> Brevo lookup by stable numeric contact ID
+    -> Brevo email B on the same contact/reference
+```
+
+The migration is only automatic for an active BUSINESS Person with current
+EMAIL `OPTED_IN` consent, a known active reference, an unrestricted provider
+contact, and an unclaimed target email. The contact is re-read after the
+update, and the existing `ExternalPersonReference` remains linked to the same
+Brevo contact ID. A retry after provider acceptance is idempotent.
+
+Restricted contacts are not migrated. If Brevo reports the contact as
+email-blocklisted or unsubscribed from the configured list, the job completes
+as `RECONCILIATION_REQUIRED` without changing the email, clearing the provider
+restriction, resubscribing the contact, or moving the reference. The same
+reconciliation outcome applies to missing/ambiguous identity, target-email
+collisions, invalid or cleared CRM email, archived/non-BUSINESS People, and
+`UNKNOWN` or `OPTED_OUT` CRM consent.
+
+Campaign V1 is implemented for CRM audience preparation and Brevo draft
+preparation. It does not implement bulk synchronization, automated journeys,
+email design, sending, or scheduling inside Elevate.
 
 ## 2. Systems of record and authority boundaries
 
@@ -162,6 +189,8 @@ Settings are loaded from the backend environment in `config/settings.py`.
 | --- | --- | --- | --- |
 | `BREVO_API_KEY` | Brevo API authentication | Empty by default; required for Brevo API operations | Worker, manual/diagnostic marketing commands, and transactional Brevo operations |
 | `BREVO_MARKETING_LIST_ID` | Initial marketing list and optional webhook list scope | Empty by default; must be a positive integer for list-based sync and supplied-list webhook validation | Worker and webhook web process |
+| `BREVO_MARKETING_CAMPAIGN_FOLDER_ID` | Optional Brevo contact folder for Campaign V1 execution lists | Blank/unset is valid; when blank, preparation derives the actual folder of `BREVO_MARKETING_LIST_ID`; configured values must be positive integers | Web process/provider preparation |
+| `BREVO_MARKETING_STARTER_TEMPLATE_ID` | Brevo template used for Campaign V1 drafts | Empty by default; required for provider preparation and must be a positive integer | Web process/provider preparation |
 | `MARKETING_SYNC_PROVIDER` | Active marketing provider selector | `BREVO`; unsupported values fail checks/runtime | Web and worker |
 | `BREVO_MARKETING_WEBHOOK_USERNAME` | Inbound webhook Basic Auth username | Empty by default; required to accept webhook traffic | Web process |
 | `BREVO_MARKETING_WEBHOOK_PASSWORD` | Inbound webhook Basic Auth password | Empty by default; required to accept webhook traffic | Web process |
@@ -174,11 +203,37 @@ staging marketing list is:
 
 ```text
 ELEVATE STAGING | Marketing Contacts
-List ID: 4
 ```
 
 This documentation intentionally excludes API keys, webhook passwords,
 Authorization headers, and other secrets.
+
+### Read-only Person integration inspection
+
+CRM staff with an active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` role may
+inspect one Person's safe Brevo integration projection at:
+
+```text
+GET /api/v1/people/{person_id}/brevo-integration/
+```
+
+The response includes the effective EMAIL marketing preference and a bounded
+integration state: `CONNECTED`, `RESTRICTED`, `CONTACT_MISSING`,
+`IDENTITY_CONFLICT`, `NOT_CONNECTED`, or `UNKNOWN`. It intentionally omits
+Brevo contact IDs, external reference IDs, credentials, raw provider errors,
+and provider payloads. The safe diagnostic reason codes include
+`BREVO_CONTACT_RESTRICTED`, `BREVO_CONTACT_NOT_FOUND_FOR_EXISTING_REFERENCE`,
+`BREVO_EMAIL_IDENTITY_MISMATCH`, `BREVO_CRM_EMAIL_MISSING`,
+`BREVO_CONTACT_LINKED_TO_OTHER_PERSON`, and the fallback
+`BREVO_CONTACT_IDENTITY_CONFLICT`. `CONTACT_MISSING` is marked
+`can_reconcile` only for a CRM administrator; this is a capability indicator,
+not an automatic repair action. Restrictive Brevo state remains protected:
+Elevate does not automatically unblock or resubscribe a contact.
+
+This endpoint is read-only. It does not synchronize contacts, change CRM
+consent, alter references or list membership, enqueue jobs, or change campaign
+state. A provider or transport failure is represented as a safe `UNKNOWN`
+inspection result.
 
 `BREVO_API_KEY` is an API credential and is never printed, persisted in
 references, or included in operational output. Webhook Basic credentials are
@@ -229,6 +284,15 @@ payload. Blank mobile values are represented as an empty `SMS` attribute during
 profile synchronization so stale provider SMS data is cleared. Unsafe mobile
 values are omitted without failing a name/profile update. Mobile presence does
 not imply SMS consent or EMAIL marketing consent.
+
+Mobile/SMS is optional profile data. If Brevo specifically rejects a non-empty
+`SMS` value as an invalid phone during contact creation or an existing-contact
+profile update, synchronization retries that same operation once without
+`SMS`, preserving the email identity and other approved attributes. The CRM
+mobile value and CRM marketing consent are never changed by this fallback. Other
+validation, authentication, access, rate-limit, identity, and provider errors
+do not trigger the fallback. Country-aware E.164 normalization remains a
+separate future TODO.
 
 Full country-aware E.164 normalization is not implemented. The future TODO is
 to normalize known-country numbers safely before synchronization; the system
@@ -413,7 +477,10 @@ clear stale provider data. A safe international mobile is sent as `SMS`;
 unsafe mobile is omitted and returns the safe reason
 `MOBILE_OMITTED_UNSAFE_FORMAT`. Profile synchronization never changes
 MarketingPreference, consent, list membership, blocklisting, or list-unsubscribe
-state. Successful updates use `UPDATED_PERSON_PROFILE`.
+state. If Brevo rejects the optional non-empty `SMS` value as an invalid phone,
+the update is retried once without `SMS`; an intentionally empty `SMS` value
+still goes through unchanged to clear stale provider data. Successful updates
+use `UPDATED_PERSON_PROFILE`.
 
 ## 15. Email identity changes and controlled migration
 
@@ -635,6 +702,8 @@ The implemented paths cover the following behaviors:
 - webhook unsubscribe recording CRM `OPTED_OUT` with source `BREVO`;
 - durable webhook receipt/replay protection;
 - no outbound Brevo echo job from a provider-originated unsubscribe;
+- controlled primary-email migration on the same stable Brevo contact ID;
+- restricted email-migration reconciliation without provider-state mutation;
 - profile surname/name updates through `PERSON_PROFILE`;
 - safe international mobile mapping to `SMS`;
 - blank mobile clearing through an empty `SMS` attribute;
@@ -669,10 +738,27 @@ analytics are not inbound CRM integrations.
 
 ### Audience and campaign functionality
 
-Audience selection/preview is implemented as a read-only, provider-neutral
-backend and Staff CRM workflow. Bulk audience synchronization, saved segments,
-campaign workflows, tags, journeys, and background campaign automation are not
-implemented by this integration.
+Audience selection/preview is implemented as a provider-neutral backend and
+Staff CRM workflow. Campaign V1 provider preparation now re-checks CRM consent,
+reuses the established contact identity/synchronization path, creates a
+dedicated Brevo execution list, and creates a draft using the configured
+starter template. The broad marketing list is not the campaign recipient
+target. Elevate owns audience, consent, recipient evidence, and preparation;
+Brevo owns content editing, test sends, scheduling, sending, and delivery. The
+draft request includes a deterministic, provider-required starter subject
+derived from the Elevate campaign name; it is an editable placeholder/default,
+not a new Elevate content field. The final subject and email content remain
+owned and editable in Brevo.
+The Staff CRM campaign workflow, reconciliation review, and safe retry are
+implemented. Post-`PREPARED` opt-out removal from the mutable provider list,
+automatic list cleanup, saved audiences, tags, journeys, and background
+campaign automation remain unimplemented. See the [Campaign V1 foundation](campaign-v1-foundation.md)
+for states, endpoint contract, retry/idempotency, and staff workflow.
+
+Brevo email campaign creation does not receive a folder field. The optional
+`BREVO_MARKETING_CAMPAIGN_FOLDER_ID` only controls placement of the dedicated
+contact list. When it is blank, the provider client reads the actual folder of
+the configured base marketing list; it never invents or defaults a folder ID.
 
 ### Deployment
 
@@ -688,11 +774,11 @@ active automatic marketing provider.
 
 The following are non-implemented future milestones:
 
-1. Bulk Brevo audience/list synchronization.
-2. CRM campaign workflow integration.
+1. Country-aware E.164 mobile normalization.
+2. Explicit administrative identity repair/relink workflow.
 3. Additional provider outcome webhooks where justified.
-4. Country-aware E.164 mobile normalization.
-5. Operational reconciliation and admin tooling where needed.
+4. Post-`PREPARED` consent hardening and mutable-list removal.
+5. Saved audiences, tags, journeys, and other campaign automation.
 
 ## Audience selection and read-only preview
 
@@ -742,12 +828,12 @@ references, synchronization jobs, audit events, audience definitions, or
 snapshots. Provider restrictive state remains a synchronization/deliverability
 concern rather than CRM eligibility.
 
-The selection and eligibility service is intentionally reusable by a future
-bulk Brevo synchronization operation. A future bulk operation must re-evaluate
-the current CRM state immediately before creating provider work rather than
-treating a prior preview as an immutable consent decision. The Staff CRM
-Audience Preview UI is implemented; bulk sync, campaign, saved audience, and
-snapshot workflows remain out of scope.
+The selection and eligibility service is intentionally reusable by future bulk
+Brevo synchronization. Any future bulk operation must re-evaluate current CRM
+state immediately before creating provider work rather than treating a prior
+preview as an immutable consent decision. Audience Preview, Campaign V1
+snapshot creation, and Campaign V1 provider preparation are implemented;
+saved audiences, bulk sync, and campaign automation remain out of scope.
 
 ## Related documentation
 
