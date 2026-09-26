@@ -114,11 +114,13 @@ The API intentionally does not expose `record_type`, User internals, Django admi
 
 Contact and Member creation use the centralized People identity policy. It normalizes email by trimming/lowercasing and mobile by removing presentation punctuation. Candidate matching considers BUSINESS Persons, including archived records, and never treats a name alone as sufficient identity evidence.
 
-When email and/or mobile collide with an existing Business Person, the initial create response requires staff review instead of silently creating or merging. A reviewed retry must include the explicit identity override confirmation where the policy requires it. The backend recomputes evidence during the retry; stale evidence returns a controlled conflict rather than trusting the client. Audit metadata records safe collision context only, not raw sensitive values.
+When email and/or mobile collide with an existing Business Person, the initial write response requires staff review instead of silently creating or merging. A mobile-only collision is a `WARNING`: shared family, household, work, or business numbers are allowed, but staff must explicitly acknowledge the narrow duplicate-mobile warning. Email-only and email-plus-mobile collisions remain `BLOCKING` and cannot be bypassed by that acknowledgement. A reviewed retry recomputes evidence; stale evidence returns a controlled conflict rather than trusting the client. Override audit metadata records the warning and matched Person IDs without adding raw mobile values.
 
-The collision response is the structured `IDENTITY_COLLISION` `409`; the explicit retry uses `confirm_identity_override` with the reviewed candidate IDs and collision type. If those facts changed, `IDENTITY_COLLISION_STALE` prevents a decision based on outdated evidence.
+Create responses use structured `IDENTITY_COLLISION` `409` payloads with `severity` and `match_reasons`. The explicit create retry uses `confirm_identity_override` with reviewed candidate IDs and collision type, and only a current `MOBILE_COLLISION` can be overridden. Person PATCH mobile warnings use `duplicate_person` with `severity: WARNING`, `match_reasons: ["MOBILE"]`, safe matched-Person summaries, and the narrow `allow_duplicate_mobile: true` retry field. If the facts change, `IDENTITY_COLLISION_STALE` prevents a decision based on outdated evidence. Duplicate responses intentionally omit matched email and mobile values; staff can review the linked Person through the normal People UI.
 
-This policy is shared by normal CRM creation and historical-import reconciliation rules. See [Historical Imports backend guide](historical-imports-backend.md) for import-specific resolution and provenance.
+The CRM's conservative `normalize_mobile()` remains the duplicate-comparison boundary. It is separate from the provider-only E.164 normalizer used by Brevo synchronization. Shared mobile equality never merges Brevo contacts, changes consent, or alters Campaign eligibility.
+
+The matching/classification signals are shared with historical-import reconciliation, but imports retain their separate review workflow and are not given the interactive PATCH acknowledgement contract. See [Historical Imports backend guide](historical-imports-backend.md) for import-specific resolution and provenance.
 
 ## Lifecycle, Audit, and Imports
 

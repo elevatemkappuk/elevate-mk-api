@@ -183,6 +183,7 @@ class PersonCreateSerializer(IdentityOverrideCreateSerializerMixin, StrictPerson
 
 
 class PersonUpdateSerializer(StrictPersonWriteSerializer):
+    allow_duplicate_mobile = serializers.BooleanField(required=False, default=False, write_only=True)
     first_name = serializers.CharField(max_length=150, required=False)
     last_name = serializers.CharField(max_length=150, required=False)
 
@@ -195,11 +196,13 @@ class PersonMemberCreateSerializer(IdentityOverrideCreateSerializerMixin, Strict
 class DuplicatePersonMatchSerializer(serializers.ModelSerializer):
     class Meta:
         model = Person
-        fields = ("id", "first_name", "last_name", "primary_email", "mobile", "archived_at")
+        fields = ("id", "first_name", "last_name", "archived_at")
 
 
 class IdentityCollisionResponseSerializer(serializers.Serializer):
     code = serializers.ChoiceField(choices=("IDENTITY_COLLISION", "IDENTITY_COLLISION_STALE"))
+    severity = serializers.ChoiceField(choices=("BLOCKING", "WARNING"))
+    match_reasons = serializers.ListField(child=serializers.ChoiceField(choices=("EMAIL", "MOBILE")))
     detail = serializers.CharField()
     collision = ReviewedIdentityCollisionSerializer()
     candidates = DuplicatePersonMatchSerializer(many=True)

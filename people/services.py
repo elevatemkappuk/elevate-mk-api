@@ -23,6 +23,19 @@ class CreateNewIdentityPolicy:
     requires_strong_confirmation: bool
     is_safe_to_create: bool
 
+    @property
+    def severity(self):
+        return "WARNING" if self.collision == CreateNewIdentityCollision.MOBILE_COLLISION else "BLOCKING" if self.collision != CreateNewIdentityCollision.NO_BLOCKING_COLLISION else None
+
+    @property
+    def match_reasons(self):
+        reasons = []
+        if self.collision in (CreateNewIdentityCollision.EMAIL_COLLISION, CreateNewIdentityCollision.EMAIL_AND_MOBILE_COLLISION):
+            reasons.append("EMAIL")
+        if self.collision in (CreateNewIdentityCollision.MOBILE_COLLISION, CreateNewIdentityCollision.EMAIL_AND_MOBILE_COLLISION):
+            reasons.append("MOBILE")
+        return tuple(reasons)
+
     def review_evidence(self) -> dict:
         return {
             "collision": self.collision.value,
@@ -147,11 +160,15 @@ def evaluate_create_new_identity(
     mobile="",
     staff_confirmed_different=False,
     confirm_identity_override=False,
+    exclude_person_id=None,
+    mobile_only_override=False,
 ):
     """Apply the CRM identity policy for a proposed separate BUSINESS Person."""
     normalized_email = normalize_email(primary_email)
     normalized_mobile = normalize_mobile(mobile)
     queryset = Person.objects.business()
+    if exclude_person_id is not None:
+        queryset = queryset.exclude(pk=exclude_person_id)
 
     email_matches = list(queryset.filter(primary_email__iexact=normalized_email)) if normalized_email else []
     mobile_matches = []
@@ -182,7 +199,18 @@ def evaluate_create_new_identity(
         requires_review=requires_review,
         requires_strong_confirmation=requires_strong_confirmation,
         is_safe_to_create=(not requires_review) or (
-            staff_confirmed_different and (not requires_strong_confirmation or confirm_identity_override)
+            staff_confirmed_different
+            and (
+                (
+                    mobile_only_override
+                    and collision == CreateNewIdentityCollision.MOBILE_COLLISION
+                    and confirm_identity_override
+                )
+                or (
+                    not mobile_only_override
+                    and (not requires_strong_confirmation or confirm_identity_override)
+                )
+            )
         ),
     )
 

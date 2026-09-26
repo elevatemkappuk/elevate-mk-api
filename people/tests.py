@@ -1251,7 +1251,7 @@ class PersonWriteLifecycleApiTests(TestCase):
         self.assertIsNotNone(response.data["candidates"][0]["archived_at"])
         self.assertNotIn("record_type", response.data["candidates"][0])
 
-    def test_confirmed_contact_identity_overrides_require_current_reviewed_evidence(self):
+    def test_email_identity_collision_remains_blocking_even_with_override_payload(self):
         existing = Person.objects.create(first_name="Existing", last_name="Person", primary_email="existing@example.com")
         self.authenticate(self.admin_user)
         payload = self.person_payload(
@@ -1262,14 +1262,83 @@ class PersonWriteLifecycleApiTests(TestCase):
 
         response = self.client.post(self.create_url, payload, format="json")
 
-        self.assertEqual(response.status_code, 201)
-        created = Person.objects.get(pk=response.data["id"])
-        self.assertEqual(created.primary_email, "existing@example.com")
-        event = AuditEvent.objects.get(action=AuditEvent.Action.PERSON_CREATED, entity_id=str(created.id))
-        self.assertEqual(event.metadata["identity_collision"], "EMAIL_COLLISION")
-        self.assertEqual(event.metadata["identity_collision_person_ids"], [str(existing.id)])
-        self.assertNotIn("primary_email", event.metadata)
-        self.assertNotIn("mobile", event.metadata)
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["code"], "IDENTITY_COLLISION")
+        self.assertEqual(response.data["severity"], "BLOCKING")
+        self.assertEqual(response.data["match_reasons"], ["EMAIL"])
+        self.assertFalse(Person.objects.filter(primary_email="existing@example.com", first_name="Amina").exists())
+
+    def test_mobile_only_duplicate_create_is_a_warning_with_safe_match_data(self):
+        existing = Person.objects.create(first_name="Existing", last_name="Person", mobile="991000001")
+        self.authenticate(self.admin_user)
+
+        response = self.client.post(
+            self.create_url,
+            self.person_payload(primary_email="new@example.com", mobile="99 100-0001"),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["code"], "IDENTITY_COLLISION")
+        self.assertEqual(response.data["severity"], "WARNING")
+        self.assertEqual(response.data["match_reasons"], ["MOBILE"])
+        self.assertEqual(response.data["collision"]["collision"], "MOBILE_COLLISION")
+        self.assertEqual(response.data["candidates"][0]["id"], existing.id)
+        self.assertNotIn("primary_email", response.data["candidates"][0])
+        self.assertNotIn("mobile", response.data["candidates"][0])
+
+    def test_mobile_only_duplicate_update_requires_narrow_acknowledgement_and_is_audited(self):
+        existing = Person.objects.create(first_name="Existing", last_name="Person", mobile="991000001")
+        person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")
+        self.authenticate(self.admin_user)
+
+        warning = self.client.patch(self.detail_url(person.id), {"mobile": "99 100-0001"}, format="json")
+
+        self.assertEqual(warning.status_code, 409)
+        self.assertEqual(warning.data["code"], "duplicate_person")
+        self.assertEqual(warning.data["severity"], "WARNING")
+        self.assertEqual(warning.data["match_reasons"], ["MOBILE"])
+        self.assertEqual(warning.data["matches"][0]["id"], existing.id)
+        self.assertFalse(AuditEvent.objects.filter(action=AuditEvent.Action.PERSON_UPDATED, entity_id=str(person.id)).exists())
+
+        saved = self.client.patch(
+            self.detail_url(person.id),
+            {"mobile": "99 100-0001", "allow_duplicate_mobile": True},
+            format="json",
+        )
+
+        self.assertEqual(saved.status_code, 200)
+        event = AuditEvent.objects.get(action=AuditEvent.Action.PERSON_UPDATED, entity_id=str(person.id))
+        self.assertEqual(event.metadata["duplicate_mobile_override"], True)
+        self.assertEqual(event.metadata["duplicate_mobile_match_person_ids"], [str(existing.id)])
+
+    def test_mobile_override_does_not_bypass_email_collision(self):
+        existing = Person.objects.create(first_name="Existing", last_name="Person", primary_email="existing@example.com", mobile="991000001")
+        person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")
+        self.authenticate(self.admin_user)
+
+        response = self.client.patch(
+            self.detail_url(person.id),
+            {"primary_email": existing.primary_email, "mobile": "991000001", "allow_duplicate_mobile": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["code"], "IDENTITY_COLLISION")
+        self.assertEqual(response.data["severity"], "BLOCKING")
+        self.assertEqual(response.data["match_reasons"], ["EMAIL", "MOBILE"])
+
+    def test_mobile_warning_returns_multiple_safe_matches(self):
+        first = Person.objects.create(first_name="First", last_name="Person", mobile="991000001")
+        second = Person.objects.create(first_name="Second", last_name="Person", mobile="99 100-0001")
+        person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")
+        self.authenticate(self.admin_user)
+
+        response = self.client.patch(self.detail_url(person.id), {"mobile": "991000001"}, format="json")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual([match["id"] for match in response.data["matches"]], [first.id, second.id])
+        self.assertTrue(all(set(match) == {"id", "first_name", "last_name", "archived_at"} for match in response.data["matches"]))
 
     def test_stale_identity_override_is_rejected_without_creating_a_person(self):
         existing = Person.objects.create(first_name="Existing", last_name="Person", primary_email="existing@example.com")
