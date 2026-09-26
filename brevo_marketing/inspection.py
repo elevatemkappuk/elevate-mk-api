@@ -56,15 +56,33 @@ def inspect_person_brevo_integration(*, person, can_reconcile=False, client=None
                 ),
             )
 
-        if not normalize_email(person.primary_email) or normalize_email(contact.email) != normalize_email(person.primary_email):
-            return _identity_conflict(preference)
+        current_email = normalize_email(person.primary_email)
+        if not current_email:
+            return _identity_conflict(
+                preference,
+                reason_code="BREVO_CRM_EMAIL_MISSING",
+                title="CRM email required",
+                explanation="A current CRM email is required to verify this Brevo connection.",
+            )
+        if normalize_email(contact.email) != current_email:
+            return _identity_conflict(
+                preference,
+                reason_code="BREVO_EMAIL_IDENTITY_MISMATCH",
+                title="CRM and Brevo email identities differ",
+                explanation="The Brevo contact linked to this person uses a different email identity from the person's current CRM email.",
+            )
         if ExternalPersonReference.objects.filter(
             provider=BREVO_PROVIDER,
             reference_type=MARKETING_CONTACT_REFERENCE_TYPE,
             status=ExternalPersonReference.Status.ACTIVE,
             external_id=str(contact.contact_id),
         ).exclude(person=person).exists():
-            return _identity_conflict(preference)
+            return _identity_conflict(
+                preference,
+                reason_code="BREVO_CONTACT_LINKED_TO_OTHER_PERSON",
+                title="Brevo contact is linked elsewhere",
+                explanation="This Brevo contact is already associated with another CRM Person.",
+            )
 
         provider_state = _provider_state(contact, client.get_marketing_list_id())
         if provider_state is not None:
@@ -93,12 +111,16 @@ def inspect_person_brevo_integration(*, person, can_reconcile=False, client=None
         )
 
 
-def _identity_conflict(preference):
+def _identity_conflict(
+    preference,
+    *,
+    reason_code="BREVO_CONTACT_IDENTITY_CONFLICT",
+    title="Brevo contact identity needs review",
+    explanation="The CRM and Brevo identities could not be matched safely.",
+):
     return PersonBrevoInspection(
         preference,
         BrevoIntegrationInspection(
-            "IDENTITY_CONFLICT", "BREVO_CONTACT_IDENTITY_CONFLICT",
-            "Brevo contact identity needs review",
-            "The CRM and Brevo identities could not be matched safely.", False,
+            "IDENTITY_CONFLICT", reason_code, title, explanation, False,
         ),
     )

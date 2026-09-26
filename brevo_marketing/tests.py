@@ -24,7 +24,7 @@ from brevo_marketing.exceptions import (
     BrevoMarketingValidationError,
 )
 from brevo_marketing.services import inspect_brevo_marketing_configuration
-from brevo_marketing.inspection import inspect_person_brevo_integration
+from brevo_marketing.inspection import _identity_conflict, inspect_person_brevo_integration
 from brevo_marketing.jobs import (
     BrevoJobProcessResult,
     PERSON_EMAIL_MIGRATION_SYNC,
@@ -134,7 +134,7 @@ class PersonBrevoInspectionTests(TestCase):
             client=self.fake_client(self.contact(email="other@example.com")),
         )
         self.assertEqual(result.integration.status, "IDENTITY_CONFLICT")
-        self.assertEqual(result.integration.reason_code, "BREVO_CONTACT_IDENTITY_CONFLICT")
+        self.assertEqual(result.integration.reason_code, "BREVO_EMAIL_IDENTITY_MISMATCH")
 
     def test_missing_current_email_is_identity_conflict(self):
         self.reference()
@@ -142,6 +142,44 @@ class PersonBrevoInspectionTests(TestCase):
         self.person.save(update_fields=["primary_email", "updated_at"])
         result = inspect_person_brevo_integration(person=self.person, client=self.fake_client(self.contact()))
         self.assertEqual(result.integration.status, "IDENTITY_CONFLICT")
+        self.assertEqual(result.integration.reason_code, "BREVO_CRM_EMAIL_MISSING")
+
+    def test_mismatched_referenced_contact_email_has_safe_specific_reason(self):
+        self.reference()
+        result = inspect_person_brevo_integration(
+            person=self.person,
+            client=self.fake_client(self.contact(email="different@example.com")),
+        )
+        self.assertEqual(result.integration.status, "IDENTITY_CONFLICT")
+        self.assertEqual(result.integration.reason_code, "BREVO_EMAIL_IDENTITY_MISMATCH")
+        self.assertEqual(result.integration.title, "CRM and Brevo email identities differ")
+        self.assertNotIn("inspection@example.com", result.integration.explanation)
+        self.assertNotIn("different@example.com", result.integration.explanation)
+        self.assertNotIn("42", repr(result.integration))
+
+    def test_contact_linked_to_another_person_has_safe_specific_reason(self):
+        own_reference_queryset = Mock()
+        own_reference_queryset.first.return_value = type("Reference", (), {"external_id": "42"})()
+        linked_reference_queryset = Mock()
+        linked_reference_queryset.exclude.return_value.exists.return_value = True
+        with patch.object(
+            ExternalPersonReference.objects,
+            "filter",
+            side_effect=[own_reference_queryset, linked_reference_queryset],
+        ):
+            result = inspect_person_brevo_integration(person=self.person, client=self.fake_client(self.contact()))
+
+        self.assertEqual(result.integration.status, "IDENTITY_CONFLICT")
+        self.assertEqual(result.integration.reason_code, "BREVO_CONTACT_LINKED_TO_OTHER_PERSON")
+        self.assertNotIn("42", repr(result.integration))
+
+    def test_unclassified_identity_conflict_keeps_generic_safe_fallback(self):
+        preference = type(
+            "Preference", (), {"channel": "EMAIL", "state": "OPTED_IN", "source": "STAFF_RECORDED"}
+        )()
+        result = _identity_conflict(preference)
+        self.assertEqual(result.integration.reason_code, "BREVO_CONTACT_IDENTITY_CONFLICT")
+        self.assertEqual(result.integration.title, "Brevo contact identity needs review")
 
     def test_provider_error_is_safe_unknown(self):
         self.reference()
