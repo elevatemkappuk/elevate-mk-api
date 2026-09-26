@@ -10,6 +10,48 @@ preview/test, scheduling, sending, and delivery.
 The Angular workflow is described in the [Staff CRM frontend guide](../../elevate-mk-crm/docs/brevo-crm-frontend-guide.md).
 Provider identity and consent rules are defined in the [Brevo integration guide](brevo-crm-integration.md).
 
+## Campaign lifecycle management
+
+Archive state is independent of Campaign workflow state. `archived_at` and
+`archived_by` are lifecycle metadata; the Campaign keeps its existing status
+such as `DRAFT`, `SNAPSHOT_READY`, `PREPARED`, or
+`RECONCILIATION_REQUIRED`. The API exposes `is_archived` and backend-derived
+`can_archive`, `can_restore`, and `can_delete` capability flags.
+
+The lifecycle endpoints are:
+
+```text
+POST   /api/v1/marketing/campaigns/{id}/archive/
+POST   /api/v1/marketing/campaigns/{id}/restore/
+DELETE /api/v1/marketing/campaigns/{id}/
+```
+
+CRM Admins and Managers may archive, restore, or delete where the capability
+allows it. Viewers can retrieve and inspect campaigns but cannot perform these
+mutations. Archive and restore are idempotent and preserve workflow status,
+preparations, recipient snapshots, criteria, provider references, and audit
+history. They perform no Brevo calls, resource deletion, consent change, or
+external-reference change. An archived Campaign remains directly retrievable
+and its recipients/history remain readable, but all Campaign workflow
+mutations are blocked until it is restored.
+
+Normal Campaign listing defaults to active Campaigns. Use
+`?lifecycle=active`, `?lifecycle=archived`, or `?lifecycle=all` for explicit
+selection. This filter is independent of the workflow `status` field.
+
+Permanent deletion is limited to a genuinely unused `DRAFT`: it must have no
+preparation, snapshot, stored provider reference, provider activity/history,
+or other historical evidence. A prepared, snapshotted, reconciled, failed, or
+otherwise historical Campaign is never physically deleted; staff should
+archive it instead. An archived draft may still be deleted only when it meets
+the same unused-evidence rule. Deletion records a safe audit event before
+removing the Campaign and performs no Brevo operation.
+
+Archive, restore, and deletion lock the Campaign row inside a transaction.
+Preparation and provider-preparation services take the same row lock and check
+archive state before mutating workflow state, preventing an archive/delete
+race from removing historical evidence.
+
 ## End-to-end workflow
 
 1. Staff use People criteria in Audience Preview.

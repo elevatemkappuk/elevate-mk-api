@@ -24,9 +24,96 @@ from people.services import normalize_email
 from .models import Campaign, CampaignPreparation, CampaignRecipientSnapshot
 
 
+class CampaignLifecycleConflict(RuntimeError):
+    """A lifecycle operation is unsafe for the campaign's current evidence."""
+
+
+PROVIDER_AUDIT_ACTIONS = {
+    AuditEvent.Action.CAMPAIGN_PROVIDER_PREPARATION_STARTED,
+    AuditEvent.Action.CAMPAIGN_BREVO_LIST_CREATED,
+    AuditEvent.Action.CAMPAIGN_LIST_POPULATED,
+    AuditEvent.Action.CAMPAIGN_BREVO_DRAFT_CREATED,
+    AuditEvent.Action.CAMPAIGN_PROVIDER_PREPARATION_COMPLETED,
+    AuditEvent.Action.CAMPAIGN_RECONCILIATION_REQUIRED,
+    AuditEvent.Action.CAMPAIGN_PROVIDER_FAILURE,
+    AuditEvent.Action.CAMPAIGN_PROVIDER_RETRY,
+}
+
+
+def campaign_delete_block_reason(campaign):
+    if campaign.status != Campaign.Status.DRAFT:
+        return "Only a genuinely unused draft campaign can be permanently deleted. Archive it instead."
+    if campaign.current_preparation_id or campaign.preparations.exists():
+        return "This campaign has preparation history and should be archived instead."
+    if CampaignRecipientSnapshot.objects.filter(preparation__campaign=campaign).exists():
+        return "This campaign has recipient history and should be archived instead."
+    if AuditEvent.objects.filter(
+        entity_type="Campaign",
+        entity_id=str(campaign.id),
+        action__in=PROVIDER_AUDIT_ACTIONS,
+    ).exists():
+        return "This campaign has provider activity history and should be archived instead."
+    return None
+
+
+@transaction.atomic
+def archive_campaign(*, campaign_id, actor_user=None):
+    campaign = Campaign.objects.select_for_update().get(pk=campaign_id)
+    if campaign.archived_at is not None:
+        return campaign
+    now = timezone.now()
+    campaign.archived_at = now
+    campaign.archived_by = actor_user
+    campaign.save(update_fields=["archived_at", "archived_by", "updated_at"])
+    record_audit_event(
+        action=AuditEvent.Action.CAMPAIGN_ARCHIVED,
+        entity_type="Campaign",
+        entity_id=campaign.id,
+        actor_user=actor_user,
+        metadata={"campaign_id": campaign.id, "status": campaign.status},
+    )
+    return campaign
+
+
+@transaction.atomic
+def restore_campaign(*, campaign_id, actor_user=None):
+    campaign = Campaign.objects.select_for_update().get(pk=campaign_id)
+    if campaign.archived_at is None:
+        return campaign
+    campaign.archived_at = None
+    campaign.archived_by = None
+    campaign.save(update_fields=["archived_at", "archived_by", "updated_at"])
+    record_audit_event(
+        action=AuditEvent.Action.CAMPAIGN_RESTORED,
+        entity_type="Campaign",
+        entity_id=campaign.id,
+        actor_user=actor_user,
+        metadata={"campaign_id": campaign.id, "status": campaign.status},
+    )
+    return campaign
+
+
+@transaction.atomic
+def delete_unused_campaign(*, campaign_id, actor_user=None):
+    campaign = Campaign.objects.select_for_update().get(pk=campaign_id)
+    reason = campaign_delete_block_reason(campaign)
+    if reason:
+        raise CampaignLifecycleConflict(reason)
+    record_audit_event(
+        action=AuditEvent.Action.CAMPAIGN_DELETED,
+        entity_type="Campaign",
+        entity_id=campaign.id,
+        actor_user=actor_user,
+        metadata={"campaign_id": campaign.id, "status": campaign.status, "archived": campaign.is_archived},
+    )
+    campaign.delete()
+
+
 @transaction.atomic
 def prepare_campaign_snapshot(*, campaign_id, actor_user=None):
     campaign = Campaign.objects.select_for_update().get(pk=campaign_id)
+    if campaign.is_archived:
+        raise CampaignLifecycleConflict("Archived campaigns are read-only. Restore the campaign before preparing recipients.")
     if campaign.status == Campaign.Status.PREPARING:
         raise RuntimeError("Campaign preparation is already in progress.")
     if campaign.status != Campaign.Status.DRAFT:
@@ -148,6 +235,8 @@ def _mark_snapshot(snapshot, *, outcome, contact_id=None, error_code=None, error
 @transaction.atomic
 def prepare_campaign_provider(*, campaign_id, actor_user=None, client=None, sleep_fn=None, backoff_seconds=PROVIDER_BACKOFF_SECONDS):
     campaign = Campaign.objects.select_for_update().get(pk=campaign_id)
+    if campaign.is_archived:
+        raise CampaignLifecycleConflict("Archived campaigns are read-only. Restore the campaign before preparing in Brevo.")
     preparation = CampaignPreparation.objects.select_for_update().filter(
         pk=campaign.current_preparation_id,
         campaign=campaign,

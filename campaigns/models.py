@@ -22,6 +22,14 @@ class Campaign(models.Model):
     audience_ordering = models.CharField(max_length=40, default="last_name")
     audience_schema_version = models.PositiveSmallIntegerField(default=1)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="created_campaigns")
+    archived_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    archived_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="archived_campaigns",
+    )
     current_preparation = models.ForeignKey(
         "CampaignPreparation",
         null=True,
@@ -34,6 +42,10 @@ class Campaign(models.Model):
 
     class Meta:
         ordering = ["-created_at", "-id"]
+
+    @property
+    def is_archived(self):
+        return self.archived_at is not None
 
     def __str__(self):
         return f"{self.name} (#{self.pk})"

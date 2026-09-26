@@ -1,7 +1,7 @@
 from django.db import IntegrityError
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import generics, status
-from rest_framework.exceptions import APIException, NotFound
+from rest_framework.exceptions import APIException, NotFound, ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -9,7 +9,14 @@ from rest_framework.response import Response
 from .models import Campaign, CampaignRecipientSnapshot
 from .permissions import HasCampaignAccess, HasCampaignWriteAccess
 from .serializers import CampaignCreateSerializer, CampaignRecipientSnapshotSerializer, CampaignSerializer
-from .services import prepare_campaign_provider, prepare_campaign_snapshot
+from .services import (
+    CampaignLifecycleConflict,
+    archive_campaign,
+    delete_unused_campaign,
+    prepare_campaign_provider,
+    prepare_campaign_snapshot,
+    restore_campaign,
+)
 from audit.models import AuditEvent
 from audit.services import record_audit_event
 
@@ -36,6 +43,17 @@ class CampaignListCreateView(generics.ListCreateAPIView):
     def get_serializer_class(self):
         return CampaignCreateSerializer if self.request.method == "POST" else CampaignSerializer
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        lifecycle = self.request.query_params.get("lifecycle", "active")
+        if lifecycle == "active":
+            return queryset.filter(archived_at__isnull=True)
+        if lifecycle == "archived":
+            return queryset.filter(archived_at__isnull=False)
+        if lifecycle == "all":
+            return queryset
+        raise ValidationError({"lifecycle": "Use active, archived, or all."})
+
     @extend_schema(request=CampaignCreateSerializer, responses={201: CampaignSerializer}, tags=["Marketing Campaigns"])
     def create(self, request, *args, **kwargs):
         input_serializer = self.get_serializer(data=request.data)
@@ -53,14 +71,51 @@ class CampaignListCreateView(generics.ListCreateAPIView):
             actor_user=request.user,
             metadata={"campaign_id": campaign.id, "status": campaign.status},
         )
-        return Response(CampaignSerializer(campaign).data, status=status.HTTP_201_CREATED)
+        return Response(CampaignSerializer(campaign, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 
 class CampaignDetailView(generics.RetrieveAPIView):
     queryset = Campaign.objects.select_related("created_by", "current_preparation").all()
     serializer_class = CampaignSerializer
-    permission_classes = [IsAuthenticated, HasCampaignAccess]
     lookup_url_kwarg = "campaign_id"
+
+    def get_permissions(self):
+        return [IsAuthenticated(), (HasCampaignWriteAccess if self.request.method == "DELETE" else HasCampaignAccess)()]
+
+    def delete(self, request, *args, **kwargs):
+        try:
+            delete_unused_campaign(campaign_id=kwargs["campaign_id"], actor_user=request.user)
+        except Campaign.DoesNotExist:
+            raise NotFound("Campaign not found.")
+        except CampaignLifecycleConflict as error:
+            raise CampaignPreparationConflict(str(error))
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class CampaignArchiveView(generics.GenericAPIView):
+    queryset = Campaign.objects.all()
+    permission_classes = [IsAuthenticated, HasCampaignWriteAccess]
+    lookup_url_kwarg = "campaign_id"
+
+    def post(self, request, *args, **kwargs):
+        try:
+            campaign = archive_campaign(campaign_id=kwargs["campaign_id"], actor_user=request.user)
+        except Campaign.DoesNotExist:
+            raise NotFound("Campaign not found.")
+        return Response(CampaignSerializer(campaign, context={"request": request}).data)
+
+
+class CampaignRestoreView(generics.GenericAPIView):
+    queryset = Campaign.objects.all()
+    permission_classes = [IsAuthenticated, HasCampaignWriteAccess]
+    lookup_url_kwarg = "campaign_id"
+
+    def post(self, request, *args, **kwargs):
+        try:
+            campaign = restore_campaign(campaign_id=kwargs["campaign_id"], actor_user=request.user)
+        except Campaign.DoesNotExist:
+            raise NotFound("Campaign not found.")
+        return Response(CampaignSerializer(campaign, context={"request": request}).data)
 
 
 class CampaignPrepareView(generics.GenericAPIView):
@@ -74,9 +129,9 @@ class CampaignPrepareView(generics.GenericAPIView):
             campaign = prepare_campaign_snapshot(campaign_id=kwargs["campaign_id"], actor_user=request.user)
         except Campaign.DoesNotExist:
             raise NotFound("Campaign not found.")
-        except (RuntimeError, IntegrityError) as error:
+        except (CampaignLifecycleConflict, RuntimeError, IntegrityError) as error:
             raise CampaignPreparationConflict(str(error))
-        return Response(CampaignSerializer(campaign).data)
+        return Response(CampaignSerializer(campaign, context={"request": request}).data)
 
 
 class CampaignPrepareProviderView(generics.GenericAPIView):
@@ -90,9 +145,9 @@ class CampaignPrepareProviderView(generics.GenericAPIView):
             campaign = prepare_campaign_provider(campaign_id=kwargs["campaign_id"], actor_user=request.user)
         except Campaign.DoesNotExist:
             raise NotFound("Campaign not found.")
-        except (RuntimeError, IntegrityError) as error:
+        except (CampaignLifecycleConflict, RuntimeError, IntegrityError) as error:
             raise CampaignPreparationConflict(str(error))
-        return Response(CampaignSerializer(campaign).data)
+        return Response(CampaignSerializer(campaign, context={"request": request}).data)
 
 
 class CampaignRecipientListView(generics.ListAPIView):

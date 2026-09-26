@@ -1,7 +1,10 @@
 from rest_framework import serializers
 
 from marketing_preferences.serializers import AudienceSelectionSerializer, PEOPLE_ORDERING_CHOICES
+from staff_access.models import StaffRole
+from staff_access.permissions import user_has_any_active_staff_role
 from .models import Campaign, CampaignPreparation, CampaignRecipientSnapshot
+from .services import campaign_delete_block_reason
 
 
 class CampaignCreateSerializer(serializers.Serializer):
@@ -43,10 +46,10 @@ class CampaignPreparationSerializer(serializers.ModelSerializer):
         return obj.recipient_snapshots.filter(provider_outcome__in=("RECONCILIATION_REQUIRED", "PROVIDER_FAILED")).count()
 
     def get_can_start_provider_preparation(self, obj):
-        return obj.status == CampaignPreparation.Status.SNAPSHOT_READY
+        return obj.status == CampaignPreparation.Status.SNAPSHOT_READY and not obj.campaign.is_archived
 
     def get_can_retry_provider_preparation(self, obj):
-        return obj.status in (
+        return not obj.campaign.is_archived and obj.status in (
             CampaignPreparation.Status.PROVIDER_FAILED,
             CampaignPreparation.Status.RECONCILIATION_REQUIRED,
         )
@@ -54,11 +57,28 @@ class CampaignPreparationSerializer(serializers.ModelSerializer):
 
 class CampaignSerializer(serializers.ModelSerializer):
     current_preparation = CampaignPreparationSerializer(read_only=True)
+    is_archived = serializers.BooleanField(read_only=True)
+    can_archive = serializers.SerializerMethodField()
+    can_restore = serializers.SerializerMethodField()
+    can_delete = serializers.SerializerMethodField()
 
     class Meta:
         model = Campaign
-        fields = ("id", "name", "status", "audience_selection", "audience_ordering", "audience_schema_version", "created_by", "created_at", "updated_at", "current_preparation")
+        fields = ("id", "name", "status", "audience_selection", "audience_ordering", "audience_schema_version", "created_by", "created_at", "updated_at", "archived_at", "archived_by", "is_archived", "can_archive", "can_restore", "can_delete", "current_preparation")
         read_only_fields = fields
+
+    def _can_write(self):
+        request = self.context.get("request")
+        return bool(request and user_has_any_active_staff_role(request.user, (StaffRole.CRM_ADMIN, StaffRole.CRM_MANAGER)))
+
+    def get_can_archive(self, obj):
+        return self._can_write() and not obj.is_archived
+
+    def get_can_restore(self, obj):
+        return self._can_write() and obj.is_archived
+
+    def get_can_delete(self, obj):
+        return self._can_write() and campaign_delete_block_reason(obj) is None
 
 
 class CampaignRecipientSnapshotSerializer(serializers.ModelSerializer):
