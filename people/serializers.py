@@ -355,6 +355,7 @@ class BrevoIntegrationStateSerializer(serializers.Serializer):
     title = serializers.CharField()
     explanation = serializers.CharField()
     can_reconcile = serializers.BooleanField()
+    provider_profile_url = serializers.URLField(allow_null=True)
 
 
 class PersonBrevoIntegrationSerializer(serializers.Serializer):

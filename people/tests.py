@@ -38,6 +38,7 @@ class PersonBrevoIntegrationApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["provider"], "BREVO")
         self.assertEqual(response.data["integration"]["status"], "NOT_CONNECTED")
+        self.assertIsNone(response.data["integration"]["provider_profile_url"])
         self.assertEqual(response.data["marketing_preference"]["state"], "UNKNOWN")
 
     def test_non_crm_user_is_forbidden(self):

@@ -230,6 +230,16 @@ and provider payloads. The safe diagnostic reason codes include
 not an automatic repair action. Restrictive Brevo state remains protected:
 Elevate does not automatically unblock or resubscribe a contact.
 
+When an existing referenced Brevo contact was read successfully, the
+`integration` object may also contain the backend-generated
+`provider_profile_url`. This optional, best-effort Brevo web-app link uses the
+current UI route `https://app.brevo.com/contact/index/<numeric-id>` and is
+available for connected, restricted, and identity-conflict inspections. It is
+`null` when there is no safely resolved existing contact, including
+`NOT_CONNECTED`, `CONTACT_MISSING`, and `UNKNOWN`. The response does not expose
+the provider ID as a separate field; Brevo authentication and authorization
+remain the responsibility of the Brevo web application.
+
 This endpoint is read-only. It does not synchronize contacts, change CRM
 consent, alter references or list membership, enqueue jobs, or change campaign
 state. A provider or transport failure is represented as a safe `UNKNOWN`
