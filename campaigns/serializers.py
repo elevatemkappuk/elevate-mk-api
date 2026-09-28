@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.conf import settings
 
 from marketing_preferences.serializers import AudienceSelectionSerializer, PEOPLE_ORDERING_CHOICES
 from staff_access.models import StaffRole
@@ -33,10 +34,11 @@ class CampaignPreparationSerializer(serializers.ModelSerializer):
     provider_issue_count = serializers.SerializerMethodField()
     can_start_provider_preparation = serializers.SerializerMethodField()
     can_retry_provider_preparation = serializers.SerializerMethodField()
+    brevo_campaigns_url = serializers.SerializerMethodField()
 
     class Meta:
         model = CampaignPreparation
-        fields = ("id", "attempt_number", "status", "started_at", "completed_at", "selected_count", "included_count", "excluded_count", "provider_ready_count", "provider_issue_count", "can_start_provider_preparation", "can_retry_provider_preparation", "brevo_list_id", "brevo_campaign_id", "brevo_editor_url", "provider_error_code", "provider_error_message")
+        fields = ("id", "attempt_number", "status", "started_at", "completed_at", "selected_count", "included_count", "excluded_count", "provider_ready_count", "provider_issue_count", "can_start_provider_preparation", "can_retry_provider_preparation", "brevo_list_id", "brevo_campaigns_url", "brevo_editor_url", "provider_error_code", "provider_error_message")
         read_only_fields = fields
 
     def get_provider_ready_count(self, obj):
@@ -53,6 +55,11 @@ class CampaignPreparationSerializer(serializers.ModelSerializer):
             CampaignPreparation.Status.PROVIDER_FAILED,
             CampaignPreparation.Status.RECONCILIATION_REQUIRED,
         )
+
+    def get_brevo_campaigns_url(self, obj):
+        if not obj.brevo_campaign_id:
+            return None
+        return str(getattr(settings, "BREVO_MARKETING_CAMPAIGNS_URL", "") or "").strip() or None
 
 
 class CampaignSerializer(serializers.ModelSerializer):
@@ -84,5 +91,5 @@ class CampaignSerializer(serializers.ModelSerializer):
 class CampaignRecipientSnapshotSerializer(serializers.ModelSerializer):
     class Meta:
         model = CampaignRecipientSnapshot
-        fields = ("id", "person", "first_name_snapshot", "last_name_snapshot", "consent_state_snapshot", "decision", "exclusion_reason", "captured_at", "provider_outcome", "provider_error_code")
+        fields = ("id", "person", "email_snapshot", "first_name_snapshot", "last_name_snapshot", "consent_state_snapshot", "decision", "exclusion_reason", "captured_at", "provider_outcome", "provider_error_code")
         read_only_fields = fields

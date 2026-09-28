@@ -121,6 +121,14 @@ draft payload uses the Campaign name as a deterministic, provider-required
 editable starter subject. It is not a new Elevate content field; final subject
 and content remain owned by Brevo.
 
+When a Brevo draft resource exists, the Campaign preparation API exposes the
+backend-owned `brevo_campaigns_url` listing target. The current configured
+default is `https://app.brevo.com/campaigns/listing`; it is not constructed from
+the stored provider campaign ID. `brevo_editor_url` remains reserved for a
+future officially supported campaign-specific URL. Rendering or following the
+listing link performs no Brevo API request or write, and Campaign Detail does
+not expose the provider campaign ID as a staff-facing field.
+
 Contact synchronization uses the established Brevo identity/reference rules:
 exact matching only, stable references, minimal approved profile fields, and
 no fuzzy identity matching or force merge. SMS is optional profile data. If

@@ -41,10 +41,18 @@ class CommunityProfileSerializer(serializers.Serializer):
 class AttentionSerializer(serializers.Serializer):
     imports_needing_review = serializers.IntegerField(min_value=0)
     archived_people = serializers.IntegerField(min_value=0)
+    campaigns_needing_attention = serializers.IntegerField(min_value=0)
+
+
+class MarketingSerializer(serializers.Serializer):
+    active_campaigns = serializers.IntegerField(min_value=0)
+    ready_in_brevo = serializers.IntegerField(min_value=0)
+    needs_attention = serializers.IntegerField(min_value=0)
 
 
 class DashboardSerializer(serializers.Serializer):
     overview = OverviewSerializer()
     growth = GrowthSerializer()
     community_profile = CommunityProfileSerializer()
+    marketing = MarketingSerializer()
     attention = AttentionSerializer()

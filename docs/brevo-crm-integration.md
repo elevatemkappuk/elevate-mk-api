@@ -191,6 +191,7 @@ Settings are loaded from the backend environment in `config/settings.py`.
 | `BREVO_MARKETING_LIST_ID` | Initial marketing list and optional webhook list scope | Empty by default; must be a positive integer for list-based sync and supplied-list webhook validation | Worker and webhook web process |
 | `BREVO_MARKETING_CAMPAIGN_FOLDER_ID` | Optional Brevo contact folder for Campaign V1 execution lists | Blank/unset is valid; when blank, preparation derives the actual folder of `BREVO_MARKETING_LIST_ID`; configured values must be positive integers | Web process/provider preparation |
 | `BREVO_MARKETING_STARTER_TEMPLATE_ID` | Brevo template used for Campaign V1 drafts | Empty by default; required for provider preparation and must be a positive integer | Web process/provider preparation |
+| `BREVO_MARKETING_CAMPAIGNS_URL` | Backend-owned Brevo Campaigns listing target | `https://app.brevo.com/campaigns/listing` by default; never derived from a campaign ID | Campaign Detail API |
 | `MARKETING_SYNC_PROVIDER` | Active marketing provider selector | `BREVO`; unsupported values fail checks/runtime | Web and worker |
 | `BREVO_MARKETING_WEBHOOK_USERNAME` | Inbound webhook Basic Auth username | Empty by default; required to accept webhook traffic | Web process |
 | `BREVO_MARKETING_WEBHOOK_PASSWORD` | Inbound webhook Basic Auth password | Empty by default; required to accept webhook traffic | Web process |

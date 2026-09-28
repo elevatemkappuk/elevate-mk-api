@@ -1,7 +1,7 @@
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -117,6 +117,29 @@ class CampaignFoundationApiTests(TestCase):
         self.authenticate(self.viewer)
         self.assertEqual(self.client.get(f"{self.create_url}{response.data['id']}/").status_code, 200)
         self.assertEqual(self.client.get(self.create_url).status_code, 200)
+
+    @override_settings(BREVO_MARKETING_CAMPAIGNS_URL="https://app.brevo.example/campaigns/listing")
+    def test_campaigns_navigation_url_is_only_exposed_for_stored_provider_campaigns_and_survives_archive(self):
+        campaign = self._snapshot_ready_campaign()
+        self.authenticate(self.viewer)
+        response = self.client.get(f"{self.create_url}{campaign.id}/")
+        self.assertIsNone(response.data["current_preparation"]["brevo_campaigns_url"])
+        self.assertNotIn("brevo_campaign_id", response.data["current_preparation"])
+
+        preparation = campaign.current_preparation
+        preparation.brevo_campaign_id = 77
+        preparation.status = CampaignPreparation.Status.PREPARED
+        preparation.save(update_fields=["brevo_campaign_id", "status", "updated_at"])
+        campaign.status = Campaign.Status.PREPARED
+        campaign.archived_at = timezone.now()
+        campaign.save(update_fields=["status", "archived_at", "updated_at"])
+
+        with patch("campaigns.services.BrevoMarketingClient") as client:
+            response = self.client.get(f"{self.create_url}{campaign.id}/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["current_preparation"]["brevo_campaigns_url"], "https://app.brevo.example/campaigns/listing")
+        self.assertNotIn("brevo_campaign_id", response.data["current_preparation"])
+        self.assertFalse(client.called)
 
     def _snapshot_ready_campaign(self):
         response = self.create_campaign()
@@ -386,9 +409,21 @@ class CampaignFoundationApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         row = next(item for item in response.data["results"] if item["id"] == snapshot.id)
+        historical_email = snapshot.email_snapshot
+        self.included.primary_email = "changed-after-preparation@example.com"
+        self.included.save(update_fields=["primary_email", "updated_at"])
+        response = self.client.get(f"{self.create_url}{campaign.id}/recipients/?page_size=100")
+        self.assertEqual(response.status_code, 200)
+        row = next(item for item in response.data["results"] if item["id"] == snapshot.id)
+        self.assertEqual(row["email_snapshot"], historical_email)
+        self.assertEqual(row["first_name_snapshot"], snapshot.first_name_snapshot)
+        self.assertEqual(row["decision"], snapshot.decision)
         self.assertEqual(row["provider_error_code"], "BREVO_CONTACT_NOT_FOUND_FOR_EXISTING_REFERENCE")
         self.assertNotIn("brevo_contact_id", row)
         self.assertNotIn("provider_error_message", row)
+        snapshot.refresh_from_db()
+        self.assertEqual(snapshot.email_snapshot, historical_email)
+        self.assertEqual(Person.objects.get(pk=self.included.pk).primary_email, "changed-after-preparation@example.com")
 
     @patch("campaigns.services.synchronize_person_to_brevo")
     def test_reconciliation_retry_respects_current_consent_without_provider_sync(self, sync):
