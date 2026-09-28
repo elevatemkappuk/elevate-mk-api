@@ -35,7 +35,7 @@ from people.serializers import (
     PersonBrevoIntegrationSerializer,
     PersonUpdateSerializer,
 )
-from people.services import evaluate_create_new_identity, find_business_duplicate_people
+from people.services import CreateNewIdentityCollision, evaluate_create_new_identity
 from external_references.services import enqueue_coalesced_person_sync_job, enqueue_person_sync_job
 from people.querying import PeopleDirectoryQuery
 from memberships.models import Membership
@@ -80,14 +80,19 @@ class DuplicatePersonConflict(APIException):
     status_code = status.HTTP_409_CONFLICT
     default_code = "duplicate_person"
 
-    def __init__(self, matches):
-        super().__init__(
-            {
-                "detail": "A possible existing Person was found.",
+    def __init__(self, policy):
+        response_detail = {
+                "detail": "Another Person already uses this mobile number.",
                 "code": self.default_code,
-                "matches": DuplicatePersonMatchSerializer(matches, many=True).data,
-            }
-        )
+                "severity": policy.severity,
+                "match_reasons": list(policy.match_reasons),
+                "matches": DuplicatePersonMatchSerializer(
+                    Person.objects.business().filter(pk__in=policy.matched_person_ids).order_by("last_name", "first_name", "id"),
+                    many=True,
+                ).data,
+        }
+        super().__init__(response_detail)
+        self.detail = response_detail
 
 
 class IdentityCollisionConflict(APIException):
@@ -104,6 +109,8 @@ class IdentityCollisionConflict(APIException):
         response_detail = {
             "detail": detail,
             "code": "IDENTITY_COLLISION_STALE" if stale else self.default_code,
+            "severity": policy.severity,
+            "match_reasons": list(policy.match_reasons),
             "collision": {
                 "collision": policy.collision.value,
                 "person_ids": list(policy.matched_person_ids),
@@ -268,6 +275,7 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
         policy = evaluate_create_new_identity(
             primary_email=validated_data.get("primary_email", ""),
             mobile=validated_data.get("mobile", ""),
+            mobile_only_override=True,
         )
         if validated_data.get("confirm_identity_override"):
             reviewed_collision = validated_data.get("reviewed_collision", {})
@@ -277,20 +285,27 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
             }
             if not policy.matches_reviewed_evidence(reviewed_evidence):
                 raise IdentityCollisionConflict(policy, stale=True)
+            if policy.collision != CreateNewIdentityCollision.MOBILE_COLLISION:
+                raise IdentityCollisionConflict(policy)
             return
 
         if policy.requires_review:
             raise IdentityCollisionConflict(policy)
 
     @staticmethod
-    def raise_if_duplicate(*, primary_email="", mobile="", exclude_person_id=None, **_unused):
-        matches = find_business_duplicate_people(
+    def raise_if_duplicate(*, primary_email="", mobile="", exclude_person_id=None, allow_duplicate_mobile=False, **_unused):
+        policy = evaluate_create_new_identity(
             primary_email=primary_email,
             mobile=mobile,
             exclude_person_id=exclude_person_id,
         )
-        if matches:
-            raise DuplicatePersonConflict(matches)
+        if policy.collision == CreateNewIdentityCollision.NO_BLOCKING_COLLISION:
+            return policy
+        if policy.collision == CreateNewIdentityCollision.MOBILE_COLLISION and allow_duplicate_mobile:
+            return policy
+        if policy.collision == CreateNewIdentityCollision.MOBILE_COLLISION:
+            raise DuplicatePersonConflict(policy)
+        raise IdentityCollisionConflict(policy)
 
     @staticmethod
     def record_person_audit(action, actor_user, person, changes, metadata=None):
@@ -455,7 +470,9 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
             if person.archived_at is not None:
                 raise PersonLifecycleConflict("Archived people cannot be edited.")
 
+            allow_duplicate_mobile = input_serializer.validated_data.pop("allow_duplicate_mobile", False)
             changes = {}
+            duplicate_policy = None
             for field, new_value in input_serializer.validated_data.items():
                 old_value = getattr(person, field)
                 if old_value != new_value:
@@ -464,10 +481,11 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
             if changes:
                 changed_identity_fields = {"primary_email", "mobile"}.intersection(changes)
                 if changed_identity_fields:
-                    PeopleListView.raise_if_duplicate(
+                    duplicate_policy = PeopleListView.raise_if_duplicate(
                         primary_email=person.primary_email if "primary_email" not in changes else changes["primary_email"]["to"],
                         mobile=person.mobile if "mobile" not in changes else changes["mobile"]["to"],
                         exclude_person_id=person.id,
+                        allow_duplicate_mobile=allow_duplicate_mobile,
                     )
                 for field, change in changes.items():
                     setattr(person, field, change["to"])
@@ -476,8 +494,14 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
                 except DjangoValidationError as error:
                     raise serializers.ValidationError(error.message_dict)
                 person.save(update_fields=[*changes.keys(), "updated_at"])
+                audit_metadata = None
+                if allow_duplicate_mobile and duplicate_policy.collision == CreateNewIdentityCollision.MOBILE_COLLISION:
+                    audit_metadata = {
+                        "duplicate_mobile_override": True,
+                        "duplicate_mobile_match_person_ids": [str(person_id) for person_id in duplicate_policy.matched_person_ids],
+                    }
                 audit_event = PeopleListView.record_person_audit(
-                    AuditEvent.Action.PERSON_UPDATED, request.user, person, changes
+                    AuditEvent.Action.PERSON_UPDATED, request.user, person, changes, audit_metadata
                 )
                 if "primary_email" in changes:
                     previous_email = (changes["primary_email"]["from"] or "").strip().casefold()

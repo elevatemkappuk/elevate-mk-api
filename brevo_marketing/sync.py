@@ -12,7 +12,7 @@ from external_references.services import attach_person_reference
 from marketing_preferences.models import MarketingPreference
 from marketing_preferences.services import get_effective_marketing_preference
 from people.models import Person
-from people.services import normalize_mobile
+from people.services import PhoneNormalizationStatus, normalize_phone_for_provider
 
 
 BREVO_PROVIDER = "BREVO"
@@ -61,24 +61,10 @@ def _approved_attributes(person):
         "FIRSTNAME": person.first_name,
         "LASTNAME": person.last_name,
     }
-    sms = _safe_brevo_sms(person.mobile)
-    if sms:
-        attributes["SMS"] = sms
+    mobile = normalize_phone_for_provider(person.mobile)
+    if mobile.status == PhoneNormalizationStatus.NORMALIZED:
+        attributes["SMS"] = mobile.e164
     return attributes
-
-
-def _safe_brevo_sms(value):
-    """Return only an already-international mobile value; never infer a country."""
-    normalized = normalize_mobile(value)
-    if not normalized:
-        return None
-    if normalized.startswith("+"):
-        digits = normalized[1:]
-        return normalized if digits.isdigit() and 7 <= len(digits) <= 15 else None
-    if normalized.startswith("00"):
-        digits = normalized[2:]
-        return normalized if digits.isdigit() and 7 <= len(digits) <= 15 else None
-    return None
 
 
 def _same_approved_attributes(contact: BrevoContact, person):
@@ -150,7 +136,11 @@ def synchronize_person_to_brevo(*, person_id, client=None, actor_user=None):
         return BrevoPersonSyncResult(person_id=person.id, outcome=BrevoPersonSyncOutcome.SKIPPED_CONSENT_UNKNOWN, reason="MARKETING_CONSENT_UNKNOWN")
 
     client = client or BrevoMarketingClient.from_settings(require_marketing_list=True)
-    mobile_reason = "MOBILE_OMITTED_UNSAFE_FORMAT" if person.mobile and not _safe_brevo_sms(person.mobile) else None
+    mobile = normalize_phone_for_provider(person.mobile)
+    mobile_reason = "MOBILE_OMITTED_UNSAFE_FORMAT" if mobile.status in {
+        PhoneNormalizationStatus.AMBIGUOUS,
+        PhoneNormalizationStatus.INVALID,
+    } else None
     list_id = client.get_marketing_list_id()
     existing_reference = ExternalPersonReference.objects.select_for_update().filter(
         person=person,
@@ -419,15 +409,14 @@ def synchronize_person_profile_to_brevo(*, person_id, client=None):
         "FIRSTNAME": person.first_name or "",
         "LASTNAME": person.last_name or "",
     }
+    mobile = normalize_phone_for_provider(person.mobile)
     mobile_reason = None
-    if not person.mobile:
+    if mobile.status == PhoneNormalizationStatus.EMPTY:
         attributes["SMS"] = ""
+    elif mobile.status == PhoneNormalizationStatus.NORMALIZED:
+        attributes["SMS"] = mobile.e164
     else:
-        safe_sms = _safe_brevo_sms(person.mobile)
-        if safe_sms:
-            attributes["SMS"] = safe_sms
-        else:
-            mobile_reason = "MOBILE_OMITTED_UNSAFE_FORMAT"
+        mobile_reason = "MOBILE_OMITTED_UNSAFE_FORMAT"
 
     changed_attributes = {
         key: value

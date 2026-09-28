@@ -10,6 +10,48 @@ preview/test, scheduling, sending, and delivery.
 The Angular workflow is described in the [Staff CRM frontend guide](../../elevate-mk-crm/docs/brevo-crm-frontend-guide.md).
 Provider identity and consent rules are defined in the [Brevo integration guide](brevo-crm-integration.md).
 
+## Campaign lifecycle management
+
+Archive state is independent of Campaign workflow state. `archived_at` and
+`archived_by` are lifecycle metadata; the Campaign keeps its existing status
+such as `DRAFT`, `SNAPSHOT_READY`, `PREPARED`, or
+`RECONCILIATION_REQUIRED`. The API exposes `is_archived` and backend-derived
+`can_archive`, `can_restore`, and `can_delete` capability flags.
+
+The lifecycle endpoints are:
+
+```text
+POST   /api/v1/marketing/campaigns/{id}/archive/
+POST   /api/v1/marketing/campaigns/{id}/restore/
+DELETE /api/v1/marketing/campaigns/{id}/
+```
+
+CRM Admins and Managers may archive, restore, or delete where the capability
+allows it. Viewers can retrieve and inspect campaigns but cannot perform these
+mutations. Archive and restore are idempotent and preserve workflow status,
+preparations, recipient snapshots, criteria, provider references, and audit
+history. They perform no Brevo calls, resource deletion, consent change, or
+external-reference change. An archived Campaign remains directly retrievable
+and its recipients/history remain readable, but all Campaign workflow
+mutations are blocked until it is restored.
+
+Normal Campaign listing defaults to active Campaigns. Use
+`?lifecycle=active`, `?lifecycle=archived`, or `?lifecycle=all` for explicit
+selection. This filter is independent of the workflow `status` field.
+
+Permanent deletion is limited to a genuinely unused `DRAFT`: it must have no
+preparation, snapshot, stored provider reference, provider activity/history,
+or other historical evidence. A prepared, snapshotted, reconciled, failed, or
+otherwise historical Campaign is never physically deleted; staff should
+archive it instead. An archived draft may still be deleted only when it meets
+the same unused-evidence rule. Deletion records a safe audit event before
+removing the Campaign and performs no Brevo operation.
+
+Archive, restore, and deletion lock the Campaign row inside a transaction.
+Preparation and provider-preparation services take the same row lock and check
+archive state before mutating workflow state, preventing an archive/delete
+race from removing historical evidence.
+
 ## End-to-end workflow
 
 1. Staff use People criteria in Audience Preview.
@@ -79,13 +121,25 @@ draft payload uses the Campaign name as a deterministic, provider-required
 editable starter subject. It is not a new Elevate content field; final subject
 and content remain owned by Brevo.
 
+When a Brevo draft resource exists, the Campaign preparation API exposes the
+backend-owned `brevo_campaigns_url` listing target. The current configured
+default is `https://app.brevo.com/campaigns/listing`; it is not constructed from
+the stored provider campaign ID. `brevo_editor_url` remains reserved for a
+future officially supported campaign-specific URL. Rendering or following the
+listing link performs no Brevo API request or write, and Campaign Detail does
+not expose the provider campaign ID as a staff-facing field.
+
 Contact synchronization uses the established Brevo identity/reference rules:
 exact matching only, stable references, minimal approved profile fields, and
 no fuzzy identity matching or force merge. SMS is optional profile data. If
 Brevo rejects a non-empty optional SMS value specifically as an invalid phone,
 the same synchronization operation retries exactly once without SMS. CRM
-mobile and consent are unchanged. Country-aware E.164 normalization remains a
-separate future TODO.
+mobile and consent are unchanged. Provider-boundary E.164 normalization now
+canonicalizes explicit international values, requires reliable region context
+for national values, and omits ambiguous or invalid optional mobile values. An
+otherwise eligible email recipient is not excluded solely because SMS cannot be
+normalized. Blank mobile retains the intentional provider-side stale-SMS
+clearing behavior.
 
 ## Reconciliation review and retry
 
@@ -142,7 +196,8 @@ V1 does not include a full reconciliation management system, automatic
 unblock/resubscribe, force merge or automatic relink, saved audiences, tags,
 journeys, post-`PREPARED` consent removal from the mutable provider list,
 automatic list cleanup, campaign send/schedule controls, or a Brevo editor
-inside Elevate. Future work may add country-aware E.164 normalization,
+inside Elevate. Future work may add explicit phone-region support for national
+mobile entry,
 explicit administrative identity repair, stronger post-prepared consent
 hardening, and safe editor deep-linking. Folder handling should be revisited
 only if the Brevo plan exposes campaign folders.

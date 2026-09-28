@@ -6,6 +6,7 @@ from rest_framework import serializers
 from memberships.models import Membership
 from memberships.serializers import MembershipSerializer
 from people.models import Person
+from people.services import is_plausible_crm_mobile
 from professional_profiles.models import ProfessionalProfile
 from professional_profiles.serializers import ProfessionalProfileSerializer
 from skills.models import Skill
@@ -144,6 +145,11 @@ class StrictPersonWriteSerializer(serializers.Serializer):
         allow_blank=True,
     )
 
+    def validate_mobile(self, value):
+        if not is_plausible_crm_mobile(value):
+            raise serializers.ValidationError("Enter a valid mobile number.")
+        return value
+
     def validate(self, attrs):
         unknown_fields = set(self.initial_data.keys()) - set(self.fields.keys())
         if unknown_fields:
@@ -183,6 +189,7 @@ class PersonCreateSerializer(IdentityOverrideCreateSerializerMixin, StrictPerson
 
 
 class PersonUpdateSerializer(StrictPersonWriteSerializer):
+    allow_duplicate_mobile = serializers.BooleanField(required=False, default=False, write_only=True)
     first_name = serializers.CharField(max_length=150, required=False)
     last_name = serializers.CharField(max_length=150, required=False)
 
@@ -195,11 +202,13 @@ class PersonMemberCreateSerializer(IdentityOverrideCreateSerializerMixin, Strict
 class DuplicatePersonMatchSerializer(serializers.ModelSerializer):
     class Meta:
         model = Person
-        fields = ("id", "first_name", "last_name", "primary_email", "mobile", "archived_at")
+        fields = ("id", "first_name", "last_name", "archived_at")
 
 
 class IdentityCollisionResponseSerializer(serializers.Serializer):
     code = serializers.ChoiceField(choices=("IDENTITY_COLLISION", "IDENTITY_COLLISION_STALE"))
+    severity = serializers.ChoiceField(choices=("BLOCKING", "WARNING"))
+    match_reasons = serializers.ListField(child=serializers.ChoiceField(choices=("EMAIL", "MOBILE")))
     detail = serializers.CharField()
     collision = ReviewedIdentityCollisionSerializer()
     candidates = DuplicatePersonMatchSerializer(many=True)
@@ -352,6 +361,7 @@ class BrevoIntegrationStateSerializer(serializers.Serializer):
     title = serializers.CharField()
     explanation = serializers.CharField()
     can_reconcile = serializers.BooleanField()
+    provider_profile_url = serializers.URLField(allow_null=True)
 
 
 class PersonBrevoIntegrationSerializer(serializers.Serializer):

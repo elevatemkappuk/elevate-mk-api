@@ -9,6 +9,23 @@ from marketing_preferences.services import get_effective_marketing_preference
 from people.services import normalize_email
 
 
+BREVO_CONTACT_PROFILE_BASE_URL = "https://app.brevo.com/contact/index/"
+
+
+def build_brevo_contact_profile_url(contact_id):
+    """Build Brevo's best-effort web-app contact link from a numeric ID.
+
+    This is a Brevo UI route, not a formally guaranteed public API URL. Keep the
+    route centralized so a future Brevo UI change has one maintenance point.
+    """
+    if isinstance(contact_id, bool):
+        return None
+    value = str(contact_id).strip()
+    if not value.isdigit() or int(value) <= 0:
+        return None
+    return f"{BREVO_CONTACT_PROFILE_BASE_URL}{int(value)}"
+
+
 @dataclass(frozen=True)
 class BrevoIntegrationInspection:
     status: str
@@ -16,6 +33,7 @@ class BrevoIntegrationInspection:
     title: str
     explanation: str
     can_reconcile: bool
+    provider_profile_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -56,6 +74,7 @@ def inspect_person_brevo_integration(*, person, can_reconcile=False, client=None
                 ),
             )
 
+        provider_profile_url = build_brevo_contact_profile_url(contact.contact_id)
         current_email = normalize_email(person.primary_email)
         if not current_email:
             return _identity_conflict(
@@ -63,6 +82,7 @@ def inspect_person_brevo_integration(*, person, can_reconcile=False, client=None
                 reason_code="BREVO_CRM_EMAIL_MISSING",
                 title="CRM email required",
                 explanation="A current CRM email is required to verify this Brevo connection.",
+                provider_profile_url=provider_profile_url,
             )
         if normalize_email(contact.email) != current_email:
             return _identity_conflict(
@@ -70,6 +90,7 @@ def inspect_person_brevo_integration(*, person, can_reconcile=False, client=None
                 reason_code="BREVO_EMAIL_IDENTITY_MISMATCH",
                 title="CRM and Brevo email identities differ",
                 explanation="The Brevo contact linked to this person uses a different email identity from the person's current CRM email.",
+                provider_profile_url=provider_profile_url,
             )
         if ExternalPersonReference.objects.filter(
             provider=BREVO_PROVIDER,
@@ -82,6 +103,7 @@ def inspect_person_brevo_integration(*, person, can_reconcile=False, client=None
                 reason_code="BREVO_CONTACT_LINKED_TO_OTHER_PERSON",
                 title="Brevo contact is linked elsewhere",
                 explanation="This Brevo contact is already associated with another CRM Person.",
+                provider_profile_url=provider_profile_url,
             )
 
         provider_state = _provider_state(contact, client.get_marketing_list_id())
@@ -91,14 +113,14 @@ def inspect_person_brevo_integration(*, person, can_reconcile=False, client=None
                 BrevoIntegrationInspection(
                     "RESTRICTED", "BREVO_CONTACT_RESTRICTED", "Marketing restricted in Brevo",
                     "Brevo currently prevents marketing email for this contact. Elevate will not automatically unblock or resubscribe them.",
-                    False,
+                    False, provider_profile_url,
                 ),
             )
         return PersonBrevoInspection(
             preference,
             BrevoIntegrationInspection(
                 "CONNECTED", None, "Connected to Brevo",
-                "This Person has a verified active Brevo marketing connection.", False,
+                "This Person has a verified active Brevo marketing connection.", False, provider_profile_url,
             ),
         )
     except BrevoMarketingError:
@@ -117,10 +139,11 @@ def _identity_conflict(
     reason_code="BREVO_CONTACT_IDENTITY_CONFLICT",
     title="Brevo contact identity needs review",
     explanation="The CRM and Brevo identities could not be matched safely.",
+    provider_profile_url=None,
 ):
     return PersonBrevoInspection(
         preference,
         BrevoIntegrationInspection(
-            "IDENTITY_CONFLICT", reason_code, title, explanation, False,
+            "IDENTITY_CONFLICT", reason_code, title, explanation, False, provider_profile_url,
         ),
     )

@@ -24,7 +24,11 @@ from brevo_marketing.exceptions import (
     BrevoMarketingValidationError,
 )
 from brevo_marketing.services import inspect_brevo_marketing_configuration
-from brevo_marketing.inspection import _identity_conflict, inspect_person_brevo_integration
+from brevo_marketing.inspection import (
+    _identity_conflict,
+    build_brevo_contact_profile_url,
+    inspect_person_brevo_integration,
+)
 from brevo_marketing.jobs import (
     BrevoJobProcessResult,
     PERSON_EMAIL_MIGRATION_SYNC,
@@ -43,6 +47,7 @@ from external_references.models import ExternalPersonReference, ExternalPersonSy
 from marketing_preferences.models import MarketingPreference, MarketingPreferenceHistory, MarketingWebhookReceipt
 from marketing_preferences.services import record_opt_in, record_opt_out
 from people.models import Person
+from people.services import PhoneNormalizationStatus, normalize_phone_for_provider
 
 
 class PersonBrevoInspectionTests(TestCase):
@@ -96,6 +101,7 @@ class PersonBrevoInspectionTests(TestCase):
         self.assertEqual(result.integration.status, "CONTACT_MISSING")
         self.assertTrue(result.integration.can_reconcile)
         self.assertEqual(result.integration.reason_code, "BREVO_CONTACT_NOT_FOUND_FOR_EXISTING_REFERENCE")
+        self.assertIsNone(result.integration.provider_profile_url)
 
     def test_missing_contact_is_not_reconcilable_for_non_admin(self):
         self.reference()
@@ -108,6 +114,7 @@ class PersonBrevoInspectionTests(TestCase):
         result = inspect_person_brevo_integration(person=self.person, client=self.fake_client(self.contact()))
         self.assertEqual(result.integration.status, "CONNECTED")
         self.assertIsNone(result.integration.reason_code)
+        self.assertEqual(result.integration.provider_profile_url, "https://app.brevo.com/contact/index/42")
 
     def test_restricted_email_contact_is_read_only(self):
         self.reference()
@@ -118,6 +125,7 @@ class PersonBrevoInspectionTests(TestCase):
         self.assertEqual(result.integration.status, "RESTRICTED")
         self.assertFalse(result.integration.can_reconcile)
         self.assertIn("will not automatically unblock", result.integration.explanation)
+        self.assertEqual(result.integration.provider_profile_url, "https://app.brevo.com/contact/index/42")
 
     def test_restricted_list_contact_is_read_only(self):
         self.reference()
@@ -135,6 +143,7 @@ class PersonBrevoInspectionTests(TestCase):
         )
         self.assertEqual(result.integration.status, "IDENTITY_CONFLICT")
         self.assertEqual(result.integration.reason_code, "BREVO_EMAIL_IDENTITY_MISMATCH")
+        self.assertEqual(result.integration.provider_profile_url, "https://app.brevo.com/contact/index/42")
 
     def test_missing_current_email_is_identity_conflict(self):
         self.reference()
@@ -143,6 +152,7 @@ class PersonBrevoInspectionTests(TestCase):
         result = inspect_person_brevo_integration(person=self.person, client=self.fake_client(self.contact()))
         self.assertEqual(result.integration.status, "IDENTITY_CONFLICT")
         self.assertEqual(result.integration.reason_code, "BREVO_CRM_EMAIL_MISSING")
+        self.assertEqual(result.integration.provider_profile_url, "https://app.brevo.com/contact/index/42")
 
     def test_mismatched_referenced_contact_email_has_safe_specific_reason(self):
         self.reference()
@@ -155,7 +165,7 @@ class PersonBrevoInspectionTests(TestCase):
         self.assertEqual(result.integration.title, "CRM and Brevo email identities differ")
         self.assertNotIn("inspection@example.com", result.integration.explanation)
         self.assertNotIn("different@example.com", result.integration.explanation)
-        self.assertNotIn("42", repr(result.integration))
+        self.assertEqual(result.integration.provider_profile_url, "https://app.brevo.com/contact/index/42")
 
     def test_contact_linked_to_another_person_has_safe_specific_reason(self):
         own_reference_queryset = Mock()
@@ -171,7 +181,7 @@ class PersonBrevoInspectionTests(TestCase):
 
         self.assertEqual(result.integration.status, "IDENTITY_CONFLICT")
         self.assertEqual(result.integration.reason_code, "BREVO_CONTACT_LINKED_TO_OTHER_PERSON")
-        self.assertNotIn("42", repr(result.integration))
+        self.assertEqual(result.integration.provider_profile_url, "https://app.brevo.com/contact/index/42")
 
     def test_unclassified_identity_conflict_keeps_generic_safe_fallback(self):
         preference = type(
@@ -189,12 +199,30 @@ class PersonBrevoInspectionTests(TestCase):
         result = inspect_person_brevo_integration(person=self.person, client=client)
         self.assertEqual(result.integration.status, "UNKNOWN")
         self.assertNotIn("secret", result.integration.explanation)
+        self.assertIsNone(result.integration.provider_profile_url)
 
     def test_inspection_does_not_create_or_modify_references(self):
         self.reference()
         before = list(ExternalPersonReference.objects.values_list("id", "status", "external_id"))
         inspect_person_brevo_integration(person=self.person, client=self.fake_client(self.contact()))
         self.assertEqual(before, list(ExternalPersonReference.objects.values_list("id", "status", "external_id")))
+
+
+class BrevoContactProfileUrlTests(SimpleTestCase):
+    def test_positive_numeric_contact_id_uses_expected_https_origin(self):
+        self.assertEqual(
+            build_brevo_contact_profile_url(42),
+            "https://app.brevo.com/contact/index/42",
+        )
+        self.assertEqual(
+            build_brevo_contact_profile_url("0042"),
+            "https://app.brevo.com/contact/index/42",
+        )
+
+    def test_invalid_contact_ids_are_rejected(self):
+        for value in (None, 0, -1, "", "abc", "42.5", True):
+            with self.subTest(value=value):
+                self.assertIsNone(build_brevo_contact_profile_url(value))
 
 
 class BrevoMarketingClientTests(SimpleTestCase):
@@ -445,6 +473,26 @@ class BrevoPersonDatabaseSyncTests(TestCase):
         )
         self.assertNotIn("LANDLINE_NUMBER", client.created[0]["attributes"])
 
+    def test_zero_zero_international_mobile_is_sent_as_canonical_e164(self):
+        person = self.person(mobile="0044 7911 123456")
+        record_opt_in(person=person)
+        client = FakeBrevoSyncClient()
+
+        synchronize_person_to_brevo(person_id=person.id, client=client)
+
+        self.assertEqual(client.created[0]["attributes"]["SMS"], "+447911123456")
+
+    def test_invalid_optional_mobile_is_omitted_without_blocking_email_sync(self):
+        person = self.person(mobile="+44 7911 ext 2")
+        record_opt_in(person=person)
+        client = FakeBrevoSyncClient()
+
+        result = synchronize_person_to_brevo(person_id=person.id, client=client)
+
+        self.assertEqual(result.outcome, BrevoPersonSyncOutcome.CREATED_MARKETING_CONTACT)
+        self.assertEqual(result.reason, "MOBILE_OMITTED_UNSAFE_FORMAT")
+        self.assertNotIn("SMS", client.created[0]["attributes"])
+
     def test_invalid_optional_sms_on_create_retries_once_without_sms_and_links_reference(self):
         person = self.person(mobile="+265991234567")
         record_opt_in(person=person)
@@ -638,6 +686,46 @@ class BrevoPersonDatabaseSyncTests(TestCase):
         self.assertEqual(result.reference_id, reference.id)
         self.assertFalse(MarketingPreference.objects.filter(person=person).exists())
 
+    def test_profile_sync_updates_missing_sms_when_names_already_match(self):
+        mobile = "+447911123456"
+        normalized = normalize_phone_for_provider(mobile)
+        self.assertEqual(normalized.status, PhoneNormalizationStatus.NORMALIZED)
+        self.assertIsNotNone(normalized.e164)
+
+        person = self.person(first_name="Sofia", last_name="Smith", mobile=mobile)
+        record_opt_in(person=person)
+        reference = self.profile_reference(person)
+        reference_before = {
+            "external_id": reference.external_id,
+            "status": reference.status,
+            "linked_at": reference.linked_at,
+        }
+        consent_before = MarketingPreference.objects.get(person=person).state
+        contact = BrevoContact(
+            9,
+            person.primary_email,
+            {"FIRSTNAME": "Sofia", "LASTNAME": "Smith"},
+            (), (), False, False,
+        )
+        client = FakeBrevoSyncClient(contact=contact)
+
+        result = synchronize_person_profile_to_brevo(person_id=person.id, client=client)
+
+        self.assertNotEqual(result.outcome, BrevoPersonSyncOutcome.PROFILE_ALREADY_SYNCHRONIZED)
+        self.assertEqual(result.outcome, BrevoPersonSyncOutcome.UPDATED_PERSON_PROFILE)
+        self.assertEqual(client.updated[0]["contact_id"], 9)
+        self.assertEqual(client.updated[0]["attributes"], {"SMS": normalized.e164})
+        self.assertEqual(contact.attributes["FIRSTNAME"], "Sofia")
+        self.assertEqual(contact.attributes["LASTNAME"], "Smith")
+        person.refresh_from_db()
+        self.assertEqual(person.mobile, mobile)
+        self.assertEqual(MarketingPreference.objects.get(person=person).state, consent_before)
+        reference.refresh_from_db()
+        self.assertEqual(
+            {"external_id": reference.external_id, "status": reference.status, "linked_at": reference.linked_at},
+            reference_before,
+        )
+
     def test_profile_sync_retries_rejected_optional_sms_without_sms(self):
         person = self.person(first_name="Sofia", last_name="Smith", mobile="+265991234567")
         reference = self.profile_reference(person)
@@ -663,6 +751,16 @@ class BrevoPersonDatabaseSyncTests(TestCase):
         self.assertEqual(client.updated[0]["attributes"]["SMS"], "")
         self.assertEqual(len(client.updated), 1)
 
+    def test_profile_sync_whitespace_mobile_keeps_blank_clear_semantics(self):
+        person = self.person(mobile="   ")
+        self.profile_reference(person)
+        contact = BrevoContact(9, person.primary_email, {"FIRSTNAME": "Ava", "LASTNAME": "Example", "SMS": "+265991000000"}, (), (), False, False)
+        client = FakeBrevoSyncClient(contact=contact)
+
+        synchronize_person_profile_to_brevo(person_id=person.id, client=client)
+
+        self.assertEqual(client.updated[0]["attributes"]["SMS"], "")
+
     def test_profile_sync_clears_blank_attributes_and_omits_unsafe_mobile(self):
         person = self.person(first_name="", last_name="", mobile="0991000001")
         self.profile_reference(person)
@@ -675,6 +773,18 @@ class BrevoPersonDatabaseSyncTests(TestCase):
         self.assertEqual(result.reason, "MOBILE_OMITTED_UNSAFE_FORMAT")
         self.assertEqual(client.updated[0]["attributes"], {"FIRSTNAME": "", "LASTNAME": "",})
         self.assertNotIn("SMS", client.updated[0]["attributes"])
+
+    def test_profile_sync_omits_invalid_mobile_without_clearing_existing_sms(self):
+        person = self.person(first_name="Sofia", last_name="Smith", mobile="+44 7911 ext 2")
+        self.profile_reference(person)
+        contact = BrevoContact(9, person.primary_email, {"FIRSTNAME": "Sofia", "LASTNAME": "Smith", "SMS": "+447911123456"}, (), (), False, False)
+        client = FakeBrevoSyncClient(contact=contact)
+
+        result = synchronize_person_profile_to_brevo(person_id=person.id, client=client)
+
+        self.assertEqual(result.outcome, BrevoPersonSyncOutcome.PROFILE_ALREADY_SYNCHRONIZED)
+        self.assertEqual(result.reason, "MOBILE_OMITTED_UNSAFE_FORMAT")
+        self.assertFalse(client.updated)
 
     def test_profile_sync_clears_blank_mobile(self):
         person = self.person(mobile="")

@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from enum import Enum
+import re
 
+import phonenumbers
 from django.db.models import Q
 
 from people.models import Person
@@ -20,6 +22,19 @@ class CreateNewIdentityPolicy:
     requires_review: bool
     requires_strong_confirmation: bool
     is_safe_to_create: bool
+
+    @property
+    def severity(self):
+        return "WARNING" if self.collision == CreateNewIdentityCollision.MOBILE_COLLISION else "BLOCKING" if self.collision != CreateNewIdentityCollision.NO_BLOCKING_COLLISION else None
+
+    @property
+    def match_reasons(self):
+        reasons = []
+        if self.collision in (CreateNewIdentityCollision.EMAIL_COLLISION, CreateNewIdentityCollision.EMAIL_AND_MOBILE_COLLISION):
+            reasons.append("EMAIL")
+        if self.collision in (CreateNewIdentityCollision.MOBILE_COLLISION, CreateNewIdentityCollision.EMAIL_AND_MOBILE_COLLISION):
+            reasons.append("MOBILE")
+        return tuple(reasons)
 
     def review_evidence(self) -> dict:
         return {
@@ -48,6 +63,101 @@ def normalize_mobile(value):
     if not value:
         return ""
     return "".join(character for character in value.strip() if character not in " -()")
+
+
+class PhoneNormalizationStatus(str, Enum):
+    EMPTY = "EMPTY"
+    NORMALIZED = "NORMALIZED"
+    AMBIGUOUS = "AMBIGUOUS"
+    INVALID = "INVALID"
+
+
+@dataclass(frozen=True)
+class PhoneNormalizationResult:
+    status: PhoneNormalizationStatus
+    e164: str | None = None
+    reason: str | None = None
+
+
+_PHONE_EXTENSION_PATTERN = re.compile(r"(?:#|;ext=|\b(?:ext|extension|x)\s*\.?\s*\d+)", re.IGNORECASE)
+_PHONE_ALLOWED_TYPES = {
+    phonenumbers.PhoneNumberType.MOBILE,
+    phonenumbers.PhoneNumberType.FIXED_LINE_OR_MOBILE,
+}
+
+_CRM_MOBILE_ALLOWED_CHARACTERS = re.compile(r"^[0-9+().\-\s]+$")
+
+
+def is_plausible_crm_mobile(value):
+    """Return whether a staff-entered mobile value is plausibly a phone number.
+
+    CRM entry accepts national numbers without assuming a country. Provider
+    normalization remains responsible for producing verified E.164 values.
+    """
+    raw = "" if value is None else str(value).strip()
+    if not raw:
+        return True
+    if not _CRM_MOBILE_ALLOWED_CHARACTERS.fullmatch(raw):
+        return False
+    if raw.count("+") > 1 or ("+" in raw and not raw.startswith("+")):
+        return False
+    if raw.startswith("+") and len(raw) == 1:
+        return False
+    opening_parenthesis = raw.find("(")
+    closing_parenthesis = raw.find(")")
+    if raw.count("(") != raw.count(")") or (
+        closing_parenthesis != -1 and opening_parenthesis > closing_parenthesis
+    ):
+        return False
+    if "()" in raw.replace(" ", ""):
+        return False
+    if re.search(r"(?:^|\D)[.-](?:\D|$)", raw) or re.search(r"[.\-]{2,}", raw):
+        return False
+    if re.search(r"[+().\-]$", raw):
+        return False
+    digits = re.sub(r"\D", "", raw)
+    return 7 <= len(digits) <= 15
+
+
+def normalize_phone_for_provider(value, *, region=None):
+    """Normalize an SMS-capable number without guessing a country.
+
+    ``normalize_mobile`` remains the CRM identity/duplicate matcher. This helper
+    is only for provider-boundary normalization.
+    """
+    raw = "" if value is None else str(value).strip()
+    if not raw:
+        return PhoneNormalizationResult(PhoneNormalizationStatus.EMPTY)
+    if _PHONE_EXTENSION_PATTERN.search(raw):
+        return PhoneNormalizationResult(PhoneNormalizationStatus.INVALID, reason="UNSUPPORTED_EXTENSION")
+    if re.search(r"[A-Za-z]", raw):
+        return PhoneNormalizationResult(PhoneNormalizationStatus.INVALID, reason="ALPHABETIC_INPUT")
+
+    explicit_international = raw.startswith("+") or raw.startswith("00")
+    if explicit_international:
+        parse_value = "+" + raw[2:].lstrip() if raw.startswith("00") else raw
+        parse_region = None
+    else:
+        if region is None or not isinstance(region, str) or not re.fullmatch(r"[A-Za-z]{2}", region.strip()):
+            return PhoneNormalizationResult(PhoneNormalizationStatus.AMBIGUOUS, reason="NO_RELIABLE_REGION")
+        parse_value = raw
+        parse_region = region.strip().upper()
+
+    try:
+        parsed = phonenumbers.parse(parse_value, parse_region)
+    except phonenumbers.NumberParseException:
+        return PhoneNormalizationResult(PhoneNormalizationStatus.INVALID, reason="PARSE_FAILED")
+    if not phonenumbers.is_possible_number(parsed):
+        return PhoneNormalizationResult(PhoneNormalizationStatus.INVALID, reason="IMPOSSIBLE_NUMBER")
+    if not phonenumbers.is_valid_number(parsed):
+        return PhoneNormalizationResult(PhoneNormalizationStatus.INVALID, reason="INVALID_NUMBER")
+    if phonenumbers.number_type(parsed) not in _PHONE_ALLOWED_TYPES:
+        return PhoneNormalizationResult(PhoneNormalizationStatus.INVALID, reason="UNSUPPORTED_NUMBER_TYPE")
+
+    return PhoneNormalizationResult(
+        PhoneNormalizationStatus.NORMALIZED,
+        e164=phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164),
+    )
 
 
 def find_business_duplicate_people(*, primary_email="", mobile="", exclude_person_id=None):
@@ -83,11 +193,15 @@ def evaluate_create_new_identity(
     mobile="",
     staff_confirmed_different=False,
     confirm_identity_override=False,
+    exclude_person_id=None,
+    mobile_only_override=False,
 ):
     """Apply the CRM identity policy for a proposed separate BUSINESS Person."""
     normalized_email = normalize_email(primary_email)
     normalized_mobile = normalize_mobile(mobile)
     queryset = Person.objects.business()
+    if exclude_person_id is not None:
+        queryset = queryset.exclude(pk=exclude_person_id)
 
     email_matches = list(queryset.filter(primary_email__iexact=normalized_email)) if normalized_email else []
     mobile_matches = []
@@ -118,7 +232,18 @@ def evaluate_create_new_identity(
         requires_review=requires_review,
         requires_strong_confirmation=requires_strong_confirmation,
         is_safe_to_create=(not requires_review) or (
-            staff_confirmed_different and (not requires_strong_confirmation or confirm_identity_override)
+            staff_confirmed_different
+            and (
+                (
+                    mobile_only_override
+                    and collision == CreateNewIdentityCollision.MOBILE_COLLISION
+                    and confirm_identity_override
+                )
+                or (
+                    not mobile_only_override
+                    and (not requires_strong_confirmation or confirm_identity_override)
+                )
+            )
         ),
     )
 

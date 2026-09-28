@@ -203,6 +203,8 @@ SAFE_VALIDATION_MESSAGES = {
     ("source.ticket_quantity", "invalid_ticket_quantity"): "Ticket quantity is not valid.",
     ("source.guest", "invalid_guest"): "Guest value is not valid.",
     ("linkedin_url", "invalid_url"): "LinkedIn URL is not valid.",
+    ("mobile", "INVALID_MOBILE"): "Mobile number needs review.",
+    ("person.mobile", "INVALID_MOBILE"): "Mobile number needs review.",
 }
 
 

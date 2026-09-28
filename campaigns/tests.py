@@ -1,7 +1,8 @@
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from audit.models import AuditEvent
@@ -11,7 +12,8 @@ from staff_access.models import StaffRole, StaffRoleAssignment
 from accounts.models import User
 
 from .models import Campaign, CampaignPreparation, CampaignRecipientSnapshot
-from .services import prepare_campaign_provider
+from .services import prepare_campaign_provider, prepare_campaign_snapshot
+from brevo_marketing.client import BrevoContact
 from brevo_marketing.exceptions import BrevoMarketingPropagationDelay
 from brevo_marketing.sync import BrevoPersonSyncOutcome, BrevoPersonSyncResult
 
@@ -116,6 +118,29 @@ class CampaignFoundationApiTests(TestCase):
         self.assertEqual(self.client.get(f"{self.create_url}{response.data['id']}/").status_code, 200)
         self.assertEqual(self.client.get(self.create_url).status_code, 200)
 
+    @override_settings(BREVO_MARKETING_CAMPAIGNS_URL="https://app.brevo.example/campaigns/listing")
+    def test_campaigns_navigation_url_is_only_exposed_for_stored_provider_campaigns_and_survives_archive(self):
+        campaign = self._snapshot_ready_campaign()
+        self.authenticate(self.viewer)
+        response = self.client.get(f"{self.create_url}{campaign.id}/")
+        self.assertIsNone(response.data["current_preparation"]["brevo_campaigns_url"])
+        self.assertNotIn("brevo_campaign_id", response.data["current_preparation"])
+
+        preparation = campaign.current_preparation
+        preparation.brevo_campaign_id = 77
+        preparation.status = CampaignPreparation.Status.PREPARED
+        preparation.save(update_fields=["brevo_campaign_id", "status", "updated_at"])
+        campaign.status = Campaign.Status.PREPARED
+        campaign.archived_at = timezone.now()
+        campaign.save(update_fields=["status", "archived_at", "updated_at"])
+
+        with patch("campaigns.services.BrevoMarketingClient") as client:
+            response = self.client.get(f"{self.create_url}{campaign.id}/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["current_preparation"]["brevo_campaigns_url"], "https://app.brevo.example/campaigns/listing")
+        self.assertNotIn("brevo_campaign_id", response.data["current_preparation"])
+        self.assertFalse(client.called)
+
     def _snapshot_ready_campaign(self):
         response = self.create_campaign()
         self.authenticate(self.admin)
@@ -128,6 +153,45 @@ class CampaignFoundationApiTests(TestCase):
         client.find_draft_campaign_by_name.return_value = None
         client.create_email_campaign_draft.return_value = SimpleNamespace(campaign_id=77)
         return client
+
+    def _prepare_email_only_campaign(self, mobile):
+        person = Person.objects.create(
+            first_name="ProviderPhone",
+            last_name="Boundary",
+            primary_email=f"provider-phone-{Person.objects.count()}@example.com",
+            mobile=mobile,
+        )
+        self._preference(person, MarketingPreference.State.OPTED_IN)
+        campaign = Campaign.objects.create(
+            name=f"Phone boundary {person.id}",
+            audience_selection={"q": "ProviderPhone", "relationship": [], "location": [], "industry": [], "career_stage": [], "interest": [], "skill": [], "tag": []},
+            audience_ordering="last_name",
+            created_by=self.admin,
+        )
+        prepare_campaign_snapshot(campaign_id=campaign.id, actor_user=self.admin)
+        client = self._provider_client()
+        client.get_marketing_list_id.return_value = 2
+        client.get_contact.return_value = None
+        client.create_contact.return_value = BrevoContact(
+            123 + person.id,
+            person.primary_email,
+            {"FIRSTNAME": person.first_name, "LASTNAME": person.last_name},
+            (2,), (), False, False,
+        )
+        result = prepare_campaign_provider(campaign_id=campaign.id, actor_user=self.admin, client=client, sleep_fn=lambda _seconds: None)
+        return result, client
+
+    def test_campaign_provider_preparation_keeps_ambiguous_mobile_email_only(self):
+        result, client = self._prepare_email_only_campaign("07911123456")
+
+        self.assertEqual(result.status, Campaign.Status.PREPARED)
+        self.assertNotIn("SMS", client.create_contact.call_args.kwargs["attributes"])
+
+    def test_campaign_provider_preparation_keeps_invalid_mobile_email_only(self):
+        result, client = self._prepare_email_only_campaign("+44 7911 ext 2")
+
+        self.assertEqual(result.status, Campaign.Status.PREPARED)
+        self.assertNotIn("SMS", client.create_contact.call_args.kwargs["attributes"])
 
     @patch("campaigns.services.synchronize_person_to_brevo")
     def test_provider_preparation_rechecks_consent_and_does_not_add_post_snapshot_opt_out(self, sync):
@@ -345,9 +409,21 @@ class CampaignFoundationApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         row = next(item for item in response.data["results"] if item["id"] == snapshot.id)
+        historical_email = snapshot.email_snapshot
+        self.included.primary_email = "changed-after-preparation@example.com"
+        self.included.save(update_fields=["primary_email", "updated_at"])
+        response = self.client.get(f"{self.create_url}{campaign.id}/recipients/?page_size=100")
+        self.assertEqual(response.status_code, 200)
+        row = next(item for item in response.data["results"] if item["id"] == snapshot.id)
+        self.assertEqual(row["email_snapshot"], historical_email)
+        self.assertEqual(row["first_name_snapshot"], snapshot.first_name_snapshot)
+        self.assertEqual(row["decision"], snapshot.decision)
         self.assertEqual(row["provider_error_code"], "BREVO_CONTACT_NOT_FOUND_FOR_EXISTING_REFERENCE")
         self.assertNotIn("brevo_contact_id", row)
         self.assertNotIn("provider_error_message", row)
+        snapshot.refresh_from_db()
+        self.assertEqual(snapshot.email_snapshot, historical_email)
+        self.assertEqual(Person.objects.get(pk=self.included.pk).primary_email, "changed-after-preparation@example.com")
 
     @patch("campaigns.services.synchronize_person_to_brevo")
     def test_reconciliation_retry_respects_current_consent_without_provider_sync(self, sync):
@@ -405,3 +481,152 @@ class CampaignFoundationApiTests(TestCase):
         self.assertEqual(sync.call_count, 2)
         client.create_campaign_list.assert_not_called()
         client.create_email_campaign_draft.assert_not_called()
+
+    def test_admin_and_manager_can_archive_and_archive_is_idempotent(self):
+        campaign = Campaign.objects.create(name="Archive me", created_by=self.admin)
+        self.authenticate(self.admin)
+        url = f"{self.create_url}{campaign.id}/archive/"
+        response = self.client.post(url, {}, format="json")
+        self.assertEqual(response.status_code, 200)
+        campaign.refresh_from_db()
+        archived_at = campaign.archived_at
+        self.assertIsNotNone(archived_at)
+        self.assertTrue(response.data["is_archived"])
+        self.assertEqual(response.data["status"], Campaign.Status.DRAFT)
+        self.assertFalse(response.data["can_archive"])
+        self.assertTrue(response.data["can_restore"])
+        self.assertTrue(response.data["can_delete"])
+        self.assertEqual(self.client.post(url, {}, format="json").status_code, 200)
+        campaign.refresh_from_db()
+        self.assertEqual(campaign.archived_at, archived_at)
+
+        campaign = Campaign.objects.create(name="Manager archive", created_by=self.manager)
+        self.authenticate(self.manager)
+        self.assertEqual(self.client.post(f"{self.create_url}{campaign.id}/archive/", {}, format="json").status_code, 200)
+
+    def test_viewer_cannot_archive_or_restore_and_unauthenticated_is_rejected(self):
+        campaign = Campaign.objects.create(name="Protected lifecycle", created_by=self.admin)
+        self.authenticate(self.viewer)
+        self.assertEqual(self.client.post(f"{self.create_url}{campaign.id}/archive/", {}, format="json").status_code, 403)
+        self.assertEqual(self.client.post(f"{self.create_url}{campaign.id}/restore/", {}, format="json").status_code, 403)
+        self.authenticate(self.nonstaff)
+        self.assertEqual(self.client.post(f"{self.create_url}{campaign.id}/archive/", {}, format="json").status_code, 403)
+        self.assertEqual(self.client.delete(f"{self.create_url}{campaign.id}/").status_code, 403)
+        self.client.force_authenticate(user=None)
+        self.assertEqual(self.client.post(f"{self.create_url}{campaign.id}/archive/", {}, format="json").status_code, 401)
+
+    def test_archive_filters_default_archived_and_all_and_direct_read_preserve_state(self):
+        active = Campaign.objects.create(name="Active campaign", created_by=self.admin)
+        archived = Campaign.objects.create(name="Archived campaign", created_by=self.admin, archived_at=timezone.now())
+        self.authenticate(self.viewer)
+        self.assertEqual(self.client.get(self.create_url).data["count"], 1)
+        self.assertEqual(self.client.get(f"{self.create_url}?lifecycle=archived").data["results"][0]["id"], archived.id)
+        self.assertEqual(self.client.get(f"{self.create_url}?lifecycle=all").data["count"], 2)
+        self.assertEqual(self.client.get(f"{self.create_url}{archived.id}/").status_code, 200)
+        self.assertEqual(self.client.get(f"{self.create_url}{archived.id}/").data["status"], Campaign.Status.DRAFT)
+        self.assertEqual(self.client.get(f"{self.create_url}?lifecycle=invalid").status_code, 400)
+        self.assertNotEqual(active.id, archived.id)
+
+    def test_archive_preserves_preparation_snapshot_and_provider_references_without_provider_work(self):
+        campaign = self._snapshot_ready_campaign()
+        preparation = campaign.current_preparation
+        preparation.brevo_list_id = 55
+        preparation.brevo_campaign_id = 77
+        preparation.save(update_fields=["brevo_list_id", "brevo_campaign_id", "updated_at"])
+        snapshot_id = preparation.recipient_snapshots.order_by("id").first().id
+        self.authenticate(self.admin)
+        with patch("campaigns.services.BrevoMarketingClient") as client:
+            response = self.client.post(f"{self.create_url}{campaign.id}/archive/", {}, format="json")
+        self.assertEqual(response.status_code, 200)
+        campaign.refresh_from_db()
+        self.assertTrue(campaign.is_archived)
+        self.assertEqual(campaign.status, Campaign.Status.SNAPSHOT_READY)
+        self.assertEqual(campaign.current_preparation_id, preparation.id)
+        preparation.refresh_from_db()
+        self.assertEqual(preparation.recipient_snapshots.order_by("id").first().id, snapshot_id)
+        self.assertEqual(preparation.brevo_list_id, 55)
+        self.assertEqual(preparation.brevo_campaign_id, 77)
+        self.assertFalse(client.called)
+
+    def test_archived_campaign_blocks_snapshot_and_provider_preparation(self):
+        campaign = Campaign.objects.create(name="Archived workflow", created_by=self.admin, archived_at=timezone.now())
+        self.authenticate(self.admin)
+        response = self.client.post(f"{self.create_url}{campaign.id}/prepare/", {}, format="json")
+        self.assertEqual(response.status_code, 409)
+        with patch("campaigns.services.BrevoMarketingClient") as client:
+            response = self.client.post(f"{self.create_url}{campaign.id}/prepare-provider/", {}, format="json")
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(client.called)
+
+    def test_admin_and_manager_restore_idempotently_and_preserve_workflow_state(self):
+        campaign = Campaign.objects.create(name="Restore me", status=Campaign.Status.SNAPSHOT_READY, created_by=self.admin, archived_at=timezone.now())
+        self.authenticate(self.manager)
+        url = f"{self.create_url}{campaign.id}/restore/"
+        response = self.client.post(url, {}, format="json")
+        self.assertEqual(response.status_code, 200)
+        campaign.refresh_from_db()
+        self.assertIsNone(campaign.archived_at)
+        self.assertEqual(campaign.status, Campaign.Status.SNAPSHOT_READY)
+        self.assertTrue(response.data["can_archive"])
+        self.assertFalse(response.data["can_restore"])
+        self.assertEqual(self.client.post(url, {}, format="json").status_code, 200)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.CAMPAIGN_RESTORED, entity_id=str(campaign.id)).count(), 1)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.CAMPAIGN_ARCHIVED, entity_id=str(campaign.id)).count(), 0)
+
+    def test_archive_and_restore_audit_transitions_are_recorded(self):
+        campaign = Campaign.objects.create(name="Audited lifecycle", created_by=self.admin)
+        self.authenticate(self.admin)
+        self.client.post(f"{self.create_url}{campaign.id}/archive/", {}, format="json")
+        self.client.post(f"{self.create_url}{campaign.id}/restore/", {}, format="json")
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.CAMPAIGN_ARCHIVED, entity_id=str(campaign.id)).count(), 1)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.CAMPAIGN_RESTORED, entity_id=str(campaign.id)).count(), 1)
+
+    def test_unused_draft_can_be_deleted_and_records_audit_without_provider_work(self):
+        campaign = Campaign.objects.create(name="Delete me", created_by=self.admin)
+        self.authenticate(self.admin)
+        with patch("campaigns.services.BrevoMarketingClient") as client:
+            response = self.client.delete(f"{self.create_url}{campaign.id}/")
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Campaign.objects.filter(pk=campaign.id).exists())
+        self.assertTrue(AuditEvent.objects.filter(action=AuditEvent.Action.CAMPAIGN_DELETED, entity_id=str(campaign.id)).exists())
+        self.assertFalse(client.called)
+
+    def test_snapshot_preparation_provider_evidence_and_archived_prepared_campaign_cannot_be_deleted(self):
+        campaign = self._snapshot_ready_campaign()
+        self.authenticate(self.admin)
+        self.assertEqual(self.client.delete(f"{self.create_url}{campaign.id}/").status_code, 409)
+
+        evidence = Campaign.objects.create(name="Provider evidence", created_by=self.admin)
+        AuditEvent.objects.create(action=AuditEvent.Action.CAMPAIGN_PROVIDER_FAILURE, entity_type="Campaign", entity_id=str(evidence.id), actor_user=self.admin)
+        self.assertEqual(self.client.delete(f"{self.create_url}{evidence.id}/").status_code, 409)
+
+        archived = Campaign.objects.create(name="Archived unused", created_by=self.admin, archived_at=timezone.now())
+        self.assertEqual(self.client.delete(f"{self.create_url}{archived.id}/").status_code, 204)
+
+        prepared = Campaign.objects.create(name="Archived prepared", status=Campaign.Status.PREPARED, created_by=self.admin, archived_at=timezone.now())
+        self.assertEqual(self.client.delete(f"{self.create_url}{prepared.id}/").status_code, 409)
+
+    def test_capability_flags_follow_permission_and_historical_evidence(self):
+        campaign = Campaign.objects.create(name="Capabilities", created_by=self.admin)
+        self.authenticate(self.admin)
+        response = self.client.get(f"{self.create_url}{campaign.id}/")
+        self.assertTrue(response.data["can_archive"])
+        self.assertFalse(response.data["can_restore"])
+        self.assertTrue(response.data["can_delete"])
+        self.authenticate(self.viewer)
+        response = self.client.get(f"{self.create_url}{campaign.id}/")
+        self.assertFalse(response.data["can_archive"])
+        self.assertFalse(response.data["can_restore"])
+        self.assertFalse(response.data["can_delete"])
+
+    def test_prepare_archive_restore_keeps_same_evidence_and_workflow_state(self):
+        campaign = self._snapshot_ready_campaign()
+        preparation_id = campaign.current_preparation_id
+        snapshot_ids = list(campaign.current_preparation.recipient_snapshots.values_list("id", flat=True))
+        self.authenticate(self.admin)
+        self.client.post(f"{self.create_url}{campaign.id}/archive/", {}, format="json")
+        self.client.post(f"{self.create_url}{campaign.id}/restore/", {}, format="json")
+        campaign.refresh_from_db()
+        self.assertEqual(campaign.status, Campaign.Status.SNAPSHOT_READY)
+        self.assertEqual(campaign.current_preparation_id, preparation_id)
+        self.assertEqual(list(campaign.current_preparation.recipient_snapshots.values_list("id", flat=True)), snapshot_ids)

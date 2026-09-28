@@ -122,6 +122,24 @@ class EventbriteIngestionTests(TestCase):
         )
         self.assertIsNone(record.normalized_data["event"]["start_at"])
 
+    def test_malformed_mobile_invalidates_only_its_row_and_preserves_source_value(self):
+        batch = ingest_eventbrite_workbook(
+            workbook_bytes=workbook_bytes(rows=[
+                eventbrite_row(**{"Phone Number": "hello123"}),
+                eventbrite_row(**{"Buyer Email": "other@example.com"}),
+            ]),
+            source_filename="mobile-review.xlsx",
+        )
+        records = list(batch.records.order_by("id"))
+
+        self.assertEqual(records[0].status, ImportRecord.Status.INVALID)
+        self.assertIn(
+            {"field": "person.mobile", "code": "INVALID_MOBILE", "message": "Mobile number needs review."},
+            records[0].validation_errors,
+        )
+        self.assertEqual(records[0].raw_data["Phone Number"], "hello123")
+        self.assertEqual(records[1].status, ImportRecord.Status.STAGED)
+
     def test_supported_excel_datetime_and_time_cells_stage_without_validation_errors(self):
         batch = ingest_eventbrite_workbook(
             workbook_bytes=workbook_bytes(rows=[eventbrite_row(**{

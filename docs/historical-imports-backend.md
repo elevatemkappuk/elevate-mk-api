@@ -42,7 +42,7 @@ Records retain structured `validation_errors`, analyzer `match_candidates` and `
 
 ### Membership Form
 
-The Membership Form XLSX adapter parses and normalizes demographics, email, mobile, profile fields, submission timestamp, and validation errors. Demographic vocabulary is normalized through Person's current supported values. Unsupported demographic values and invalid emails/URLs are retained as row validation errors rather than becoming CRM mutations.
+The Membership Form XLSX adapter parses and normalizes demographics, email, mobile, profile fields, submission timestamp, and validation errors. Demographic vocabulary is normalized through Person's current supported values. Unsupported demographic values, invalid emails/URLs, and clearly malformed mobile values are retained as row validation errors rather than becoming CRM mutations. `INVALID_MOBILE` is shown as `Mobile number needs review.`; the raw source value remains available for reconciliation. Plausible national/local values remain importable without assuming a country.
 
 ### Eventbrite
 
@@ -54,11 +54,11 @@ event: Eventbrite Event ID, name, start time, timezone, location
 source: provider, Order ID, order date, ticket quantity, guest value
 ```
 
-Buyer fields are the only identity projection. Eventbrite Event ID is an external Event identity. Order ID, ticket quantity, guest value, and financial/payment workbook fields remain source staging/provenance; they are not Person, EventParticipation, or Membership identities. The adapter validates date/time/timezone and supported Excel values as row errors instead of allowing malformed cells to become server errors.
+Buyer fields are the only identity projection. Eventbrite Event ID is an external Event identity. Order ID, ticket quantity, guest value, and financial/payment workbook fields remain source staging/provenance; they are not Person, EventParticipation, or Membership identities. The adapter validates date/time/timezone, mobile plausibility, and supported Excel values as row errors instead of allowing malformed cells to become server errors. Invalid rows are retained and skipped by authoritative import while unrelated valid rows continue processing.
 
 ## Identity Analysis And Reconciliation
 
-Analysis considers BUSINESS Persons only, including archived BUSINESS Persons. TECHNICAL Persons are excluded. It uses normalized exact email and normalized mobile; names are supporting evidence and never a name-only match.
+Analysis considers BUSINESS Persons only, including archived BUSINESS Persons. TECHNICAL Persons are excluded. It uses normalized exact email and normalized mobile; names are supporting evidence and never a name-only match. Import mobile plausibility is separate from provider E.164 normalization: it accepts national/local formats without country inference, while Brevo later decides whether a value can safely become E.164. Existing staged values are not rewritten.
 
 | Result | Meaning |
 | --- | --- |
