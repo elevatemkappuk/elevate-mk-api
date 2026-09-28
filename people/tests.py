@@ -1137,6 +1137,38 @@ class PersonWriteLifecycleApiTests(TestCase):
         self.assertEqual(event.actor_user, self.admin_user)
         self.assertEqual(event.metadata, {"person_id": str(person.id)})
 
+    def test_valid_local_mobile_is_preserved_on_create_and_blank_mobile_remains_valid(self):
+        self.authenticate(self.admin_user)
+
+        local = self.client.post(
+            self.create_url,
+            self.person_payload(primary_email="local@example.com", mobile="07911 123 456"),
+            format="json",
+        )
+        blank = self.client.post(
+            self.create_url,
+            self.person_payload(primary_email="blank@example.com", mobile=""),
+            format="json",
+        )
+
+        self.assertEqual(local.status_code, 201)
+        self.assertEqual(local.data["mobile"], "07911 123 456")
+        self.assertEqual(blank.status_code, 201)
+        self.assertEqual(blank.data["mobile"], "")
+
+    def test_malformed_mobile_is_rejected_before_person_creation(self):
+        self.authenticate(self.admin_user)
+
+        response = self.client.post(
+            self.create_url,
+            self.person_payload(primary_email="malformed@example.com", mobile="hello123"),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["mobile"], ["Enter a valid mobile number."])
+        self.assertFalse(Person.objects.filter(primary_email="malformed@example.com").exists())
+
     def test_profile_field_edit_enqueues_coalesced_brevo_profile_job(self):
         person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")
         self.authenticate(self.admin_user)
@@ -1151,6 +1183,43 @@ class PersonWriteLifecycleApiTests(TestCase):
         self.client.patch(self.detail_url(person.id), {"mobile": "+265991234567"}, format="json")
 
         self.assertEqual(ExternalPersonSyncJob.objects.filter(person=person, job_type="PERSON_PROFILE").count(), 1)
+
+    def test_malformed_mobile_update_is_rejected_without_sync_job_or_person_mutation(self):
+        person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com", mobile="07911123456")
+        self.authenticate(self.admin_user)
+
+        response = self.client.patch(self.detail_url(person.id), {"mobile": "123"}, format="json")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["mobile"], ["Enter a valid mobile number."])
+        person.refresh_from_db()
+        self.assertEqual(person.mobile, "07911123456")
+        self.assertFalse(ExternalPersonSyncJob.objects.filter(person=person).exists())
+
+    def test_mobile_override_does_not_bypass_malformed_mobile_validation(self):
+        Person.objects.create(first_name="Existing", last_name="Person", mobile="07911123456")
+        person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")
+        self.authenticate(self.admin_user)
+
+        response = self.client.patch(
+            self.detail_url(person.id),
+            {"mobile": "123", "allow_duplicate_mobile": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["mobile"], ["Enter a valid mobile number."])
+        self.assertFalse(ExternalPersonSyncJob.objects.filter(person=person).exists())
+
+    def test_unrelated_patch_does_not_revalidate_legacy_invalid_mobile(self):
+        person = Person.objects.create(first_name="Legacy", last_name="Person", primary_email="legacy@example.com", mobile="123")
+        self.authenticate(self.admin_user)
+
+        response = self.client.patch(self.detail_url(person.id), {"location": "Milton Keynes"}, format="json")
+
+        self.assertEqual(response.status_code, 200)
+        person.refresh_from_db()
+        self.assertEqual(person.mobile, "123")
 
     def test_email_edit_enqueues_dedicated_migration_snapshot_without_profile_job(self):
         person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")

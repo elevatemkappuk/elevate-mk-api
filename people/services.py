@@ -85,6 +85,39 @@ _PHONE_ALLOWED_TYPES = {
     phonenumbers.PhoneNumberType.FIXED_LINE_OR_MOBILE,
 }
 
+_CRM_MOBILE_ALLOWED_CHARACTERS = re.compile(r"^[0-9+().\-\s]+$")
+
+
+def is_plausible_crm_mobile(value):
+    """Return whether a staff-entered mobile value is plausibly a phone number.
+
+    CRM entry accepts national numbers without assuming a country. Provider
+    normalization remains responsible for producing verified E.164 values.
+    """
+    raw = "" if value is None else str(value).strip()
+    if not raw:
+        return True
+    if not _CRM_MOBILE_ALLOWED_CHARACTERS.fullmatch(raw):
+        return False
+    if raw.count("+") > 1 or ("+" in raw and not raw.startswith("+")):
+        return False
+    if raw.startswith("+") and len(raw) == 1:
+        return False
+    opening_parenthesis = raw.find("(")
+    closing_parenthesis = raw.find(")")
+    if raw.count("(") != raw.count(")") or (
+        closing_parenthesis != -1 and opening_parenthesis > closing_parenthesis
+    ):
+        return False
+    if "()" in raw.replace(" ", ""):
+        return False
+    if re.search(r"(?:^|\D)[.-](?:\D|$)", raw) or re.search(r"[.\-]{2,}", raw):
+        return False
+    if re.search(r"[+().\-]$", raw):
+        return False
+    digits = re.sub(r"\D", "", raw)
+    return 7 <= len(digits) <= 15
+
 
 def normalize_phone_for_provider(value, *, region=None):
     """Normalize an SMS-capable number without guessing a country.

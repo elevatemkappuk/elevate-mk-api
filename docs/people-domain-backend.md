@@ -120,6 +120,22 @@ Create responses use structured `IDENTITY_COLLISION` `409` payloads with `severi
 
 The CRM's conservative `normalize_mobile()` remains the duplicate-comparison boundary. It is separate from the provider-only E.164 normalizer used by Brevo synchronization. Shared mobile equality never merges Brevo contacts, changes consent, or alters Campaign eligibility.
 
+Manual Person create and update also apply a provider-neutral CRM plausibility
+check when `mobile` is supplied. Blank values remain valid; reasonable
+international and national/local formats are accepted without inferring a
+country or requiring E.164. Clearly malformed values return a field-level
+`mobile` error (`Enter a valid mobile number.`) before duplicate detection or
+profile-sync enqueueing. PATCH requests that omit `mobile` do not revalidate a
+legacy stored value. The submitted CRM representation is preserved rather than
+rewritten.
+
+This plausibility check is not provider eligibility or normalization. Brevo
+continues to use its separate E.164 normalizer and defensive
+`EMPTY`/`NORMALIZED`/`AMBIGUOUS`/`INVALID` handling. Mobile remains non-unique:
+valid shared values still use the existing warning and narrow
+`allow_duplicate_mobile` override, which cannot bypass malformed-mobile
+validation. Explicit country/region capture remains a future enhancement.
+
 The matching/classification signals are shared with historical-import reconciliation, but imports retain their separate review workflow and are not given the interactive PATCH acknowledgement contract. See [Historical Imports backend guide](historical-imports-backend.md) for import-specific resolution and provenance.
 
 ## Lifecycle, Audit, and Imports

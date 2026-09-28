@@ -6,6 +6,7 @@ from rest_framework import serializers
 from memberships.models import Membership
 from memberships.serializers import MembershipSerializer
 from people.models import Person
+from people.services import is_plausible_crm_mobile
 from professional_profiles.models import ProfessionalProfile
 from professional_profiles.serializers import ProfessionalProfileSerializer
 from skills.models import Skill
@@ -143,6 +144,11 @@ class StrictPersonWriteSerializer(serializers.Serializer):
         required=False,
         allow_blank=True,
     )
+
+    def validate_mobile(self, value):
+        if not is_plausible_crm_mobile(value):
+            raise serializers.ValidationError("Enter a valid mobile number.")
+        return value
 
     def validate(self, attrs):
         unknown_fields = set(self.initial_data.keys()) - set(self.fields.keys())

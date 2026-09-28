@@ -131,6 +131,7 @@ class ImportRecordPreviewApiTests(APITestCase):
                 {"field": "gender", "code": "unsupported_gender", "message": "internal: Prefer not to say"},
                 {"field": "email", "code": "invalid_email", "message": "internal validation exception"},
                 {"field": "linkedin_url", "code": "invalid_url", "message": "internal URL validator exception"},
+                {"field": "mobile", "code": "INVALID_MOBILE", "message": "internal mobile validation"},
                 {"field": "mobile", "code": "unexpected", "message": "must never be exposed"},
             ],
         )
@@ -146,6 +147,7 @@ class ImportRecordPreviewApiTests(APITestCase):
                 {"field": "gender", "code": "unsupported_gender", "message": "Gender is not supported."},
                 {"field": "email", "code": "invalid_email", "message": "Email address is not valid."},
                 {"field": "linkedin_url", "code": "invalid_url", "message": "LinkedIn URL is not valid."},
+                {"field": "mobile", "code": "INVALID_MOBILE", "message": "Mobile number needs review."},
             ],
         )
         self.assertNotIn("raw_data", record)
