@@ -61,6 +61,7 @@ INSTALLED_APPS = [
     'mailchimp',
     'marketing_preferences',
     'campaigns',
+    'community',
     'corsheaders',
     'rest_framework',
     'drf_spectacular',
@@ -179,6 +180,7 @@ SESSION_COOKIE_SAMESITE = env("SESSION_COOKIE_SAMESITE", default="Lax" if DEBUG 
 CSRF_COOKIE_HTTPONLY = False
 CSRF_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SAMESITE = env("CSRF_COOKIE_SAMESITE", default="Lax" if DEBUG else "None")
+COMMUNITY_JOIN_THROTTLE_RATE = env("COMMUNITY_JOIN_THROTTLE_RATE", default="10/hour")
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
@@ -188,6 +190,7 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "password_reset": "5/hour",
         "password_reset_confirm": "10/hour",
+        "community_join": COMMUNITY_JOIN_THROTTLE_RATE,
     },
 }
 

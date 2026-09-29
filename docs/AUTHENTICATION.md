@@ -193,6 +193,11 @@ Current implementation relies on Django's normal session framework:
 - Django loads the session before view code runs
 - `sessionid` remains HttpOnly and browser-managed
 - the frontend must not read or manually manage `sessionid`
+
+The anonymous Community join POST is also CSRF-protected. A Community client must
+call `GET /api/v1/auth/csrf/` and send the returned Django CSRF token in the
+`X-CSRFToken` header when posting to `/api/v1/community/join/`. The endpoint does
+not create or establish a login session.
 - the CSRF bootstrap flow relies on `csrftoken` remaining JavaScript-readable so the frontend can send `X-CSRFToken`
 - Django session cookies are intended to remain host-scoped unless a future explicit SSO requirement changes that direction
 

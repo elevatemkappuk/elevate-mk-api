@@ -2168,3 +2168,42 @@ No Events data, engagement scores, percentages, or inferred analytics are return
 The dedicated `dashboard` module uses database aggregation; the projection performs
 8 queries independent of the number of People, plus normal authentication/role
 queries. The nested response contract is documented in OpenAPI as Dashboard.
+
+## Community J1 Native Membership Join
+
+The public Community endpoints are separate from CRM People and import endpoints:
+
+- `GET /api/v1/community/industries/` returns active Industry `{slug, label}` values.
+- `POST /api/v1/community/join/` accepts the native join payload.
+
+The join payload requires `first_name`, `last_name`, `gender`, `age_range`, `email`,
+`location`, `industry`, and `job_title`; `mobile`, `phone_region`, and `linkedin_url` are optional. When `mobile` is supplied, `phone_region` is required and must be an ISO alpha-2 phone region. It is phone parsing metadata only, not Member Country or `Person.location`.
+An optional `Idempotency-Key` header supports safe retries. The server determines
+the join date and creates an ACTIVE `COMMUNITY_PLATFORM` Membership. It does not
+accept Person, Membership, account, audit, or collision-control fields.
+
+Successful submissions return `202` and only:
+
+```json
+{
+  "status": "accepted",
+  "message": "Your membership submission has been received."
+}
+```
+
+Unsafe identity or lifecycle outcomes return a generic `409` review response. The
+public contract never exposes CRM IDs, match evidence, contact details, archive or
+membership state, audit history, notes, tags, marketing data, or import provenance.
+This workflow does not create User accounts, CommunityProfile records, directory or
+networking access, Business Profiles, Events, or ticketing records.
+
+The anonymous join throttle uses the `community_join` DRF scope. Its default rate is
+`10/hour` and can be configured with the `COMMUNITY_JOIN_THROTTLE_RATE` environment
+setting.
+
+Community national and explicit international phone values are independently parsed
+with the installed `phonenumbers` library. Region and number must agree, and new
+successful Community mobile values are stored as E.164. Existing populated legacy
+mobile values are not rewritten; safe Community identity comparison may parse them
+using the explicitly submitted phone region. Idempotency uses canonical E.164 and
+does not persist raw phone data or `phone_region`. Person has no Country field.

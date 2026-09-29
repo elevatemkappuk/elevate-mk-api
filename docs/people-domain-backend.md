@@ -146,6 +146,15 @@ Historical Imports can create or reuse Persons through their own authoritative i
 
 Membership Form import only fills missing supported Person/Profile values when its service rules allow it; it does not overwrite populated CRM values. That source-specific enrichment decision belongs to the import service rather than normal Person PATCH behavior.
 
+The native Community join flow is implemented separately under
+`/api/v1/community/join/`. It creates or safely reuses a BUSINESS Person, fills
+only missing Person and ProfessionalProfile fields, and establishes an ACTIVE
+Membership with source `COMMUNITY_PLATFORM`. Exact normalized email matching is
+allowed only for one non-archived BUSINESS Person without contradictory mobile
+evidence; names and mobile alone never establish identity. Former and archived
+Persons are never silently reactivated, restored, or mutated. The public response
+is purpose-built and does not expose CRM identity or relationship details.
+
 ## Django Admin
 
 Django Admin is a technical management interface, not the Staff CRM. It exposes Person classification and lifecycle administration where configured, while operational CRM authorization remains role-assignment based. Do not infer CRM access from Django `is_staff` or `is_superuser`, or from a Person's linked User.
