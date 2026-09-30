@@ -82,7 +82,8 @@ The setting accepts a comma-separated list, for example
 Railway terminates HTTPS at its reverse proxy and forwards the original scheme
 in `X-Forwarded-Proto`. Django is configured to trust that header, so the API
 origin does not need to be added to `CSRF_TRUSTED_ORIGINS` as a workaround for
-proxy scheme detection. Keep the CRM frontend origin in `CSRF_TRUSTED_ORIGINS`.
+proxy scheme detection. Keep the CRM and Community frontend origins in
+`CSRF_TRUSTED_ORIGINS`.
 
 Set these Railway variables for production:
 
@@ -94,11 +95,11 @@ SECURE_SSL_REDIRECT=True
 `DJANGO_DEBUG` controls Django's `DEBUG` setting. Secure session and CSRF
 cookies are enabled automatically when `DEBUG=False`.
 
-Configure the separate CRM origin with full schemes for both CORS and CSRF:
+Configure the CRM and Community frontend origins with full schemes for both CORS and CSRF:
 
 ```text
-CORS_ALLOWED_ORIGINS=https://<crm-frontend-domain>
-CSRF_TRUSTED_ORIGINS=https://<crm-frontend-domain>
+CORS_ALLOWED_ORIGINS=https://<crm-frontend-domain>,https://community.elevatemk.org
+CSRF_TRUSTED_ORIGINS=https://<crm-frontend-domain>,https://community.elevatemk.org
 ```
 
 Both settings accept comma-separated origins when more than one frontend is
@@ -116,8 +117,8 @@ follows:
 | Setting / Railway variable | Production | Staging |
 | --- | --- | --- |
 | `ALLOWED_HOSTS` | `elevate-mk-api-production.up.railway.app` | `elevate-mk-api-staging.up.railway.app` |
-| `CORS_ALLOWED_ORIGINS` | `https://<crm-production-domain>` | `https://elevate-mk-crm-staging.up.railway.app` |
-| `CSRF_TRUSTED_ORIGINS` | `https://<crm-production-domain>` | `https://elevate-mk-crm-staging.up.railway.app` |
+| `CORS_ALLOWED_ORIGINS` | `https://<crm-production-domain>,https://community.elevatemk.org` | `https://elevate-mk-crm-staging.up.railway.app` |
+| `CSRF_TRUSTED_ORIGINS` | `https://<crm-production-domain>,https://community.elevatemk.org` | `https://elevate-mk-crm-staging.up.railway.app` |
 | `CRM_FRONTEND_URL` | `https://<crm-production-domain>` | `https://elevate-mk-crm-staging.up.railway.app` |
 | `DJANGO_DEBUG` (`DEBUG`) | `False` | `False` |
 | `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` | Production database credentials and host | Staging database credentials and host |
@@ -158,6 +159,13 @@ SESSION_COOKIE_SAMESITE=None
 `CSRF_COOKIE_SECURE` and `SESSION_COOKIE_SECURE` are derived from
 `DJANGO_DEBUG` and therefore become `True` when `DJANGO_DEBUG=False`; they are
 not separate variables to configure.
+
+The Community development frontend runs at `http://localhost:4201`. For local
+development, include both `http://localhost:4200` and
+`http://localhost:4201` in `CORS_ALLOWED_ORIGINS` and
+`CSRF_TRUSTED_ORIGINS`. The production Community frontend is
+`https://community.elevatemk.org` and must be included in both Railway
+variables alongside the existing CRM origin.
 
 `No migrations to apply` is normal: it means the database already has every
 migration included in the deployed code. The command still proceeds to start

@@ -416,7 +416,7 @@ class AuthenticationApiTests(TestCase):
 
 @override_settings(
     ROOT_URLCONF="config.urls",
-    CORS_ALLOWED_ORIGINS=["http://localhost:4200"],
+    CORS_ALLOWED_ORIGINS=["http://localhost:4200", "http://localhost:4201"],
     CORS_ALLOW_CREDENTIALS=True,
     CSRF_TRUSTED_ORIGINS=["http://localhost:4200"],
     SESSION_COOKIE_HTTPONLY=True,
@@ -443,6 +443,34 @@ class LocalBrowserDevelopmentConfigurationTests(TestCase):
         self.assertEqual(response["Access-Control-Allow-Origin"], "http://localhost:4200")
         self.assertEqual(response["Access-Control-Allow-Credentials"], "true")
 
+    def test_community_join_preflight_allows_required_headers(self):
+        response = self.client.options(
+            "/api/v1/community/join/",
+            HTTP_ORIGIN="http://localhost:4201",
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST",
+            HTTP_ACCESS_CONTROL_REQUEST_HEADERS="content-type,x-csrftoken,idempotency-key",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Access-Control-Allow-Origin"], "http://localhost:4201")
+        self.assertEqual(response["Access-Control-Allow-Credentials"], "true")
+        self.assertIn("idempotency-key", response["Access-Control-Allow-Headers"])
+        self.assertIn("x-csrftoken", response["Access-Control-Allow-Headers"])
+
+    def test_community_post_error_remains_readable_to_allowed_origin(self):
+        csrf_client = APIClient(enforce_csrf_checks=True)
+        response = csrf_client.post(
+            "/api/v1/community/join/",
+            {},
+            format="json",
+            HTTP_ORIGIN="http://localhost:4201",
+            HTTP_IDEMPOTENCY_KEY="cors-check",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response["Access-Control-Allow-Origin"], "http://localhost:4201")
+        self.assertEqual(response["Access-Control-Allow-Credentials"], "true")
+
     def test_unrelated_origin_is_not_permitted_by_cors(self):
         response = self.client.options(
             self.login_url,
@@ -456,9 +484,9 @@ class LocalBrowserDevelopmentConfigurationTests(TestCase):
         self.assertNotIn("Access-Control-Allow-Credentials", response)
 
     def test_local_csrf_and_cookie_settings_match_browser_contract(self):
-        self.assertEqual(settings.CORS_ALLOWED_ORIGINS, ["http://localhost:4200"])
+        self.assertEqual(settings.CORS_ALLOWED_ORIGINS, ["http://localhost:4200", "http://localhost:4201"])
         self.assertTrue(settings.CORS_ALLOW_CREDENTIALS)
-        self.assertEqual(settings.CSRF_TRUSTED_ORIGINS, ["http://localhost:4200"])
+        self.assertEqual(settings.CSRF_TRUSTED_ORIGINS, ["http://localhost:4200", "http://localhost:4201"])
         self.assertTrue(settings.SESSION_COOKIE_HTTPONLY)
         self.assertFalse(settings.CSRF_COOKIE_HTTPONLY)
         self.assertEqual(settings.SESSION_COOKIE_SAMESITE, "Lax")
