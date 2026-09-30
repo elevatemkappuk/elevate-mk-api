@@ -7,6 +7,8 @@ from rest_framework.test import APIClient
 
 from audit.models import AuditEvent
 from community.models import JoinSubmissionReceipt
+from external_references.models import ExternalPersonSyncJob
+from marketing_preferences.models import MarketingPreference, MarketingPreferenceHistory
 from memberships.models import Membership
 from people.models import Person
 from professional_profiles.models import Industry, ProfessionalProfile
@@ -340,6 +342,176 @@ class CommunityJoinApiTests(TestCase):
         person = Person.objects.get(primary_email="amina@example.com")
         self.assertEqual(person.location, "Milton Keynes")
 
+    def test_new_join_email_opt_in_records_preference_history_and_async_job(self):
+        response = self.client.post(
+            self.join_url,
+            self.payload(email_marketing_opt_in=True),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 202)
+        person = Person.objects.get(primary_email="amina@example.com")
+        preference = MarketingPreference.objects.get(person=person)
+        history = MarketingPreferenceHistory.objects.get(preference=preference)
+        self.assertEqual(preference.channel, MarketingPreference.Channel.EMAIL)
+        self.assertEqual(preference.state, MarketingPreference.State.OPTED_IN)
+        self.assertEqual(preference.source, MarketingPreference.Source.COMMUNITY_JOIN)
+        self.assertIsNone(preference.actor_user_id)
+        self.assertEqual(history.source, MarketingPreference.Source.COMMUNITY_JOIN)
+        self.assertEqual(history.state, MarketingPreference.State.OPTED_IN)
+        self.assertIsNone(history.actor_user_id)
+        self.assertTrue(
+            ExternalPersonSyncJob.objects.filter(
+                provider="BREVO",
+                job_type="EMAIL_MARKETING_PREFERENCE",
+                source_event_id=history.id,
+            ).exists()
+        )
+
+    def test_new_join_false_leaves_email_preference_unknown(self):
+        response = self.client.post(
+            self.join_url,
+            self.payload(email_marketing_opt_in=False),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 202)
+        person = Person.objects.get(primary_email="amina@example.com")
+        self.assertFalse(MarketingPreference.objects.filter(person=person).exists())
+        self.assertFalse(MarketingPreferenceHistory.objects.exists())
+        self.assertEqual(Membership.objects.filter(person=person).count(), 1)
+
+    def test_new_join_omitted_email_opt_in_leaves_email_preference_unknown(self):
+        response = self.client.post(self.join_url, self.payload(), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        person = Person.objects.get(primary_email="amina@example.com")
+        self.assertFalse(MarketingPreference.objects.filter(person=person).exists())
+        self.assertFalse(MarketingPreferenceHistory.objects.exists())
+
+    def test_existing_unknown_person_can_opt_into_email(self):
+        person = Person.objects.create(first_name="Existing", last_name="Person", primary_email="amina@example.com")
+
+        response = self.client.post(self.join_url, self.payload(email_marketing_opt_in=True), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        preference = MarketingPreference.objects.get(person=person)
+        self.assertEqual(preference.state, MarketingPreference.State.OPTED_IN)
+        self.assertEqual(preference.source, MarketingPreference.Source.COMMUNITY_JOIN)
+
+    def test_existing_unknown_person_without_email_opt_in_remains_unknown(self):
+        person = Person.objects.create(first_name="Existing", last_name="Person", primary_email="amina@example.com")
+
+        response = self.client.post(self.join_url, self.payload(email_marketing_opt_in=False), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        self.assertFalse(MarketingPreference.objects.filter(person=person).exists())
+
+    def test_existing_opted_in_person_is_preserved_for_all_join_values(self):
+        person = Person.objects.create(first_name="Existing", last_name="Person", primary_email="amina@example.com")
+        preference = MarketingPreference.objects.create(
+            person=person,
+            channel=MarketingPreference.Channel.EMAIL,
+            state=MarketingPreference.State.OPTED_IN,
+            source=MarketingPreference.Source.STAFF_RECORDED,
+        )
+        MarketingPreferenceHistory.objects.create(
+            preference=preference,
+            channel=preference.channel,
+            state=preference.state,
+            source=preference.source,
+            recorded_at=preference.recorded_at,
+        )
+
+        for overrides in ({"email_marketing_opt_in": True}, {"email_marketing_opt_in": False}, {}):
+            response = self.client.post(self.join_url, self.payload(**overrides), format="json")
+            self.assertEqual(response.status_code, 202)
+
+        preference.refresh_from_db()
+        self.assertEqual(preference.state, MarketingPreference.State.OPTED_IN)
+        self.assertEqual(preference.source, MarketingPreference.Source.STAFF_RECORDED)
+        self.assertEqual(MarketingPreferenceHistory.objects.filter(preference=preference).count(), 1)
+
+    def test_existing_opted_out_person_cannot_be_reversed_by_community_join(self):
+        person = Person.objects.create(first_name="Existing", last_name="Person", primary_email="amina@example.com")
+        preference = MarketingPreference.objects.create(
+            person=person,
+            channel=MarketingPreference.Channel.EMAIL,
+            state=MarketingPreference.State.OPTED_OUT,
+            source=MarketingPreference.Source.BREVO,
+        )
+
+        response = self.client.post(self.join_url, self.payload(email_marketing_opt_in=True), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        preference.refresh_from_db()
+        self.assertEqual(preference.state, MarketingPreference.State.OPTED_OUT)
+        self.assertEqual(preference.source, MarketingPreference.Source.BREVO)
+        self.assertEqual(MarketingPreferenceHistory.objects.count(), 0)
+        self.assertNotIn("OPTED_OUT", str(response.data))
+
+    def test_existing_active_member_can_opt_into_email_without_membership_change(self):
+        person = Person.objects.create(first_name="Existing", last_name="Member", primary_email="amina@example.com")
+        joined_at = timezone.localdate()
+        membership = Membership.objects.create(
+            person=person,
+            status=Membership.Status.ACTIVE,
+            joined_at=joined_at,
+            membership_source=Membership.Source.STAFF,
+        )
+
+        response = self.client.post(self.join_url, self.payload(email_marketing_opt_in=True), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        membership.refresh_from_db()
+        self.assertEqual(Membership.objects.filter(person=person).count(), 1)
+        self.assertEqual(membership.status, Membership.Status.ACTIVE)
+        self.assertEqual(membership.joined_at, joined_at)
+        self.assertEqual(membership.membership_source, Membership.Source.STAFF)
+        self.assertEqual(
+            MarketingPreference.objects.get(person=person).state,
+            MarketingPreference.State.OPTED_IN,
+        )
+
+    def test_existing_active_opted_out_member_remains_opted_out(self):
+        person = Person.objects.create(first_name="Existing", last_name="Member", primary_email="amina@example.com")
+        Membership.objects.create(
+            person=person,
+            status=Membership.Status.ACTIVE,
+            joined_at=timezone.localdate(),
+            membership_source=Membership.Source.STAFF,
+        )
+        MarketingPreference.objects.create(
+            person=person,
+            channel=MarketingPreference.Channel.EMAIL,
+            state=MarketingPreference.State.OPTED_OUT,
+            source=MarketingPreference.Source.BREVO,
+        )
+
+        response = self.client.post(self.join_url, self.payload(email_marketing_opt_in=True), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(
+            MarketingPreference.objects.get(person=person).state,
+            MarketingPreference.State.OPTED_OUT,
+        )
+        self.assertEqual(Membership.objects.filter(person=person).count(), 1)
+
+    def test_malformed_email_marketing_opt_in_is_rejected_without_mutation(self):
+        response = self.client.post(
+            self.join_url,
+            self.payload(email_marketing_opt_in="sometimes"),
+            format="json",
+            HTTP_IDEMPOTENCY_KEY="invalid-marketing-preference",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Person.objects.exists())
+        self.assertFalse(MarketingPreference.objects.exists())
+        self.assertFalse(MarketingPreferenceHistory.objects.exists())
+        self.assertFalse(ExternalPersonSyncJob.objects.exists())
+        self.assertFalse(JoinSubmissionReceipt.objects.exists())
+
     def test_unknown_and_invalid_fields_are_rejected(self):
         response = self.client.post(
             self.join_url,
@@ -395,6 +567,106 @@ class CommunityJoinApiTests(TestCase):
         self.assertEqual(second.status_code, 202)
         self.assertEqual(second.data, first.data)
         self.assertEqual(Person.objects.filter(primary_email="amina@example.com").count(), 1)
+
+    def test_idempotency_marketing_true_replays_without_duplicate_history(self):
+        headers = {"HTTP_IDEMPOTENCY_KEY": "join-marketing-true"}
+        first = self.client.post(self.join_url, self.payload(email_marketing_opt_in=True), format="json", **headers)
+        second = self.client.post(self.join_url, self.payload(email_marketing_opt_in=True), format="json", **headers)
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 202)
+        self.assertEqual(MarketingPreferenceHistory.objects.count(), 1)
+        self.assertEqual(ExternalPersonSyncJob.objects.count(), 1)
+
+    def test_idempotency_marketing_false_replays_without_preference(self):
+        headers = {"HTTP_IDEMPOTENCY_KEY": "join-marketing-false"}
+        first = self.client.post(self.join_url, self.payload(email_marketing_opt_in=False), format="json", **headers)
+        second = self.client.post(self.join_url, self.payload(email_marketing_opt_in=False), format="json", **headers)
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 202)
+        self.assertFalse(MarketingPreference.objects.exists())
+
+    def test_idempotency_marketing_omitted_and_false_are_equivalent(self):
+        omitted_headers = {"HTTP_IDEMPOTENCY_KEY": "join-marketing-omitted"}
+        omitted = self.client.post(
+            self.join_url,
+            self.payload(mobile="", phone_region=""),
+            format="json",
+            **omitted_headers,
+        )
+        explicit_false = self.client.post(
+            self.join_url,
+            self.payload(email_marketing_opt_in=False, mobile="", phone_region=""),
+            format="json",
+            **omitted_headers,
+        )
+        false_headers = {"HTTP_IDEMPOTENCY_KEY": "join-marketing-false-omitted"}
+        explicit = self.client.post(
+            self.join_url,
+            self.payload(email_marketing_opt_in=False, email="second@example.com", mobile="", phone_region=""),
+            format="json",
+            **false_headers,
+        )
+        omitted_again = self.client.post(
+            self.join_url,
+            self.payload(email="second@example.com", mobile="", phone_region=""),
+            format="json",
+            **false_headers,
+        )
+
+        self.assertEqual(omitted.status_code, 202)
+        self.assertEqual(explicit_false.status_code, 202)
+        self.assertEqual(explicit.status_code, 202)
+        self.assertEqual(omitted_again.status_code, 202)
+
+    def test_idempotency_marketing_change_between_false_and_true_conflicts(self):
+        false_headers = {"HTTP_IDEMPOTENCY_KEY": "join-marketing-false-then-true"}
+        first = self.client.post(
+            self.join_url,
+            self.payload(email_marketing_opt_in=False, mobile="", phone_region=""),
+            format="json",
+            **false_headers,
+        )
+        changed = self.client.post(
+            self.join_url,
+            self.payload(email_marketing_opt_in=True, mobile="", phone_region=""),
+            format="json",
+            **false_headers,
+        )
+        true_headers = {"HTTP_IDEMPOTENCY_KEY": "join-marketing-true-then-false"}
+        second = self.client.post(
+            self.join_url,
+            self.payload(email_marketing_opt_in=True, email="second@example.com", mobile="", phone_region=""),
+            format="json",
+            **true_headers,
+        )
+        changed_again = self.client.post(
+            self.join_url,
+            self.payload(email_marketing_opt_in=False, email="second@example.com", mobile="", phone_region=""),
+            format="json",
+            **true_headers,
+        )
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(changed.status_code, 409)
+        self.assertEqual(second.status_code, 202)
+        self.assertEqual(changed_again.status_code, 409)
+
+    def test_marketing_preference_failure_rolls_back_join_side_effects(self):
+        with mock.patch("marketing_preferences.services.record_audit_event", side_effect=RuntimeError("audit down")):
+            with self.assertRaises(RuntimeError):
+                self.client.post(
+                    self.join_url,
+                    self.payload(email_marketing_opt_in=True),
+                    format="json",
+                )
+
+        self.assertFalse(Person.objects.exists())
+        self.assertFalse(MarketingPreference.objects.exists())
+        self.assertFalse(MarketingPreferenceHistory.objects.exists())
+        self.assertFalse(ExternalPersonSyncJob.objects.exists())
+        self.assertFalse(JoinSubmissionReceipt.objects.exists())
 
     def test_idempotency_receipt_contains_only_digest_metadata(self):
         headers = {"HTTP_IDEMPOTENCY_KEY": "join-receipt-privacy"}

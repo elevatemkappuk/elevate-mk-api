@@ -12,7 +12,14 @@ The first supported channel is `EMAIL`. Its effective states are:
 - `OPTED_IN`: explicit affirmative preference evidence is current.
 - `OPTED_OUT`: explicit negative preference evidence is current and marketing must not be sent.
 
-`UNKNOWN` is represented by no current preference row, so existing and newly created People safely resolve to `UNKNOWN` unless an explicit preference is recorded. Current explicit rows store source, timestamp, and optional staff/system actor. Sources are provider-neutral values including `MEMBERSHIP_FORM`, `WEBSITE_SIGNUP`, `STAFF_RECORDED`, `HISTORICAL_IMPORT`, `MAILCHIMP`, and `OTHER`.
+`UNKNOWN` is represented by no current preference row, so existing and newly created People safely resolve to `UNKNOWN` unless an explicit preference is recorded. Current explicit rows store source, timestamp, and optional staff/system actor. Sources are provider-neutral values including `MEMBERSHIP_FORM`, `WEBSITE_SIGNUP`, `STAFF_RECORDED`, `HISTORICAL_IMPORT`, `MAILCHIMP`, `BREVO`, `COMMUNITY_JOIN`, and `OTHER`.
+
+The native Community Join flow accepts the optional `email_marketing_opt_in`
+boolean. Only `true` records an EMAIL opt-in with source `COMMUNITY_JOIN`.
+`false` and omission mean that no new preference was supplied; neither records
+an opt-out. Existing EMAIL opt-ins and opt-outs are preserved, and public Join
+cannot reverse an existing explicit opt-out. Membership and email possession do
+not imply consent. SMS marketing is outside Community Join V1.
 
 Each meaningful explicit recording also creates append-only `MarketingPreferenceHistory`. Repeating the same state, source, and actor is idempotent; `OPTED_IN -> OPTED_OUT -> OPTED_IN` remains fully recoverable. The corresponding `AuditEvent` action stores only state/source transitions and Person/channel identifiers, never secrets or unnecessary contact PII.
 

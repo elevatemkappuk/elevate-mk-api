@@ -15,6 +15,13 @@ membership/domain data, and marketing consent. Brevo is a communications and
 delivery provider. Brevo is not a second CRM and does not become authoritative
 for Elevate Person data merely because it contains a contact record.
 
+The native Community Join flow may record only an affirmative EMAIL opt-in.
+Its `email_marketing_opt_in` field is optional; `false` and omission do not
+record an opt-out. Such opt-ins use source `COMMUNITY_JOIN` and enter the same
+durable preference-history-to-Brevo worker path as other CRM preference changes.
+Community Join cannot reverse an existing explicit CRM opt-out or provider
+restriction. SMS marketing preferences remain outside Join V1.
+
 The implemented marketing integration is intentionally asynchronous:
 
 ```mermaid

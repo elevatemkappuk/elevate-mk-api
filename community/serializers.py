@@ -27,6 +27,7 @@ class CommunityJoinSerializer(serializers.Serializer):
     gender = serializers.ChoiceField(choices=Person.Gender.choices)
     age_range = serializers.ChoiceField(choices=Person.AgeRange.choices)
     email = serializers.EmailField()
+    email_marketing_opt_in = serializers.BooleanField(required=False, default=False)
     mobile = serializers.CharField(max_length=50, required=False, allow_blank=True)
     phone_region = serializers.CharField(max_length=2, required=False, allow_blank=True)
     location = serializers.CharField(max_length=255)

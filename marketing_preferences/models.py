@@ -24,6 +24,7 @@ class MarketingPreference(models.Model):
         HISTORICAL_IMPORT = "HISTORICAL_IMPORT", "Historical import"
         MAILCHIMP = "MAILCHIMP", "Mailchimp"
         BREVO = "BREVO", "Brevo"
+        COMMUNITY_JOIN = "COMMUNITY_JOIN", "Community Join"
         OTHER = "OTHER", "Other"
 
     person = models.ForeignKey(

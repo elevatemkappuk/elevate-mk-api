@@ -9,6 +9,8 @@ from django.utils import timezone
 from audit.models import AuditEvent
 from audit.services import record_audit_event
 from memberships.models import Membership
+from marketing_preferences.models import MarketingPreference
+from marketing_preferences.services import get_effective_marketing_preference, record_opt_in
 from people.models import Person
 from people.services import normalize_email, normalize_mobile, normalize_phone_for_community, PhoneNormalizationStatus
 from professional_profiles.models import Industry, ProfessionalProfile
@@ -35,6 +37,7 @@ class JoinResult:
 def _digest_payload(payload):
     canonical_payload = dict(payload)
     canonical_payload["email"] = normalize_email(canonical_payload["email"])
+    canonical_payload["email_marketing_opt_in"] = bool(canonical_payload.get("email_marketing_opt_in", False))
     if "mobile" in canonical_payload:
         canonical_payload["mobile"] = normalize_mobile(canonical_payload["mobile"])
     canonical_payload.pop("phone_region", None)
@@ -165,6 +168,19 @@ def _audit_membership(membership, request):
     )
 
 
+def _apply_community_email_opt_in(*, person, requested):
+    if not requested:
+        return
+    preference = get_effective_marketing_preference(person=person)
+    if preference.state != MarketingPreference.State.UNKNOWN:
+        return
+    record_opt_in(
+        person=person,
+        source=MarketingPreference.Source.COMMUNITY_JOIN,
+        actor_user=None,
+    )
+
+
 def submit_community_join(*, data, request, idempotency_key=None):
     request_digest = _digest_payload(data)
     with transaction.atomic():
@@ -253,5 +269,10 @@ def submit_community_join(*, data, request, idempotency_key=None):
                 _save_validated(profile, [*changed_profile_fields, "updated_at"])
         if profile_created or changed_profile_fields:
             _audit_profile(profile, created=profile_created, changed_fields=changed_profile_fields, request=request)
+
+        _apply_community_email_opt_in(
+            person=person,
+            requested=data.get("email_marketing_opt_in", False),
+        )
 
     return JoinResult(replayed=False)

@@ -2177,7 +2177,10 @@ The public Community endpoints are separate from CRM People and import endpoints
 - `POST /api/v1/community/join/` accepts the native join payload.
 
 The join payload requires `first_name`, `last_name`, `gender`, `age_range`, `email`,
-`location`, `industry`, and `job_title`; `mobile`, `phone_region`, and `linkedin_url` are optional. When `mobile` is supplied, `phone_region` is required and must be an ISO alpha-2 phone region. It is phone parsing metadata only, not Member Country or `Person.location`.
+`location`, `industry`, and `job_title`; `mobile`, `phone_region`,
+`linkedin_url`, and `email_marketing_opt_in` are optional. When `mobile` is
+supplied, `phone_region` is required and must be an ISO alpha-2 phone region.
+It is phone parsing metadata only, not Member Country or `Person.location`.
 An optional `Idempotency-Key` header supports safe retries. The server determines
 the join date and creates an ACTIVE `COMMUNITY_PLATFORM` Membership. It does not
 accept Person, Membership, account, audit, or collision-control fields.
@@ -2207,3 +2210,9 @@ successful Community mobile values are stored as E.164. Existing populated legac
 mobile values are not rewritten; safe Community identity comparison may parse them
 using the explicitly submitted phone region. Idempotency uses canonical E.164 and
 does not persist raw phone data or `phone_region`. Person has no Country field.
+
+`email_marketing_opt_in` is EMAIL-only. `true` records an affirmative opt-in
+with source `COMMUNITY_JOIN` and queues the existing asynchronous Brevo sync
+path. `false` and omission both leave the current preference unchanged and do
+not record an opt-out. A public Community Join cannot reverse an existing
+explicit opt-out. SMS marketing preferences are not supported by Join V1.
