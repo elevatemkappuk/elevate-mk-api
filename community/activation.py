@@ -47,7 +47,7 @@ def redeem_community_activation(*, invitation_id, raw_token, password):
     with transaction.atomic():
         # Keep invitation/job lock ordering aligned with the transactional
         # worker: invitation first, then its delivery job.
-        invitation = CommunityAccountInvitation.objects.select_for_update().filter(pk=invitation_id).first()
+        invitation = CommunityAccountInvitation.objects.select_for_update().filter(public_id=invitation_id).first()
         if invitation is None or not _token_matches(invitation, raw_token):
             raise InvalidCommunityActivation
 
