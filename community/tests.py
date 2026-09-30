@@ -1,17 +1,168 @@
 from unittest import mock
+from datetime import timedelta
 
 from django.core.cache import cache
-from django.test import TestCase
+from django.db import IntegrityError
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from audit.models import AuditEvent
-from community.models import JoinSubmissionReceipt
+from community.models import CommunityAccountInvitation, JoinSubmissionReceipt
 from external_references.models import ExternalPersonSyncJob
 from marketing_preferences.models import MarketingPreference, MarketingPreferenceHistory
 from memberships.models import Membership
 from people.models import Person
 from professional_profiles.models import Industry, ProfessionalProfile
+from accounts.models import User
+from notifications.models import TransactionalEmailJob
+
+
+class CommunityActivationSchedulingTests(TestCase):
+    join_url = "/api/v1/community/join/"
+
+    def setUp(self):
+        self.client = APIClient()
+        cache.clear()
+        self.industry = Industry.objects.get(slug="technology")
+
+    def payload(self, **overrides):
+        result = {
+            "first_name": "Amina",
+            "last_name": "Zulu",
+            "gender": Person.Gender.FEMALE,
+            "age_range": Person.AgeRange.AGE_30_34,
+            "email": "activation@example.com",
+            "mobile": "",
+            "phone_region": "",
+            "location": "Milton Keynes",
+            "industry": self.industry.slug,
+            "job_title": "Software Engineer",
+            "linkedin_url": "",
+        }
+        result.update(overrides)
+        return result
+
+    @override_settings(
+        COMMUNITY_ACTIVATION_EXPIRY_HOURS=48,
+        COMMUNITY_FRONTEND_URL="http://localhost:4201",
+        BREVO_COMMUNITY_ACTIVATION_TEMPLATE_ID="activation-template",
+    )
+    def test_eligible_join_creates_one_non_secret_invitation_and_job_without_user(self):
+        response = self.client.post(self.join_url, self.payload(), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        person = Person.objects.get(primary_email="activation@example.com")
+        invitation = CommunityAccountInvitation.objects.get(person=person)
+        job = TransactionalEmailJob.objects.get(invitation=invitation)
+        self.assertFalse(User.objects.filter(person=person).exists())
+        self.assertEqual(invitation.intended_email, "activation@example.com")
+        self.assertEqual((invitation.expires_at - invitation.created_at).total_seconds(), 48 * 3600)
+        self.assertIsNone(invitation.token_hash)
+        self.assertNotIn("activation_url", {field.name for field in TransactionalEmailJob._meta.fields})
+        self.assertEqual(job.template_id, "activation-template")
+        self.assertEqual(job.first_name, "Amina")
+        self.assertEqual(job.expires_in_hours, 48)
+        self.assertEqual(job.status, TransactionalEmailJob.Status.PENDING)
+
+    def test_existing_person_without_user_gets_same_single_invitation(self):
+        person = Person.objects.create(
+            first_name="Existing",
+            last_name="Member",
+            primary_email="activation@example.com",
+        )
+        response = self.client.post(self.join_url, self.payload(), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(CommunityAccountInvitation.objects.filter(person=person).count(), 1)
+        self.assertEqual(TransactionalEmailJob.objects.filter(invitation__person=person).count(), 1)
+
+    def test_person_can_have_historical_invitations_but_only_one_current(self):
+        person = Person.objects.create(
+            first_name="History",
+            last_name="Member",
+            primary_email="history@example.com",
+        )
+        first = CommunityAccountInvitation.objects.create(
+            person=person,
+            intended_email=person.primary_email,
+            expires_at=timezone.now() + timedelta(hours=72),
+        )
+
+        with self.assertRaises(IntegrityError):
+            CommunityAccountInvitation.objects.create(
+                person=person,
+                intended_email=person.primary_email,
+                expires_at=timezone.now() + timedelta(hours=72),
+            )
+
+        first.superseded_at = timezone.now()
+        first.save(update_fields=["superseded_at", "updated_at"])
+        replacement = CommunityAccountInvitation.objects.create(
+            person=person,
+            intended_email=person.primary_email,
+            expires_at=timezone.now() + timedelta(hours=72),
+        )
+
+        self.assertEqual(person.community_account_invitations.count(), 2)
+        self.assertEqual(replacement.person_id, person.id)
+        self.assertTrue(first.superseded_at is not None)
+
+    def test_idempotent_replay_does_not_duplicate_invitation_or_job(self):
+        headers = {"HTTP_IDEMPOTENCY_KEY": "activation-key"}
+        first = self.client.post(self.join_url, self.payload(), format="json", **headers)
+        second = self.client.post(self.join_url, self.payload(), format="json", **headers)
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 202)
+        self.assertEqual(CommunityAccountInvitation.objects.count(), 1)
+        self.assertEqual(TransactionalEmailJob.objects.count(), 1)
+
+    def test_existing_usable_user_gets_no_new_account_invitation(self):
+        person = Person.objects.create(
+            first_name="Existing",
+            last_name="User",
+            primary_email="activation@example.com",
+        )
+        User.objects.create_user(email="activation@example.com", password="Strong-password-123!", person=person)
+
+        response = self.client.post(self.join_url, self.payload(), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        self.assertFalse(CommunityAccountInvitation.objects.exists())
+        self.assertFalse(TransactionalEmailJob.objects.exists())
+
+    def test_inactive_or_unusable_user_is_not_mutated_or_invited(self):
+        person = Person.objects.create(
+            first_name="Existing",
+            last_name="User",
+            primary_email="activation@example.com",
+        )
+        user = User.objects.create_user(email="activation@example.com", password=None, person=person)
+        user.is_active = False
+        user.save(update_fields=["is_active"])
+
+        response = self.client.post(self.join_url, self.payload(), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        self.assertFalse(CommunityAccountInvitation.objects.exists())
+        self.assertFalse(TransactionalEmailJob.objects.exists())
+        user.refresh_from_db()
+        self.assertFalse(user.is_active)
+
+    def test_activation_scheduling_is_independent_of_marketing_opt_in(self):
+        for index, opt_in in enumerate((True, False, None)):
+            payload = self.payload(email=f"activation-{index}@example.com")
+            if opt_in is not None:
+                payload["email_marketing_opt_in"] = opt_in
+
+            response = self.client.post(self.join_url, payload, format="json")
+
+            self.assertEqual(response.status_code, 202)
+
+        self.assertEqual(CommunityAccountInvitation.objects.count(), 3)
+        self.assertEqual(TransactionalEmailJob.objects.count(), 3)
+        self.assertEqual(MarketingPreference.objects.count(), 1)
 
 
 class CommunityJoinApiTests(TestCase):

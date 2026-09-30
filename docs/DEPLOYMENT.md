@@ -120,6 +120,12 @@ follows:
 | `CORS_ALLOWED_ORIGINS` | `https://<crm-production-domain>,https://community.elevatemk.org` | `https://elevate-mk-crm-staging.up.railway.app` |
 | `CSRF_TRUSTED_ORIGINS` | `https://<crm-production-domain>,https://community.elevatemk.org` | `https://elevate-mk-crm-staging.up.railway.app` |
 | `CRM_FRONTEND_URL` | `https://<crm-production-domain>` | `https://elevate-mk-crm-staging.up.railway.app` |
+| `COMMUNITY_FRONTEND_URL` | `https://community.elevatemk.org` | `http://localhost:4201` or the staging Community origin |
+| `COMMUNITY_ACTIVATION_EXPIRY_HOURS` | `72` | `72` |
+| `BREVO_COMMUNITY_ACTIVATION_TEMPLATE_ID` | Approved transactional activation template ID | Approved staging transactional activation template ID |
+| `TRANSACTIONAL_EMAIL_WORKER_POLL_SECONDS` | `3` | `3` |
+| `TRANSACTIONAL_EMAIL_WORKER_BATCH_SIZE` | `20` | `20` |
+| `TRANSACTIONAL_EMAIL_JOB_LEASE_SECONDS` | `900` | `900` |
 | `DJANGO_DEBUG` (`DEBUG`) | `False` | `False` |
 | `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` | Production database credentials and host | Staging database credentials and host |
 | `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME`, `BREVO_REPLY_TO_EMAIL`, `BREVO_REPLY_TO_NAME`, `BREVO_PASSWORD_RESET_TEMPLATE_ID`, `BREVO_MARKETING_LIST_ID`, `MARKETING_SYNC_PROVIDER`, `BREVO_MARKETING_WEBHOOK_USERNAME`, `BREVO_MARKETING_WEBHOOK_PASSWORD` | Production Brevo credentials, template ID, approved marketing list ID, `BREVO` provider selection, and webhook Basic credentials | Staging Brevo credentials, template ID, approved marketing list ID, `BREVO` provider selection, and webhook Basic credentials |

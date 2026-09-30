@@ -1,7 +1,10 @@
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import timedelta
 
+from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
@@ -15,7 +18,8 @@ from people.models import Person
 from people.services import normalize_email, normalize_mobile, normalize_phone_for_community, PhoneNormalizationStatus
 from professional_profiles.models import Industry, ProfessionalProfile
 
-from community.models import JoinSubmissionReceipt
+from community.models import CommunityAccountInvitation, JoinSubmissionReceipt
+from notifications.models import TransactionalEmailJob
 
 
 PUBLIC_REVIEW_CODE = "SUBMISSION_REQUIRES_REVIEW"
@@ -47,6 +51,52 @@ def _digest_payload(payload):
 
 def _key_hash(idempotency_key):
     return hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+
+
+def build_community_activation_url(*, invitation, token):
+    """Build a URL transiently; neither this URL nor token is persisted here."""
+    return f"{settings.COMMUNITY_FRONTEND_URL.rstrip('/')}/activate/{invitation.public_id}/{token}"
+
+
+def _schedule_account_activation(*, person):
+    """Create the durable invitation/job pair without creating a User or calling a provider."""
+    user_model = get_user_model()
+    user = user_model.objects.select_for_update().filter(person_id=person.pk).first()
+    if user is not None:
+        # Existing accounts, including inactive and unusable-password accounts,
+        # require their own controlled lifecycle and are not mutated by J2.1.
+        return None
+
+    now = timezone.now()
+    invitation = (
+        CommunityAccountInvitation.objects.select_for_update()
+        .filter(person=person, used_at__isnull=True, revoked_at__isnull=True, superseded_at__isnull=True)
+        .first()
+    )
+    if invitation is not None and invitation.expires_at > now:
+        return invitation
+    if invitation is not None:
+        invitation.superseded_at = now
+        invitation.save(update_fields=["superseded_at", "updated_at"])
+
+    invitation = CommunityAccountInvitation.objects.create(
+        person=person,
+        intended_email=normalize_email(person.primary_email),
+        # The delivery worker will mint and hash a token immediately before
+        # sending. J2.1 never creates or persists a raw activation secret.
+        token_hash=None,
+        expires_at=now + timedelta(hours=settings.COMMUNITY_ACTIVATION_EXPIRY_HOURS),
+    )
+
+    TransactionalEmailJob.objects.create(
+        invitation=invitation,
+        template_id=settings.BREVO_COMMUNITY_ACTIVATION_TEMPLATE_ID,
+        recipient_email=invitation.intended_email,
+        recipient_name=f"{person.first_name} {person.last_name}".strip(),
+        first_name=person.first_name,
+        expires_in_hours=settings.COMMUNITY_ACTIVATION_EXPIRY_HOURS,
+    )
+    return invitation
 
 
 def _missing(value):
@@ -274,5 +324,6 @@ def submit_community_join(*, data, request, idempotency_key=None):
             person=person,
             requested=data.get("email_marketing_opt_in", False),
         )
+        _schedule_account_activation(person=person)
 
     return JoinResult(replayed=False)
