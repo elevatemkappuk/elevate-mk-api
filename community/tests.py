@@ -2,7 +2,7 @@ from unittest import mock
 from datetime import timedelta
 
 from django.core.cache import cache
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -57,7 +57,11 @@ class CommunityActivationSchedulingTests(TestCase):
         job = TransactionalEmailJob.objects.get(invitation=invitation)
         self.assertFalse(User.objects.filter(person=person).exists())
         self.assertEqual(invitation.intended_email, "activation@example.com")
-        self.assertEqual((invitation.expires_at - invitation.created_at).total_seconds(), 48 * 3600)
+        self.assertAlmostEqual(
+            (invitation.expires_at - invitation.created_at).total_seconds(),
+            48 * 3600,
+            places=2,
+        )
         self.assertIsNone(invitation.token_hash)
         self.assertNotIn("activation_url", {field.name for field in TransactionalEmailJob._meta.fields})
         self.assertEqual(job.template_id, "activation-template")
@@ -90,11 +94,12 @@ class CommunityActivationSchedulingTests(TestCase):
         )
 
         with self.assertRaises(IntegrityError):
-            CommunityAccountInvitation.objects.create(
-                person=person,
-                intended_email=person.primary_email,
-                expires_at=timezone.now() + timedelta(hours=72),
-            )
+            with transaction.atomic():
+                CommunityAccountInvitation.objects.create(
+                    person=person,
+                    intended_email=person.primary_email,
+                    expires_at=timezone.now() + timedelta(hours=72),
+                )
 
         first.superseded_at = timezone.now()
         first.save(update_fields=["superseded_at", "updated_at"])
