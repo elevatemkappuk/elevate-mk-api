@@ -39,6 +39,7 @@ from people.services import CreateNewIdentityCollision, evaluate_create_new_iden
 from external_references.services import enqueue_coalesced_person_sync_job, enqueue_person_sync_job
 from people.querying import PeopleDirectoryQuery
 from memberships.models import Membership
+from community.models import CommunityAccountInvitation
 from staff_access.models import StaffRole
 from staff_access.permissions import HasActiveStaffRoleCodes, user_has_any_active_staff_role
 from skills.models import PersonSkill
@@ -708,11 +709,22 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
             is_active=True,
             tag__is_active=True,
         ).order_by("tag__display_order", "tag__name", "tag__id")
+        current_community_invitations = CommunityAccountInvitation.objects.filter(
+            used_at__isnull=True,
+            revoked_at__isnull=True,
+            superseded_at__isnull=True,
+        ).select_related("transactional_email_job").order_by("-created_at", "-id")
         return self.get_business_people_queryset().select_related(
+            "user",
             "membership",
             "professional_profile",
             "professional_profile__industry",
         ).prefetch_related(
+            Prefetch(
+                "community_account_invitations",
+                queryset=current_community_invitations,
+                to_attr="current_community_invitations",
+            ),
             Prefetch("person_skills", queryset=active_person_skills, to_attr="active_person_skills"),
             Prefetch("person_interests", queryset=active_person_interests, to_attr="active_person_interests"),
             Prefetch("person_tags", queryset=active_person_tags, to_attr="active_person_tags"),

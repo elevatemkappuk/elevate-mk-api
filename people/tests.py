@@ -1,4 +1,5 @@
 from django.contrib.admin.sites import AdminSite
+from datetime import timedelta
 from unittest import mock
 from django.test import override_settings
 from django.test import RequestFactory
@@ -8,8 +9,10 @@ from django.test import TestCase
 
 from accounts.models import User
 from audit.models import AuditEvent
+from community.models import CommunityAccountInvitation
 from interests.models import Interest, PersonInterest
 from memberships.models import Membership
+from notifications.models import TransactionalEmailJob
 from external_references.models import ExternalPersonSyncJob
 from people.admin import PersonAdmin
 from people.models import Person
@@ -712,6 +715,28 @@ class PersonOverviewApiTests(TestCase):
     def get_url(self, person_id):
         return self.url_template.format(person_id=person_id)
 
+    def create_invitation(self, person, status=TransactionalEmailJob.Status.PENDING, expires_at=None):
+        invitation = CommunityAccountInvitation.objects.create(
+            person=person,
+            intended_email=person.primary_email,
+            token_hash="hashed-token",
+            expires_at=expires_at or timezone.now() + timedelta(hours=48),
+        )
+        job = TransactionalEmailJob.objects.create(
+            invitation=invitation,
+            template_id="community-activation",
+            recipient_email=person.primary_email,
+            recipient_name=person.first_name,
+            first_name=person.first_name,
+            expires_in_hours=48,
+            status=status,
+        )
+        if status == TransactionalEmailJob.Status.SENT:
+            job.sent_at = timezone.now()
+            job.completed_at = job.sent_at
+            job.save(update_fields=["sent_at", "completed_at"])
+        return invitation, job
+
     def test_anonymous_user_receives_401(self):
         response = self.client.get(self.get_url(self.contact_person.id))
         self.assertEqual(response.status_code, 401)
@@ -768,6 +793,85 @@ class PersonOverviewApiTests(TestCase):
         self.assertEqual(response.data["tags"], [])
         self.assertEqual(response.data["relationship"]["type"], "CONTACT")
         self.assertEqual(response.data["relationship"]["label"], "Contact")
+        self.assertEqual(response.data["community_account"]["status"], "NOT_SET_UP")
+        self.assertIsNone(response.data["community_account"]["account_email"])
+
+    def test_active_community_account_returns_account_metadata_and_activation_timestamp(self):
+        user = User.objects.create_user(
+            email="active@example.com",
+            password="testpass123",
+            person=self.active_member_person,
+        )
+        user.last_login = timezone.now()
+        user.save(update_fields=["last_login"])
+        activation_time = timezone.now() - timedelta(minutes=10)
+        AuditEvent.objects.create(
+            actor_user=user,
+            action=AuditEvent.Action.COMMUNITY_ACCOUNT_ACTIVATED,
+            entity_type="User",
+            entity_id=str(user.id),
+            metadata={"source": "COMMUNITY_ACTIVATION", "person_id": str(self.active_member_person.id)},
+            occurred_at=activation_time,
+        )
+
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.active_member_person.id))
+        account = response.data["community_account"]
+
+        self.assertEqual(account["status"], "ACTIVE")
+        self.assertEqual(account["account_email"], "active@example.com")
+        self.assertEqual(account["account_created_at"], activation_time.isoformat().replace("+00:00", "Z"))
+        self.assertIsNotNone(account["last_login_at"])
+        self.assertNotIn("token", response.json().__str__().lower())
+
+    def test_active_account_with_null_last_login_is_still_active(self):
+        User.objects.create_user(email="null-login@example.com", password="testpass123", person=self.active_member_person)
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.active_member_person.id))
+        self.assertEqual(response.data["community_account"]["status"], "ACTIVE")
+        self.assertIsNone(response.data["community_account"]["last_login_at"])
+
+    def test_pending_community_account_exposes_safe_invitation_delivery_projection(self):
+        for status, expected_delivery in (
+            (TransactionalEmailJob.Status.SENT, "SENT"),
+            (TransactionalEmailJob.Status.PENDING, "NOT_SENT"),
+            (TransactionalEmailJob.Status.PROCESSING, "NOT_SENT"),
+            (TransactionalEmailJob.Status.DELIVERY_UNCERTAIN, "DELIVERY_UNCERTAIN"),
+            (TransactionalEmailJob.Status.FAILED, "FAILED"),
+        ):
+            with self.subTest(status=status):
+                person = Person.objects.create(first_name=f"Pending {status}", last_name="Member", primary_email=f"{status.lower()}@example.com")
+                Membership.objects.create(person=person, status=Membership.Status.ACTIVE, joined_at=timezone.localdate(), membership_source=Membership.Source.COMMUNITY_PLATFORM)
+                invitation, job = self.create_invitation(person, status=status)
+                self.authenticate(self.admin_user)
+                response = self.client.get(self.get_url(person.id))
+                account = response.data["community_account"]
+
+                self.assertEqual(account["status"], "SETUP_PENDING")
+                self.assertEqual(account["setup_email"], invitation.intended_email)
+                self.assertEqual(account["invitation_delivery_status"], expected_delivery)
+                self.assertEqual(account["invitation_expires_at"], invitation.expires_at.isoformat().replace("+00:00", "Z"))
+                self.assertEqual(account["invitation_sent_at"] is not None, status == TransactionalEmailJob.Status.SENT)
+                self.assertNotIn("provider_message_id", response.data)
+
+    def test_expired_invitation_is_not_setup_pending(self):
+        person = Person.objects.create(first_name="Expired", last_name="Member", primary_email="expired@example.com")
+        Membership.objects.create(person=person, status=Membership.Status.ACTIVE, joined_at=timezone.localdate(), membership_source=Membership.Source.COMMUNITY_PLATFORM)
+        self.create_invitation(person, expires_at=timezone.now() - timedelta(minutes=1))
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(person.id))
+        self.assertEqual(response.data["community_account"]["status"], "NOT_SET_UP")
+        self.assertIsNone(response.data["community_account"]["setup_email"])
+
+    def test_existing_user_without_current_community_access_is_access_unavailable(self):
+        user = User.objects.create_user(email="former-account@example.com", password="testpass123", person=self.former_member_person)
+        self.former_member_person.archived_at = timezone.now()
+        self.former_member_person.save(update_fields=["archived_at"])
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.former_member_person.id))
+        account = response.data["community_account"]
+        self.assertEqual(account["status"], "ACCESS_UNAVAILABLE")
+        self.assertEqual(account["account_email"], user.email)
 
     def test_skills_are_included_in_deterministic_order_when_present(self):
         PersonSkill.objects.create(person=self.active_member_person, skill=self.software_development_skill)

@@ -24,6 +24,16 @@ from notifications.models import TransactionalEmailJob
 
 PUBLIC_REVIEW_CODE = "SUBMISSION_REQUIRES_REVIEW"
 
+COMMUNITY_ACCOUNT_ACTIVE = "ACTIVE"
+COMMUNITY_ACCOUNT_SETUP_PENDING = "SETUP_PENDING"
+COMMUNITY_ACCOUNT_NOT_SET_UP = "NOT_SET_UP"
+COMMUNITY_ACCOUNT_ACCESS_UNAVAILABLE = "ACCESS_UNAVAILABLE"
+
+COMMUNITY_INVITATION_SENT = "SENT"
+COMMUNITY_INVITATION_NOT_SENT = "NOT_SENT"
+COMMUNITY_INVITATION_DELIVERY_UNCERTAIN = "DELIVERY_UNCERTAIN"
+COMMUNITY_INVITATION_FAILED = "FAILED"
+
 
 def is_community_eligible_user(user):
     """Return whether an authenticated User currently has Community access."""
@@ -35,6 +45,108 @@ def is_community_eligible_user(user):
         and person.archived_at is None
         and Membership.objects.filter(person=person, status=Membership.Status.ACTIVE).exists()
     )
+
+
+def build_community_account_projection(*, person):
+    """Return the safe CRM projection for one Person's Community account lifecycle."""
+    user = _related_user(person)
+    if user is not None:
+        membership = _related_membership(person)
+        is_eligible = bool(
+            user.is_active
+            and person.record_type == Person.RecordType.BUSINESS
+            and person.archived_at is None
+            and membership is not None
+            and membership.status == Membership.Status.ACTIVE
+        )
+        activation_event = AuditEvent.objects.filter(
+            action=AuditEvent.Action.COMMUNITY_ACCOUNT_ACTIVATED,
+            entity_type="User",
+            entity_id=str(user.pk),
+            metadata__person_id=str(person.pk),
+        ).order_by("occurred_at", "id").first()
+        return {
+            "status": COMMUNITY_ACCOUNT_ACTIVE if is_eligible else COMMUNITY_ACCOUNT_ACCESS_UNAVAILABLE,
+            "account_email": user.email,
+            "setup_email": None,
+            "account_created_at": activation_event.occurred_at if activation_event else user.date_joined,
+            "last_login_at": user.last_login,
+            "invitation_sent_at": None,
+            "invitation_expires_at": None,
+            "invitation_delivery_status": None,
+        }
+
+    invitation = _current_relevant_invitation(person)
+    if invitation is None:
+        return {
+            "status": COMMUNITY_ACCOUNT_NOT_SET_UP,
+            "account_email": None,
+            "setup_email": None,
+            "account_created_at": None,
+            "last_login_at": None,
+            "invitation_sent_at": None,
+            "invitation_expires_at": None,
+            "invitation_delivery_status": None,
+        }
+
+    job = getattr(invitation, "transactional_email_job", None)
+    delivery_status, sent_at = _community_invitation_delivery(job)
+    return {
+        "status": COMMUNITY_ACCOUNT_SETUP_PENDING,
+        "account_email": None,
+        "setup_email": invitation.intended_email,
+        "account_created_at": None,
+        "last_login_at": None,
+        "invitation_sent_at": sent_at,
+        "invitation_expires_at": invitation.expires_at,
+        "invitation_delivery_status": delivery_status,
+    }
+
+
+def _related_user(person):
+    try:
+        return person.user
+    except get_user_model().DoesNotExist:
+        return None
+
+
+def _related_membership(person):
+    try:
+        return person.membership
+    except Membership.DoesNotExist:
+        return None
+
+
+def _current_relevant_invitation(person):
+    if hasattr(person, "current_community_invitations"):
+        invitations = person.current_community_invitations
+    else:
+        invitations = list(
+            CommunityAccountInvitation.objects.filter(
+                person=person,
+                used_at__isnull=True,
+                revoked_at__isnull=True,
+                superseded_at__isnull=True,
+            ).select_related("transactional_email_job")[:1]
+        )
+    invitation = invitations[0] if invitations else None
+    if invitation is None or invitation.expires_at <= timezone.now():
+        return None
+    if getattr(invitation, "transactional_email_job", None) is not None and invitation.transactional_email_job.status == TransactionalEmailJob.Status.CANCELLED:
+        return None
+    return invitation
+
+
+def _community_invitation_delivery(job):
+    if job is None:
+        return COMMUNITY_INVITATION_NOT_SENT, None
+    if job.status == TransactionalEmailJob.Status.SENT and job.sent_at is not None:
+        return COMMUNITY_INVITATION_SENT, job.sent_at
+    if job.status == TransactionalEmailJob.Status.DELIVERY_UNCERTAIN:
+        return COMMUNITY_INVITATION_DELIVERY_UNCERTAIN, None
+    if job.status == TransactionalEmailJob.Status.FAILED:
+        return COMMUNITY_INVITATION_FAILED, None
+    return COMMUNITY_INVITATION_NOT_SENT, None
 
 
 class CommunityJoinReviewRequired(Exception):

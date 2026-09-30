@@ -6,6 +6,7 @@ from rest_framework import serializers
 from memberships.models import Membership
 from memberships.serializers import MembershipSerializer
 from people.models import Person
+from community.services import build_community_account_projection
 from people.services import is_plausible_crm_mobile
 from professional_profiles.models import ProfessionalProfile
 from professional_profiles.serializers import ProfessionalProfileSerializer
@@ -245,6 +246,20 @@ class PersonRelationshipSerializer(serializers.Serializer):
     label = serializers.CharField()
 
 
+class CommunityAccountSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=("ACTIVE", "SETUP_PENDING", "NOT_SET_UP", "ACCESS_UNAVAILABLE"))
+    account_email = serializers.EmailField(allow_null=True)
+    setup_email = serializers.EmailField(allow_null=True)
+    account_created_at = serializers.DateTimeField(allow_null=True)
+    last_login_at = serializers.DateTimeField(allow_null=True)
+    invitation_sent_at = serializers.DateTimeField(allow_null=True)
+    invitation_expires_at = serializers.DateTimeField(allow_null=True)
+    invitation_delivery_status = serializers.ChoiceField(
+        choices=("SENT", "NOT_SENT", "DELIVERY_UNCERTAIN", "FAILED"),
+        allow_null=True,
+    )
+
+
 class PersonOverviewSerializer(serializers.Serializer):
     person = PersonListSerializer(source="*")
     relationship = serializers.SerializerMethodField()
@@ -254,12 +269,17 @@ class PersonOverviewSerializer(serializers.Serializer):
     interests = serializers.SerializerMethodField()
     tags = serializers.SerializerMethodField()
     marketing_preference = serializers.SerializerMethodField()
+    community_account = serializers.SerializerMethodField()
 
     @extend_schema_field(MarketingPreferenceSerializer)
     def get_marketing_preference(self, instance):
         return MarketingPreferenceSerializer(
             get_effective_marketing_preference(person=instance)
         ).data
+
+    @extend_schema_field(CommunityAccountSerializer)
+    def get_community_account(self, instance):
+        return CommunityAccountSerializer(build_community_account_projection(person=instance)).data
 
     @extend_schema_field(PersonRelationshipSerializer)
     def get_relationship(self, instance):
