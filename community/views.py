@@ -11,6 +11,9 @@ from rest_framework.views import APIView
 from memberships.models import Membership
 from people.models import Person
 from professional_profiles.models import Industry
+from accounts.serializers import LoginSerializer
+from accounts.views import record_auth_audit_or_raise
+from audit.models import AuditEvent
 
 from community.activation import (
     ACCOUNT_SETUP_UNAVAILABLE_CODE,
@@ -34,7 +37,13 @@ from community.services import (
     CommunityJoinIdempotencyConflict,
     CommunityJoinReviewRequired,
     submit_community_join,
+    is_community_eligible_user,
 )
+
+COMMUNITY_LOGIN_INVALID_CODE = "INVALID_CREDENTIALS"
+COMMUNITY_LOGIN_INVALID_DETAIL = "Email or password is incorrect."
+COMMUNITY_ACCESS_UNAVAILABLE_CODE = "COMMUNITY_ACCESS_UNAVAILABLE"
+COMMUNITY_ACCESS_UNAVAILABLE_DETAIL = "Community access is not available for this account."
 
 
 class CommunityIndustryListView(APIView):
@@ -106,6 +115,73 @@ class CommunityJoinView(APIView):
 
 
 @method_decorator(csrf_protect, name="dispatch")
+class CommunityLoginView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "community_login"
+
+    @extend_schema(
+        operation_id="community_login",
+        summary="Sign in to the Community",
+        request=LoginSerializer,
+        responses={
+            200: CommunityCurrentUserSerializer,
+            400: OpenApiResponse(description="Invalid credentials."),
+            403: OpenApiResponse(description="Community access unavailable."),
+            429: OpenApiResponse(description="Too many login attempts."),
+        },
+        auth=[],
+        tags=["Community"],
+    )
+    def post(self, request):
+        serializer = LoginSerializer(data=request.data, context={"request": request})
+        if not serializer.is_valid():
+            record_auth_audit_or_raise(
+                action=AuditEvent.Action.LOGIN_FAILED,
+                actor_user=None,
+                entity_type="Authentication",
+                entity_id=None,
+            )
+            return Response(
+                {"code": COMMUNITY_LOGIN_INVALID_CODE, "detail": COMMUNITY_LOGIN_INVALID_DETAIL},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = serializer.validated_data["user"]
+        if not is_community_eligible_user(user):
+            record_auth_audit_or_raise(
+                action=AuditEvent.Action.LOGIN_FAILED,
+                actor_user=user,
+                entity_type="Authentication",
+                entity_id=user.id,
+                metadata={"authentication": "community", "outcome": "access_unavailable"},
+            )
+            return Response(
+                {"code": COMMUNITY_ACCESS_UNAVAILABLE_CODE, "detail": COMMUNITY_ACCESS_UNAVAILABLE_DETAIL},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        login(request, user)
+        record_auth_audit_or_raise(
+            action=AuditEvent.Action.LOGIN_SUCCEEDED,
+            actor_user=user,
+            entity_type="Authentication",
+            entity_id=user.id,
+            metadata={"authentication": "community"},
+        )
+        person = user.person
+        return Response(
+            CommunityCurrentUserSerializer({
+                "id": user.id,
+                "first_name": person.first_name,
+                "last_name": person.last_name,
+            }).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+@method_decorator(csrf_protect, name="dispatch")
 class CommunityActivationView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -171,8 +247,7 @@ class CommunityMeView(APIView):
         tags=["Community"],
     )
     def get(self, request):
-        person = request.user.person
-        has_membership = Membership.objects.filter(person=person, status=Membership.Status.ACTIVE).exists()
-        if person.record_type != Person.RecordType.BUSINESS or person.archived_at is not None or not has_membership:
+        if not is_community_eligible_user(request.user):
             return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
+        person = request.user.person
         return Response(CommunityCurrentUserSerializer({"id": request.user.id, "first_name": person.first_name, "last_name": person.last_name}).data)

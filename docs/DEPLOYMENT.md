@@ -123,6 +123,7 @@ follows:
 | `COMMUNITY_FRONTEND_URL` | `https://community.elevatemk.org` | `http://localhost:4201` or the staging Community origin |
 | `COMMUNITY_ACTIVATION_EXPIRY_HOURS` | `72` | `72` |
 | `COMMUNITY_ACTIVATION_THROTTLE_RATE` | `10/hour` | `10/hour` |
+| `COMMUNITY_LOGIN_THROTTLE_RATE` | `10/hour` | `10/hour` |
 | `BREVO_COMMUNITY_ACTIVATION_TEMPLATE_ID` | Approved transactional activation template ID | Approved staging transactional activation template ID |
 | `TRANSACTIONAL_EMAIL_WORKER_POLL_SECONDS` | `3` | `3` |
 | `TRANSACTIONAL_EMAIL_WORKER_BATCH_SIZE` | `20` | `20` |

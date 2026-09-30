@@ -25,6 +25,18 @@ from notifications.models import TransactionalEmailJob
 PUBLIC_REVIEW_CODE = "SUBMISSION_REQUIRES_REVIEW"
 
 
+def is_community_eligible_user(user):
+    """Return whether an authenticated User currently has Community access."""
+    person = getattr(user, "person", None)
+    return bool(
+        getattr(user, "is_authenticated", False)
+        and person is not None
+        and person.record_type == Person.RecordType.BUSINESS
+        and person.archived_at is None
+        and Membership.objects.filter(person=person, status=Membership.Status.ACTIVE).exists()
+    )
+
+
 class CommunityJoinReviewRequired(Exception):
     pass
 
