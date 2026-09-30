@@ -74,7 +74,10 @@ class TransactionalEmailWorkerTests(TestCase):
         self.assertEqual(kwargs["recipient_email"], "amina@example.com")
         self.assertEqual(kwargs["recipient_name"], "Amina Zulu")
         self.assertEqual(set(kwargs["template_params"]), {"first_name", "activation_url", "expires_in_hours"})
-        self.assertIn("/activate/", kwargs["template_params"]["activation_url"])
+        activation_url = kwargs["template_params"]["activation_url"]
+        self.assertTrue(activation_url.startswith("http://localhost:4201/activate/"))
+        self.assertNotIn("#", activation_url)
+        self.assertNotIn(" ", activation_url)
         self.assertIsNotNone(invitation.token_hash)
         self.assertNotIn(kwargs["template_params"]["activation_url"], str(invitation.__dict__))
         self.assertEqual(job.provider_message_id, "brevo-id")
