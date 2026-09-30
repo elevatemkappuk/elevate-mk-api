@@ -21,6 +21,7 @@ from community.activation import (
     CommunityAccountSetupUnavailable,
     CommunityPasswordValidationError,
     InvalidCommunityActivation,
+    check_community_activation,
     redeem_community_activation,
 )
 from community.serializers import (
@@ -119,6 +120,16 @@ class CommunityActivationView(APIView):
         auth=[],
         tags=["Community"],
     )
+    def get(self, request, invitation_id, token):
+        try:
+            check_community_activation(invitation_id=invitation_id, raw_token=token)
+        except InvalidCommunityActivation:
+            return Response(
+                {"code": INVALID_ACTIVATION_CODE, "detail": INVALID_ACTIVATION_DETAIL},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response({"usable": True}, status=status.HTTP_200_OK)
+
     def post(self, request, invitation_id, token):
         serializer = CommunityActivationSerializer(data=request.data)
         if not serializer.is_valid():

@@ -47,9 +47,11 @@ def redeem_community_activation(*, invitation_id, raw_token, password):
     with transaction.atomic():
         # Keep invitation/job lock ordering aligned with the transactional
         # worker: invitation first, then its delivery job.
-        invitation = CommunityAccountInvitation.objects.select_for_update().filter(public_id=invitation_id).first()
-        if invitation is None or not _token_matches(invitation, raw_token):
-            raise InvalidCommunityActivation
+        invitation, person, membership = _get_activation_context(
+            invitation_id=invitation_id,
+            raw_token=raw_token,
+            lock=True,
+        )
 
         job = (
             TransactionalEmailJob.objects.select_for_update()
@@ -59,25 +61,17 @@ def redeem_community_activation(*, invitation_id, raw_token, password):
         if job is not None and job.status == TransactionalEmailJob.Status.PROCESSING:
             raise CommunityAccountSetupUnavailable
 
-        person = Person.objects.select_for_update().get(pk=invitation.person_id)
-        membership = Membership.objects.select_for_update().filter(
-            person=person,
-            status=Membership.Status.ACTIVE,
-        ).first()
-        if not _invitation_is_eligible(invitation=invitation, person=person, membership=membership):
-            raise InvalidCommunityActivation
-
         user_model = get_user_model()
         existing_user = user_model.objects.select_for_update().filter(person_id=person.id).first()
-        if existing_user is not None:
+        if not _account_setup_is_available(
+            invitation=invitation,
+            person=person,
+            existing_user=existing_user,
+            user_model=user_model,
+        ):
             raise CommunityAccountSetupUnavailable
 
         intended_email = normalize_email_address(invitation.intended_email)
-        person_email = normalize_email_address(person.primary_email or "")
-        if not intended_email or intended_email != person_email:
-            raise CommunityAccountSetupUnavailable
-        if user_model.objects.filter(email=intended_email).exists():
-            raise CommunityAccountSetupUnavailable
 
         user = user_model(
             email=intended_email,
@@ -109,6 +103,60 @@ def redeem_community_activation(*, invitation_id, raw_token, password):
         )
 
     return CommunityActivationResult(user=user)
+
+
+def check_community_activation(*, invitation_id, raw_token):
+    """Validate activation-link usability without consuming or changing it."""
+    with transaction.atomic():
+        invitation, person, membership = _get_activation_context(
+            invitation_id=invitation_id,
+            raw_token=raw_token,
+            lock=False,
+        )
+        job = TransactionalEmailJob.objects.filter(invitation_id=invitation.id).first()
+        user_model = get_user_model()
+        if job is not None and job.status == TransactionalEmailJob.Status.PROCESSING:
+            raise InvalidCommunityActivation
+        existing_user = user_model.objects.filter(person_id=person.id).first()
+        if not _account_setup_is_available(
+            invitation=invitation,
+            person=person,
+            existing_user=existing_user,
+            user_model=user_model,
+        ):
+            raise InvalidCommunityActivation
+
+
+def _get_activation_context(*, invitation_id, raw_token, lock):
+    invitations = CommunityAccountInvitation.objects
+    if lock:
+        invitations = invitations.select_for_update()
+    invitation = invitations.filter(public_id=invitation_id).first()
+    if invitation is None or not _token_matches(invitation, raw_token):
+        raise InvalidCommunityActivation
+
+    people = Person.objects
+    memberships = Membership.objects
+    if lock:
+        people = people.select_for_update()
+        memberships = memberships.select_for_update()
+    person = people.get(pk=invitation.person_id)
+    membership = memberships.filter(person=person, status=Membership.Status.ACTIVE).first()
+    if not _invitation_is_eligible(invitation=invitation, person=person, membership=membership):
+        raise InvalidCommunityActivation
+    return invitation, person, membership
+
+
+def _account_setup_is_available(*, invitation, person, existing_user, user_model):
+    if existing_user is not None:
+        return False
+    intended_email = normalize_email_address(invitation.intended_email)
+    person_email = normalize_email_address(person.primary_email or "")
+    return bool(
+        intended_email
+        and intended_email == person_email
+        and not user_model.objects.filter(email=intended_email).exists()
+    )
 
 
 def _token_matches(invitation, raw_token):

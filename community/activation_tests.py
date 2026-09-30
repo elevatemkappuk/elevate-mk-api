@@ -87,6 +87,24 @@ class CommunityActivationApiTests(TestCase):
         self.assertEqual(logout.status_code, 204)
         self.assertEqual(self.client.get("/api/v1/community/me/").status_code, 401)
 
+    def test_activation_check_is_usable_without_consuming_and_post_remains_authoritative(self):
+        response = self.client.get(self.activation_url())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, {"usable": True})
+        self.assertFalse(User.objects.exists())
+        self.invitation.refresh_from_db()
+        self.assertIsNone(self.invitation.used_at)
+
+        response = self.client.post(
+            self.activation_url(),
+            {"password": "Amina-strong-password-123!", "confirm_password": "Amina-strong-password-123!"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(User.objects.filter(person=self.person).exists())
+
     def test_wrong_token_is_generic_and_does_not_consume_invitation(self):
         response = self.client.post(
             self.activation_url("wrong-token"),
@@ -96,6 +114,9 @@ class CommunityActivationApiTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data["code"], "INVALID_OR_EXPIRED_ACTIVATION")
+        check_response = self.client.get(self.activation_url("wrong-token"))
+        self.assertEqual(check_response.status_code, 400)
+        self.assertEqual(check_response.data["code"], "INVALID_OR_EXPIRED_ACTIVATION")
         self.assertFalse(User.objects.exists())
         self.invitation.refresh_from_db()
         self.assertIsNone(self.invitation.used_at)
@@ -126,6 +147,9 @@ class CommunityActivationApiTests(TestCase):
                 format="json",
             )
             self.assertEqual(response.data["code"], "INVALID_OR_EXPIRED_ACTIVATION")
+            check_response = self.client.get(self.activation_url_template.format(invitation.public_id, self.token))
+            self.assertEqual(check_response.status_code, 400)
+            self.assertEqual(check_response.data["code"], "INVALID_OR_EXPIRED_ACTIVATION")
 
     def test_password_validation_does_not_create_user_or_consume_invitation(self):
         response = self.client.post(
