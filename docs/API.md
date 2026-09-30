@@ -2113,6 +2113,15 @@ Purpose: request password-reset instructions for an eligible account.
 - Only active Users with usable passwords receive a Brevo template email. Unknown, inactive, and unusable-password accounts receive the same response without delivery.
 - The reset URL is generated from backend-only `CRM_FRONTEND_URL`; no URL, token, or provider data appears in the response.
 
+## Endpoint: `POST /api/v1/community/password-reset/`
+Purpose: request password-reset instructions for an eligible Community account.
+
+- Public and CSRF-protected; rate limited by the configurable `community_password_reset` scope, defaulting to five requests per hour.
+- Accepts `{ "email": "person@example.com" }` and normalizes email before lookup.
+- Every well-formed request returns `200 OK` with `If an eligible Elevate MK account exists for that email address, we've sent password reset instructions.`
+- Only active, usable-password Users linked to non-archived BUSINESS People with ACTIVE Memberships receive an email.
+- The reset URL is generated from backend-only `COMMUNITY_FRONTEND_URL`; the browser cannot select a destination.
+
 ## Endpoint: `POST /api/v1/auth/password-reset/confirm/`
 Purpose: set a new password from a valid reset URL.
 

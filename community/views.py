@@ -1,6 +1,9 @@
-from drf_spectacular.utils import OpenApiResponse, extend_schema
+import logging
+
+from django.conf import settings
 from rest_framework import status
-from django.contrib.auth import login
+from django.contrib.auth import get_user_model, login
+from drf_spectacular.utils import OpenApiResponse, extend_schema
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -11,8 +14,8 @@ from rest_framework.views import APIView
 from memberships.models import Membership
 from people.models import Person
 from professional_profiles.models import Industry
-from accounts.serializers import LoginSerializer
-from accounts.views import record_auth_audit_or_raise
+from accounts.serializers import LoginSerializer, PasswordResetRequestSerializer
+from accounts.views import build_password_reset_url, record_auth_audit_or_raise
 from audit.models import AuditEvent
 
 from community.activation import (
@@ -39,11 +42,18 @@ from community.services import (
     submit_community_join,
     is_community_eligible_user,
 )
+from notifications.exceptions import TransactionalEmailError
+from notifications.services import send_transactional_email
+
+
+logger = logging.getLogger(__name__)
+User = get_user_model()
 
 COMMUNITY_LOGIN_INVALID_CODE = "INVALID_CREDENTIALS"
 COMMUNITY_LOGIN_INVALID_DETAIL = "Email or password is incorrect."
 COMMUNITY_ACCESS_UNAVAILABLE_CODE = "COMMUNITY_ACCESS_UNAVAILABLE"
 COMMUNITY_ACCESS_UNAVAILABLE_DETAIL = "Community access is not available for this account."
+COMMUNITY_PASSWORD_RESET_DETAIL = "If an eligible Elevate MK account exists for that email address, we've sent password reset instructions."
 
 
 class CommunityIndustryListView(APIView):
@@ -60,6 +70,38 @@ class CommunityIndustryListView(APIView):
     def get(self, request):
         industries = Industry.objects.filter(is_active=True)
         return Response(CommunityIndustrySerializer(industries, many=True).data)
+
+
+@method_decorator(csrf_protect, name="dispatch")
+class CommunityPasswordResetRequestView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "community_password_reset"
+
+    @extend_schema(
+        operation_id="community_password_reset_request",
+        summary="Request Community password-reset instructions",
+        request=PasswordResetRequestSerializer,
+        responses={200: OpenApiResponse(description="Generic reset-request response.")},
+        auth=[],
+        tags=["Community"],
+    )
+    def post(self, request):
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = User.objects.select_related("person").filter(email=serializer.validated_data["email"]).first()
+        if user and user.is_active and user.has_usable_password() and is_community_eligible_user(user):
+            try:
+                send_transactional_email(
+                    recipient_email=user.email,
+                    recipient_name=user.get_full_name() or None,
+                    template_id=settings.BREVO_COMMUNITY_PASSWORD_RESET_TEMPLATE_ID,
+                    template_params={"reset_url": build_password_reset_url(user=user, frontend_url=settings.COMMUNITY_FRONTEND_URL)},
+                )
+            except TransactionalEmailError:
+                logger.warning("Community password reset email delivery failed.")
+        return Response({"detail": COMMUNITY_PASSWORD_RESET_DETAIL}, status=status.HTTP_200_OK)
 
 
 @method_decorator(csrf_protect, name="dispatch")

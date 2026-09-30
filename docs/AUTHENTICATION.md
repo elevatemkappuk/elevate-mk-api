@@ -49,8 +49,10 @@ Current behavior:
 Password recovery uses Django's standard stateless password-reset token generator and the Brevo transactional-email service.
 
 - `POST /api/v1/auth/password-reset/` accepts an email address and always returns the same generic response for well-formed input
+- `POST /api/v1/community/password-reset/` provides the same enumeration-resistant recovery request for eligible Community members and builds its link from backend-only `COMMUNITY_FRONTEND_URL`
 - reset delivery is limited to active accounts with usable passwords; inactive and unknown accounts are not disclosed
 - the reset URL is generated from backend-only `CRM_FRONTEND_URL` and has the form `/reset-password/<uid>/<token>`
+- Community reset requests use `/reset-password/<uid>/<token>` on `COMMUNITY_FRONTEND_URL`; both applications reuse the shared confirmation endpoint
 - `POST /api/v1/auth/password-reset/confirm/` validates the token, account status, and Django password validators before changing the password
 - invalid, expired, consumed, malformed, and inactive-account links return the same controlled response
 - a successful recovery writes `PASSWORD_RESET` audit history without passwords, tokens, URLs, email payloads, or provider responses
@@ -63,7 +65,8 @@ The backend uses the Brevo Transactional Email API for server-to-server transact
 
 - `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, and `BREVO_SENDER_NAME` are required only when an application feature sends email
 - `BREVO_REPLY_TO_EMAIL` and `BREVO_REPLY_TO_NAME` are optional sender-reply settings
-- `BREVO_PASSWORD_RESET_TEMPLATE_ID` is reserved for the future password-reset feature and does not enable password recovery by itself
+- `BREVO_PASSWORD_RESET_TEMPLATE_ID` selects the existing CRM/general password-reset template
+- `BREVO_COMMUNITY_PASSWORD_RESET_TEMPLATE_ID` selects the dedicated Community password-reset template; it expects only the `reset_url` parameter
 - `BREVO_MARKETING_LIST_ID` selects the explicitly approved Brevo marketing list for the manual one-Person sync command
 - `MARKETING_SYNC_PROVIDER` selects the active automatic marketing provider and currently must be `BREVO`
 - `BREVO_MARKETING_WEBHOOK_USERNAME` and `BREVO_MARKETING_WEBHOOK_PASSWORD` authenticate inbound Brevo marketing webhooks; they are separate from `BREVO_API_KEY` and must remain backend-only
