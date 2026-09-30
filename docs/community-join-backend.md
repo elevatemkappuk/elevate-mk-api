@@ -61,7 +61,40 @@ occur before provider acceptance are retried with bounded backoff. The current
 provider abstraction exposes generic delivery failures without proving whether
 Brevo accepted the request, so those failures become `DELIVERY_UNCERTAIN` and
 are not automatically retried. This worker is transactional-email-only and is
-separate from the Brevo marketing synchronization worker.
+separate from the Brevo marketing synchronization processor. In production V1,
+both processors may run in the single `process_background_jobs --watch`
+Railway worker; their durable models and retry semantics remain separate.
+
+## Community account activation redemption
+
+`POST /api/v1/community/activate/<invitation_uuid>/<token>/` redeems a valid
+activation invitation. The JSON body is:
+
+```json
+{
+  "password": "a-new-password",
+  "confirm_password": "a-new-password"
+}
+```
+
+The request is anonymous, CSRF-protected, credentialed, and throttled by
+`COMMUNITY_ACTIVATION_THROTTLE_RATE` (default `10/hour`). The raw token is
+hashed with SHA-256 and compared using a timing-safe comparison; it is never
+stored, returned, or audited.
+
+Successful redemption creates exactly one active non-staff User linked to the
+already-resolved Person, marks the invitation used, establishes the normal
+Django session, and returns only `id`, `first_name`, and `last_name`.
+
+`GET /api/v1/community/me/` requires that session and an ACTIVE Membership. It
+returns the same Community-safe representation. Existing Users—including
+active usable, inactive, and unusable-password Users—receive the generic
+`ACCOUNT_SETUP_UNAVAILABLE` response; they are never replaced or reactivated.
+
+Activation failures use `INVALID_OR_EXPIRED_ACTIVATION`,
+`PASSWORD_VALIDATION_ERROR`, or `ACCOUNT_SETUP_UNAVAILABLE`. Password errors
+do not consume the invitation. The existing CSRF-protected
+`POST /api/v1/auth/logout/` remains the logout endpoint.
 
 Community phone values are parsed with the installed `phonenumbers` library. National numbers are parsed using the submitted `phone_region`; explicit `+` and `00` international numbers must also be compatible with that region. Invalid, impossible, unsupported, or contradictory values return field-level validation errors. New Community mobile values are stored as E.164. Existing populated legacy mobile values are not rewritten; Community identity evaluation may cautiously compare them by parsing with the explicitly submitted region. `Person.location` remains separate.
 

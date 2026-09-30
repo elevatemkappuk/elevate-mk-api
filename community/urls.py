@@ -1,9 +1,11 @@
 from django.urls import path
 
-from community.views import CommunityIndustryListView, CommunityJoinView
+from community.views import CommunityActivationView, CommunityIndustryListView, CommunityJoinView, CommunityMeView
 
 
 urlpatterns = [
     path("community/industries/", CommunityIndustryListView.as_view(), name="community-industry-list"),
     path("community/join/", CommunityJoinView.as_view(), name="community-join"),
+    path("community/activate/<uuid:invitation_id>/<str:token>/", CommunityActivationView.as_view(), name="community-activate"),
+    path("community/me/", CommunityMeView.as_view(), name="community-me"),
 ]

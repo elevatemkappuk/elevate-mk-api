@@ -93,6 +93,17 @@ state. A provider-accepted/process-crash delivery outcome is intentionally
 ambiguous and requires explicit J2.2 reconciliation rather than blind token
 rotation.
 
+Community activation redemption is provided by
+`POST /api/v1/community/activate/<invitation_uuid>/<token>/`. It uses the
+existing CSRF-protected, credentialed Django session architecture and creates
+the User only after atomically revalidating the invitation, Person, Membership,
+email consistency, and account state. Successful redemption logs the new
+member into a normal HttpOnly session. `GET /api/v1/community/me/` exposes only
+the minimal Community-safe current-user representation and requires an ACTIVE
+Membership. Community Users are not assigned staff roles and do not gain CRM
+authorization. Activation attempts use the dedicated
+`COMMUNITY_ACTIVATION_THROTTLE_RATE` setting, defaulting to `10/hour`.
+
 The separate `process_transactional_email_jobs --watch` worker claims pending
 activation jobs using database locks and a configurable lease. It issues the
 activation token only at delivery time, refreshes the configured usable expiry

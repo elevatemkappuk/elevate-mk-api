@@ -668,20 +668,22 @@ not evidence that a webhook delivery failed.
 
 ## 21. Production and Railway deployment
 
-The intended deployment separates web and worker processes:
+The intended deployment separates web and worker processes. In Elevate V1 the
+single worker process services both the marketing and transactional queues;
+their domain implementations remain separate:
 
 ```text
 Railway WEB service
     -> Django API and Brevo webhook endpoint
 
 Railway WORKER service
-    -> python manage.py process_brevo_sync_jobs --watch
+    -> python manage.py process_background_jobs --watch
 ```
 
-Both use the same application code and database. The worker requires the
+Both use the same application code and database. The combined worker requires the
 Brevo API key, marketing list ID, and `MARKETING_SYNC_PROVIDER=BREVO`. Webhook
 Basic credentials are principally required by the WEB service. The repository
-documents this start command; a separate Railway worker service must still be
+documents this start command; the separate Railway worker service must still be
 created/configured operationally if it does not already exist. This document
 does not claim that deployment infrastructure is automatically provisioned.
 

@@ -83,7 +83,7 @@ Terminal 1: python manage.py runserver
 Terminal 2: python manage.py process_brevo_sync_jobs --watch
 ```
 
-In Railway, deploy the worker as a separate process/service using `python manage.py process_brevo_sync_jobs --watch`. It shares the application, database, `BREVO_API_KEY`, `BREVO_MARKETING_LIST_ID`, and `MARKETING_SYNC_PROVIDER=BREVO` with the web service. Webhook Basic credentials are needed by the web service receiving inbound webhooks and should not be added to the worker unless shared variables are required. Mailchimp jobs are never consumed automatically, and transactional Brevo email remains independent.
+In Railway, the V1 combined worker process runs `python manage.py process_background_jobs --watch`. It shares the application, database, `BREVO_API_KEY`, `BREVO_MARKETING_LIST_ID`, and `MARKETING_SYNC_PROVIDER=BREVO` with the web service. Webhook Basic credentials are needed by the web service receiving inbound webhooks and should not be added to the worker unless shared variables are required. Mailchimp jobs are never consumed automatically, and transactional Brevo email remains an independent queue and processor within the combined process.
 
 The one-shot command claims pending `BREVO` jobs of type
 `EMAIL_MARKETING_PREFERENCE`, `PERSON_EMAIL_MIGRATION`, or `PERSON_PROFILE`.

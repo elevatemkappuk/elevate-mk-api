@@ -189,6 +189,7 @@ CSRF_COOKIE_HTTPONLY = False
 CSRF_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SAMESITE = env("CSRF_COOKIE_SAMESITE", default="Lax" if DEBUG else "None")
 COMMUNITY_JOIN_THROTTLE_RATE = env("COMMUNITY_JOIN_THROTTLE_RATE", default="10/hour")
+COMMUNITY_ACTIVATION_THROTTLE_RATE = env("COMMUNITY_ACTIVATION_THROTTLE_RATE", default="10/hour")
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
@@ -199,6 +200,7 @@ REST_FRAMEWORK = {
         "password_reset": "5/hour",
         "password_reset_confirm": "10/hour",
         "community_join": COMMUNITY_JOIN_THROTTLE_RATE,
+        "community_activation": COMMUNITY_ACTIVATION_THROTTLE_RATE,
     },
 }
 
@@ -256,6 +258,7 @@ COMMUNITY_ACTIVATION_EXPIRY_HOURS = _positive_int_setting("COMMUNITY_ACTIVATION_
 TRANSACTIONAL_EMAIL_WORKER_POLL_SECONDS = _positive_float_setting("TRANSACTIONAL_EMAIL_WORKER_POLL_SECONDS", 3.0)
 TRANSACTIONAL_EMAIL_WORKER_BATCH_SIZE = _positive_int_setting("TRANSACTIONAL_EMAIL_WORKER_BATCH_SIZE", 20)
 TRANSACTIONAL_EMAIL_JOB_LEASE_SECONDS = _positive_int_setting("TRANSACTIONAL_EMAIL_JOB_LEASE_SECONDS", 900)
+BACKGROUND_WORKER_POLL_SECONDS = _positive_float_setting("BACKGROUND_WORKER_POLL_SECONDS", 3.0)
 
 # Mailchimp Marketing API verification is backend-only. No Mailchimp operation
 # should be attempted without explicitly configured values.

@@ -83,3 +83,19 @@ class CommunityJoinSerializer(serializers.Serializer):
                 raise serializers.ValidationError({"mobile": ["Enter a valid mobile number for the selected phone region."]})
             attrs["mobile"] = normalized.e164
         return attrs
+
+
+class CommunityActivationSerializer(serializers.Serializer):
+    password = serializers.CharField(write_only=True, trim_whitespace=False)
+    confirm_password = serializers.CharField(write_only=True, trim_whitespace=False)
+
+    def validate(self, attrs):
+        if attrs["password"] != attrs["confirm_password"]:
+            raise serializers.ValidationError({"confirm_password": ["The passwords do not match."]})
+        return attrs
+
+
+class CommunityCurrentUserSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    first_name = serializers.CharField()
+    last_name = serializers.CharField()

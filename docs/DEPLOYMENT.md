@@ -122,6 +122,7 @@ follows:
 | `CRM_FRONTEND_URL` | `https://<crm-production-domain>` | `https://elevate-mk-crm-staging.up.railway.app` |
 | `COMMUNITY_FRONTEND_URL` | `https://community.elevatemk.org` | `http://localhost:4201` or the staging Community origin |
 | `COMMUNITY_ACTIVATION_EXPIRY_HOURS` | `72` | `72` |
+| `COMMUNITY_ACTIVATION_THROTTLE_RATE` | `10/hour` | `10/hour` |
 | `BREVO_COMMUNITY_ACTIVATION_TEMPLATE_ID` | Approved transactional activation template ID | Approved staging transactional activation template ID |
 | `TRANSACTIONAL_EMAIL_WORKER_POLL_SECONDS` | `3` | `3` |
 | `TRANSACTIONAL_EMAIL_WORKER_BATCH_SIZE` | `20` | `20` |
@@ -184,10 +185,24 @@ one process applies schema changes before the replicas start.
 
 ## Brevo worker service
 
-Run automatic Brevo marketing synchronization as a separate Railway worker
-process, not inside the web process:
+For Elevate V1, configure one Railway background-worker service, separate from
+the API/web service. It should run:
 
 ```text
+python manage.py process_background_jobs --watch
+```
+
+This one process services both durable queues while keeping their models,
+processors, retry semantics, and lifecycle independent:
+
+- `TransactionalEmailJob` for Community activation email;
+- `ExternalPersonSyncJob` for Brevo marketing synchronization.
+
+The existing domain-specific commands remain available for diagnostics and
+manual recovery:
+
+```text
+python manage.py process_transactional_email_jobs --watch
 python manage.py process_brevo_sync_jobs --watch
 ```
 
@@ -196,5 +211,13 @@ requires the active Brevo marketing settings, including `BREVO_API_KEY`,
 `BREVO_MARKETING_LIST_ID`, and `MARKETING_SYNC_PROVIDER=BREVO`. Configure
 `BREVO_SYNC_WORKER_POLL_SECONDS` (default `3`) and
 `BREVO_SYNC_WORKER_BATCH_SIZE` (default `20`, maximum `100`) when tuning is
-needed. It handles SIGINT/SIGTERM and preserves durable job state. Mailchimp
-jobs are not automatically processed.
+needed. Configure `BACKGROUND_WORKER_POLL_SECONDS` (default `3`) for the
+combined worker. Configure `TRANSACTIONAL_EMAIL_WORKER_BATCH_SIZE` and
+`BREVO_SYNC_WORKER_BATCH_SIZE` independently. The combined worker handles
+SIGINT/SIGTERM, processes transactional jobs first in each bounded iteration,
+and preserves durable job state. Mailchimp jobs are not automatically
+processed.
+
+The repository does not provision or modify Railway services automatically;
+the production Railway worker service must be configured to use the combined
+command above.

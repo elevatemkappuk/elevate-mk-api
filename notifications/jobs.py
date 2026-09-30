@@ -11,6 +11,7 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 
+from community.models import CommunityAccountInvitation
 from community.services import build_community_activation_url
 from notifications.exceptions import TransactionalEmailConfigurationError, TransactionalEmailError
 from notifications.models import TransactionalEmailJob
@@ -150,12 +151,9 @@ def _claim_next_job():
 
 @transaction.atomic
 def _prepare_send(job_id):
-    job = (
-        TransactionalEmailJob.objects.select_for_update()
-        .select_related("invitation__person")
-        .get(pk=job_id)
-    )
-    invitation = CommunityAccountInvitation.objects.select_for_update().get(pk=job.invitation_id)
+    invitation_id = TransactionalEmailJob.objects.values_list("invitation_id", flat=True).get(pk=job_id)
+    invitation = CommunityAccountInvitation.objects.select_for_update().get(pk=invitation_id)
+    job = TransactionalEmailJob.objects.select_for_update().select_related("invitation__person").get(pk=job_id)
     person = Person.objects.select_for_update().get(pk=invitation.person_id)
     user = get_user_model().objects.select_for_update().filter(person_id=person.id).first()
 
