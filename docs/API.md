@@ -228,6 +228,7 @@ These endpoints are separate from the Staff CRM People API. Join, industry looku
 | `GET` | `/api/v1/community/activate/{invitation_id}/{token}/` | Public; invitation token required |
 | `POST` | `/api/v1/community/activate/{invitation_id}/{token}/` | Public; invitation token required |
 | `GET` | `/api/v1/community/me/` | Authenticated Community session |
+| `GET` | `/api/v1/community/profile/` | Authenticated eligible Community member |
 
 Community Join returns the generic `202 Accepted` representation documented in [Community Platform](community-platform.md). It does not expose CRM identity evidence or create a User account. Successful activation creates the Community User account and establishes the authenticated Community session; activation and password-reset failures remain enumeration-safe.
 
@@ -2353,3 +2354,91 @@ with source `COMMUNITY_JOIN` and queues the existing asynchronous Brevo sync
 path. `false` and omission both leave the current preference unchanged and do
 not record an opt-out. A public Community Join cannot reverse an existing
 explicit opt-out. SMS marketing preferences are not supported by Join V1.
+
+## Community Profile V1 — My Profile
+
+`GET /api/v1/community/profile/` returns the authenticated member's composed,
+read-only Community profile. It is not a direct `CommunityProfile` model
+serialization and does not accept a Person ID.
+
+Authentication and eligibility:
+
+- Requires an authenticated Django Community session.
+- The authenticated user must be linked to a non-archived `BUSINESS` Person with
+  an `ACTIVE` Membership.
+- Former members, archived Persons, technical Persons, and users without an
+  eligible active Membership receive `403 Forbidden`.
+- The Person is always derived from `request.user.person`; arbitrary Person
+  lookup is not supported.
+
+Successful response: `200 OK`
+
+```json
+{
+  "person": {
+    "first_name": "Amina",
+    "last_name": "Zulu",
+    "location": "Milton Keynes"
+  },
+  "community": {
+    "bio": "Community builder",
+    "review_required": false
+  },
+  "professional": {
+    "job_title": "Designer",
+    "company": "Elevate MK",
+    "industry": {
+      "id": 1,
+      "slug": "technology",
+      "label": "Technology"
+    },
+    "career_stage": "MID_CAREER",
+    "linkedin_url": "https://www.linkedin.com/in/amina"
+  },
+  "skills": [
+    {"id": 1, "name": "Strategy", "slug": "strategy"}
+  ],
+  "interests": [
+    {"id": 1, "name": "Networking", "slug": "networking"}
+  ],
+  "membership": {
+    "status": "ACTIVE",
+    "joined_at": "2026-09-01"
+  },
+  "completion": {
+    "name": true,
+    "professional_details": true,
+    "bio": true,
+    "skills": true,
+    "interests": false
+  }
+}
+```
+
+Projection rules:
+
+- `professional`, `skills`, and `interests` remain present when optional data is
+  missing; empty strings, `null`, or empty arrays represent missing data.
+- Only active Skill and Interest definitions are included.
+- `professional_details` requires a nonblank job title and a current active
+  Industry.
+- `name`, `bio`, `skills`, and `interests` are derived from current canonical
+  records. Completion is not persisted and no percentage or score is returned.
+- If a CommunityProfile does not yet exist, the existing centralized lazy
+  creation mechanism creates its Community-owned row before returning the
+  projection.
+- `community.review_required` is the only member-facing review state. It is
+  derived from P1 CommunityProfile semantics.
+
+Privacy boundary:
+
+- The response does not include email, mobile, gender, age range, CRM tags,
+  notes, audit history, import provenance, Brevo/provider data, marketing
+  administration, staff roles, User internals, invitation state, transactional
+  email jobs, `person_preexisted_community`, or `review_acknowledged_at`.
+- Profile photo data and editing/acknowledgement actions are not part of P2.
+
+The projection uses `select_related` for the Person's ProfessionalProfile,
+Industry, Membership, and CommunityProfile, and filtered `prefetch_related`
+queries for active Skills and Interests. It does not perform per-item queries
+for the composed collections.

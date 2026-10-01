@@ -99,3 +99,51 @@ class CommunityCurrentUserSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     first_name = serializers.CharField()
     last_name = serializers.CharField()
+
+
+class CommunityProfileIndustrySerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    slug = serializers.CharField()
+    label = serializers.CharField()
+
+
+class CommunityProfilePersonSerializer(serializers.Serializer):
+    first_name = serializers.CharField()
+    last_name = serializers.CharField()
+    location = serializers.CharField()
+
+
+class CommunityProfileCommunitySerializer(serializers.Serializer):
+    bio = serializers.CharField()
+    review_required = serializers.BooleanField()
+
+
+class CommunityProfileProfessionalSerializer(serializers.Serializer):
+    job_title = serializers.CharField()
+    company = serializers.CharField()
+    industry = CommunityProfileIndustrySerializer(allow_null=True)
+    career_stage = serializers.CharField(allow_blank=True, allow_null=True)
+    linkedin_url = serializers.URLField(allow_blank=True)
+
+
+class CommunityProfileMembershipSerializer(serializers.Serializer):
+    status = serializers.CharField()
+    joined_at = serializers.DateField()
+
+
+class CommunityProfileCompletionSerializer(serializers.Serializer):
+    name = serializers.BooleanField()
+    professional_details = serializers.BooleanField()
+    bio = serializers.BooleanField()
+    skills = serializers.BooleanField()
+    interests = serializers.BooleanField()
+
+
+class CommunityProfileSerializer(serializers.Serializer):
+    person = CommunityProfilePersonSerializer()
+    community = CommunityProfileCommunitySerializer()
+    professional = CommunityProfileProfessionalSerializer()
+    skills = serializers.ListField(child=serializers.DictField())
+    interests = serializers.ListField(child=serializers.DictField())
+    membership = CommunityProfileMembershipSerializer()
+    completion = CommunityProfileCompletionSerializer()

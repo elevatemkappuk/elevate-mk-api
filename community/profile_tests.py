@@ -3,7 +3,9 @@ from unittest import mock
 
 from django.core.exceptions import ValidationError
 from django.core.cache import cache
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -11,8 +13,10 @@ from community.models import CommunityProfile
 from community.services import get_or_create_community_profile
 from memberships.models import Membership
 from people.models import Person
-from professional_profiles.models import Industry
+from professional_profiles.models import Industry, ProfessionalProfile
 from accounts.models import User
+from skills.models import PersonSkill, Skill
+from interests.models import Interest, PersonInterest
 
 
 class CommunityProfileFoundationTests(TestCase):
@@ -165,3 +169,175 @@ class CommunityProfileFoundationTests(TestCase):
 
         self.assertFalse(Person.objects.filter(primary_email="profile@example.com").exists())
         self.assertFalse(CommunityProfile.objects.exists())
+
+
+class CommunityProfileApiTests(TestCase):
+    profile_url = "/api/v1/community/profile/"
+
+    def setUp(self):
+        self.client = APIClient()
+        self.industry = Industry.objects.get(slug="technology")
+        self.person = Person.objects.create(
+            first_name="Amina",
+            last_name="Zulu",
+            location="Milton Keynes",
+            primary_email="private@example.com",
+        )
+        self.membership = Membership.objects.create(
+            person=self.person,
+            status=Membership.Status.ACTIVE,
+            joined_at=timezone.localdate() - timedelta(days=30),
+            membership_source=Membership.Source.COMMUNITY_PLATFORM,
+        )
+        self.user = User.objects.create_user(
+            email="private@example.com",
+            password="Strong-password-123!",
+            person=self.person,
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def test_eligible_member_receives_composed_profile_and_completion(self):
+        CommunityProfile.objects.create(person=self.person, bio="Community builder")
+        ProfessionalProfile.objects.create(
+            person=self.person,
+            job_title="Designer",
+            company="Elevate MK",
+            industry=self.industry,
+            career_stage=ProfessionalProfile.CareerStage.MID_CAREER,
+            linkedin_url="https://www.linkedin.com/in/amina",
+        )
+        skill = Skill.objects.filter(is_active=True).first()
+        interest = Interest.objects.filter(is_active=True).first()
+        PersonSkill.objects.create(person=self.person, skill=skill)
+        PersonInterest.objects.create(person=self.person, interest=interest)
+
+        response = self.client.get(self.profile_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["person"], {
+            "first_name": "Amina",
+            "last_name": "Zulu",
+            "location": "Milton Keynes",
+        })
+        self.assertEqual(response.data["community"], {"bio": "Community builder", "review_required": False})
+        self.assertEqual(response.data["professional"]["industry"], {
+            "id": self.industry.id,
+            "slug": self.industry.slug,
+            "label": self.industry.name,
+        })
+        self.assertEqual(response.data["membership"], {
+            "status": Membership.Status.ACTIVE,
+            "joined_at": self.membership.joined_at.isoformat(),
+        })
+        self.assertEqual(response.data["completion"], {
+            "name": True,
+            "professional_details": True,
+            "bio": True,
+            "skills": True,
+            "interests": True,
+        })
+        self.assertNotIn("email", response.data["person"])
+        self.assertNotIn("mobile", response.data["person"])
+        self.assertNotIn("person_preexisted_community", response.data["community"])
+        self.assertNotIn("review_acknowledged_at", response.data["community"])
+
+    def test_missing_optional_data_is_safe_and_profile_is_lazily_created(self):
+        with CaptureQueriesContext(connection) as queries:
+            response = self.client.get(self.profile_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertLessEqual(len(queries), 8)
+        self.assertEqual(response.data["professional"], {
+            "job_title": "",
+            "company": "",
+            "industry": None,
+            "career_stage": None,
+            "linkedin_url": "",
+        })
+        self.assertEqual(response.data["community"], {"bio": "", "review_required": False})
+        self.assertEqual(response.data["completion"], {
+            "name": True,
+            "professional_details": False,
+            "bio": False,
+            "skills": False,
+            "interests": False,
+        })
+        self.assertTrue(CommunityProfile.objects.filter(person=self.person).exists())
+
+    def test_review_required_is_projected_without_internal_provenance(self):
+        CommunityProfile.objects.create(person=self.person, person_preexisted_community=True)
+
+        response = self.client.get(self.profile_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["community"]["review_required"])
+        self.assertNotIn("person_preexisted_community", response.data["community"])
+        self.assertNotIn("review_acknowledged_at", response.data["community"])
+
+    def test_profile_is_derived_from_authenticated_person_not_a_supplied_id(self):
+        other_person = Person.objects.create(first_name="Other", last_name="Person")
+
+        response = self.client.get(f"{self.profile_url}?person_id={other_person.id}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["person"]["first_name"], "Amina")
+        self.assertFalse(CommunityProfile.objects.filter(person=other_person).exists())
+
+    def test_unauthenticated_and_ineligible_users_are_rejected(self):
+        self.client.force_authenticate(user=None)
+        self.assertEqual(self.client.get(self.profile_url).status_code, 401)
+
+        former_person = Person.objects.create(first_name="Former", last_name="Member")
+        former_user = User.objects.create_user(
+            email="former@example.com",
+            password="Strong-password-123!",
+            person=former_person,
+        )
+        Membership.objects.create(
+            person=former_person,
+            status=Membership.Status.FORMER,
+            joined_at=timezone.localdate() - timedelta(days=60),
+            ended_at=timezone.localdate() - timedelta(days=1),
+            membership_source=Membership.Source.COMMUNITY_PLATFORM,
+        )
+        self.client.force_authenticate(user=former_user)
+        self.assertEqual(self.client.get(self.profile_url).status_code, 403)
+
+    def test_archived_and_technical_people_are_rejected(self):
+        archived_person = Person.objects.create(
+            first_name="Archived",
+            last_name="Member",
+            archived_at=timezone.now(),
+        )
+        archived_user = User.objects.create_user(
+            email="archived@example.com",
+            password="Strong-password-123!",
+            person=archived_person,
+        )
+        Membership.objects.create(
+            person=archived_person,
+            status=Membership.Status.ACTIVE,
+            joined_at=timezone.localdate(),
+            membership_source=Membership.Source.COMMUNITY_PLATFORM,
+        )
+        self.client.force_authenticate(user=archived_user)
+        self.assertEqual(self.client.get(self.profile_url).status_code, 403)
+
+        technical_person = Person.objects.create(
+            first_name="Technical",
+            last_name="Account",
+            record_type=Person.RecordType.TECHNICAL,
+        )
+        technical_user = User.objects.create_user(
+            email="technical@example.com",
+            password="Strong-password-123!",
+            person=technical_person,
+        )
+        Membership.objects.create(
+            person=technical_person,
+            status=Membership.Status.ACTIVE,
+            joined_at=timezone.localdate(),
+            membership_source=Membership.Source.COMMUNITY_PLATFORM,
+        )
+        self.client.force_authenticate(user=technical_user)
+        self.assertEqual(self.client.get(self.profile_url).status_code, 403)

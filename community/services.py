@@ -59,6 +59,75 @@ def get_or_create_community_profile(*, person, person_preexisted_community=False
     return profile
 
 
+def build_community_profile_projection(*, person, community_profile=None):
+    """Build the explicit member-facing Community profile projection."""
+    community_profile = community_profile or get_or_create_community_profile(person=person)
+    professional = getattr(person, "professional_profile", None)
+    membership = person.membership
+    skills = [
+        {
+            "id": assignment.skill.id,
+            "name": assignment.skill.name,
+            "slug": assignment.skill.slug,
+        }
+        for assignment in getattr(person, "community_profile_skills", [])
+    ]
+    interests = [
+        {
+            "id": assignment.interest.id,
+            "name": assignment.interest.name,
+            "slug": assignment.interest.slug,
+        }
+        for assignment in getattr(person, "community_profile_interests", [])
+    ]
+
+    professional_data = {
+        "job_title": professional.job_title if professional else "",
+        "company": professional.company if professional else "",
+        "industry": (
+            {
+                "id": professional.industry.id,
+                "slug": professional.industry.slug,
+                "label": professional.industry.name,
+            }
+            if professional and professional.industry
+            else None
+        ),
+        "career_stage": professional.career_stage if professional else None,
+        "linkedin_url": professional.linkedin_url if professional else "",
+    }
+    return {
+        "person": {
+            "first_name": person.first_name,
+            "last_name": person.last_name,
+            "location": person.location,
+        },
+        "community": {
+            "bio": community_profile.bio,
+            "review_required": community_profile.review_required,
+        },
+        "professional": professional_data,
+        "skills": skills,
+        "interests": interests,
+        "membership": {
+            "status": membership.status,
+            "joined_at": membership.joined_at,
+        },
+        "completion": {
+            "name": bool(person.first_name.strip() and person.last_name.strip()),
+            "professional_details": bool(
+                professional
+                and professional.job_title.strip()
+                and professional.industry is not None
+                and professional.industry.is_active
+            ),
+            "bio": bool(community_profile.bio.strip()),
+            "skills": bool(skills),
+            "interests": bool(interests),
+        },
+    }
+
+
 def build_community_account_projection(*, person):
     """Return the safe CRM projection for one Person's Community account lifecycle."""
     user = _related_user(person)

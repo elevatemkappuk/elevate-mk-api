@@ -5,6 +5,7 @@ from django.contrib.auth import get_user_model, login, password_validation
 from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
+from django.db.models import Prefetch
 from rest_framework import status
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from django.utils.decorators import method_decorator
@@ -15,8 +16,10 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from memberships.models import Membership
+from interests.models import PersonInterest
 from people.models import Person
 from professional_profiles.models import Industry
+from skills.models import PersonSkill
 from accounts.serializers import LoginSerializer, PasswordResetConfirmSerializer, PasswordResetRequestSerializer
 from accounts.views import INVALID_RESET_TOKEN_DETAIL, build_password_reset_url, record_auth_audit_or_raise
 from audit.models import AuditEvent
@@ -36,6 +39,7 @@ from community.activation import (
 from community.serializers import (
     CommunityActivationSerializer,
     CommunityCurrentUserSerializer,
+    CommunityProfileSerializer,
     CommunityIndustrySerializer,
     CommunityJoinSerializer,
 )
@@ -44,6 +48,8 @@ from community.services import (
     CommunityJoinReviewRequired,
     submit_community_join,
     is_community_eligible_user,
+    build_community_profile_projection,
+    get_or_create_community_profile,
 )
 from notifications.exceptions import TransactionalEmailError
 from notifications.services import send_transactional_email
@@ -354,6 +360,54 @@ class CommunityActivationView(APIView):
             }).data,
             status=status.HTTP_200_OK,
         )
+
+
+class CommunityProfileView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        operation_id="community_profile",
+        summary="Get the authenticated member's Community profile",
+        responses={
+            200: CommunityProfileSerializer,
+            401: OpenApiResponse(description="Authentication credentials were not provided."),
+            403: OpenApiResponse(description="Community access is unavailable."),
+        },
+        tags=["Community"],
+    )
+    def get(self, request):
+        if not is_community_eligible_user(request.user):
+            return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
+
+        person = (
+            Person.objects.select_related(
+                "professional_profile",
+                "professional_profile__industry",
+                "membership",
+                "community_profile",
+            )
+            .prefetch_related(
+                Prefetch(
+                    "person_skills",
+                    queryset=PersonSkill.objects.filter(skill__is_active=True).select_related("skill"),
+                    to_attr="community_profile_skills",
+                ),
+                Prefetch(
+                    "person_interests",
+                    queryset=PersonInterest.objects.filter(interest__is_active=True).select_related("interest"),
+                    to_attr="community_profile_interests",
+                ),
+            )
+            .get(pk=request.user.person_id)
+        )
+        community_profile = getattr(person, "community_profile", None)
+        if community_profile is None:
+            community_profile = get_or_create_community_profile(person=person)
+        projection = build_community_profile_projection(
+            person=person,
+            community_profile=community_profile,
+        )
+        return Response(CommunityProfileSerializer(projection).data, status=status.HTTP_200_OK)
 
 
 class CommunityMeView(APIView):
