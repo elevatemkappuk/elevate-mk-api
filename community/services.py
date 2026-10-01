@@ -7,6 +7,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
+from django.db.models import Prefetch
 from django.utils import timezone
 
 from audit.models import AuditEvent
@@ -17,6 +18,8 @@ from marketing_preferences.services import get_effective_marketing_preference, r
 from people.models import Person
 from people.services import normalize_email, normalize_mobile, normalize_phone_for_community, PhoneNormalizationStatus
 from professional_profiles.models import Industry, ProfessionalProfile
+from skills.models import PersonSkill, Skill
+from interests.models import PersonInterest, Interest
 
 from community.models import CommunityAccountInvitation, CommunityProfile, JoinSubmissionReceipt
 from community.locking import acquire_community_join_email_lock
@@ -126,6 +129,133 @@ def build_community_profile_projection(*, person, community_profile=None):
             "interests": bool(interests),
         },
     }
+
+
+def _community_request_context(request):
+    return {
+        "request_id": request.headers.get("X-Request-ID"),
+        "ip_address": request.META.get("REMOTE_ADDR"),
+    }
+
+
+def _audit_self_service(*, action, entity_type, entity_id, changed_fields, request, created=False):
+    record_audit_event(
+        action=action,
+        actor_user=request.user,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        changes={"created": {"from": False, "to": True}} if created else {
+            field: {"changed": True} for field in changed_fields
+        },
+        metadata={"source": "COMMUNITY_SELF_SERVICE", "person_id": str(request.user.person_id)},
+        **_community_request_context(request),
+    )
+
+
+def update_community_profile(*, person_id, data, request):
+    """Apply an authenticated member-owned profile update atomically."""
+    with transaction.atomic():
+        person = Person.objects.select_for_update().get(pk=person_id)
+        profile = CommunityProfile.objects.select_for_update().filter(person=person).first()
+        changed_person = []
+        person_values = data.get("person", {})
+        for field in ("first_name", "last_name", "location"):
+            if field not in person_values:
+                continue
+            value = person_values[field]
+            if field in ("first_name", "last_name"):
+                from community.normalization import normalize_community_name
+                value = normalize_community_name(value)
+                if not value:
+                    raise DjangoValidationError({field: ["This field may not be blank."]})
+            else:
+                value = " ".join(value.strip().split())
+            if getattr(person, field) != value:
+                setattr(person, field, value)
+                changed_person.append(field)
+        if changed_person:
+            _save_validated(person, [*changed_person, "updated_at"])
+            _audit_self_service(action=AuditEvent.Action.PERSON_UPDATED, entity_type="Person", entity_id=person.id, changed_fields=changed_person, request=request)
+
+        community_values = data.get("community", {})
+        if community_values:
+            if profile is None:
+                profile = get_or_create_community_profile(person=person)
+                _audit_self_service(action=AuditEvent.Action.PERSON_UPDATED, entity_type="CommunityProfile", entity_id=profile.id, changed_fields=[], request=request, created=True)
+            changed_community = []
+            if "bio" in community_values:
+                bio = community_values["bio"].strip()
+                if profile.bio != bio:
+                    profile.bio = bio
+                    changed_community.append("bio")
+            if changed_community:
+                _save_validated(profile, [*changed_community, "updated_at"])
+                _audit_self_service(action=AuditEvent.Action.PERSON_UPDATED, entity_type="CommunityProfile", entity_id=profile.id, changed_fields=changed_community, request=request)
+
+        professional_values = data.get("professional", {})
+        if professional_values:
+            professional = ProfessionalProfile.objects.select_for_update().filter(person=person).first()
+            if professional is None:
+                professional = ProfessionalProfile(person=person)
+                for field, value in professional_values.items():
+                    setattr(professional, field, value.strip() if isinstance(value, str) else value)
+                _save_validated(professional)
+                _audit_self_service(action=AuditEvent.Action.PROFESSIONAL_PROFILE_CREATED, entity_type="ProfessionalProfile", entity_id=professional.id, changed_fields=[], request=request, created=True)
+            else:
+                changed_professional = []
+                for field, value in professional_values.items():
+                    value = value.strip() if isinstance(value, str) else value
+                    if getattr(professional, field) != value:
+                        setattr(professional, field, value)
+                        changed_professional.append(field)
+                if changed_professional:
+                    _save_validated(professional, [*changed_professional, "updated_at"])
+                    _audit_self_service(action=AuditEvent.Action.PROFESSIONAL_PROFILE_UPDATED, entity_type="ProfessionalProfile", entity_id=professional.id, changed_fields=changed_professional, request=request)
+
+        for field, model, relation in (("skills", Skill, PersonSkill), ("interests", Interest, PersonInterest)):
+            if field not in data:
+                continue
+            existing_ids = set(relation.objects.filter(person=person).values_list(f"{field[:-1]}_id", flat=True))
+            submitted_ids = {item.id for item in data[field]}
+            relation.objects.filter(person=person).delete()
+            for item in data[field]:
+                relation.objects.create(person=person, **{field[:-1]: item})
+            assigned_action = AuditEvent.Action.SKILL_ASSIGNED if field == "skills" else AuditEvent.Action.INTEREST_ASSIGNED
+            removed_action = AuditEvent.Action.SKILL_REMOVED if field == "skills" else AuditEvent.Action.INTEREST_REMOVED
+            for item_id in sorted(existing_ids - submitted_ids):
+                _audit_self_service(action=removed_action, entity_type=model.__name__, entity_id=item_id, changed_fields=["person_id"], request=request)
+            for item_id in sorted(submitted_ids - existing_ids):
+                _audit_self_service(action=assigned_action, entity_type=model.__name__, entity_id=item_id, changed_fields=["person_id"], request=request)
+
+        person = Person.objects.select_related("professional_profile", "professional_profile__industry", "membership", "community_profile").prefetch_related(
+            Prefetch("person_skills", queryset=PersonSkill.objects.filter(skill__is_active=True).select_related("skill"), to_attr="community_profile_skills"),
+            Prefetch("person_interests", queryset=PersonInterest.objects.filter(interest__is_active=True).select_related("interest"), to_attr="community_profile_interests"),
+        ).get(pk=person.pk)
+        return build_community_profile_projection(
+            person=person,
+            community_profile=CommunityProfile.objects.filter(person=person).first(),
+        )
+
+
+def community_profile_options():
+    return {
+        "industries": [{"slug": item.slug, "label": item.name} for item in Industry.objects.filter(is_active=True)],
+        "career_stages": [{"slug": value, "label": label} for value, label in ProfessionalProfile.CareerStage.choices],
+        "skills": [{"slug": item.slug, "label": item.name} for item in Skill.objects.filter(is_active=True)],
+        "interests": [{"slug": item.slug, "label": item.name} for item in Interest.objects.filter(is_active=True)],
+    }
+
+
+def acknowledge_community_profile_review(*, person_id, request):
+    with transaction.atomic():
+        profile = CommunityProfile.objects.select_for_update().filter(person_id=person_id).first()
+        if profile is None:
+            profile = get_or_create_community_profile(person=Person.objects.get(pk=person_id))
+        if profile.review_acknowledged_at is None:
+            profile.review_acknowledged_at = timezone.now()
+            profile.save(update_fields=["review_acknowledged_at", "updated_at"])
+            _audit_self_service(action=AuditEvent.Action.PERSON_UPDATED, entity_type="CommunityProfile", entity_id=profile.id, changed_fields=["review_acknowledged_at"], request=request)
+        return profile
 
 
 def build_community_account_projection(*, person):

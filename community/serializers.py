@@ -10,7 +10,9 @@ from people.services import (
     normalize_phone_for_community,
     PhoneNormalizationStatus,
 )
-from professional_profiles.models import Industry
+from professional_profiles.models import Industry, ProfessionalProfile
+from skills.models import Skill
+from interests.models import Interest
 
 
 class CommunityIndustrySerializer(serializers.ModelSerializer):
@@ -147,3 +149,88 @@ class CommunityProfileSerializer(serializers.Serializer):
     interests = serializers.ListField(child=serializers.DictField())
     membership = CommunityProfileMembershipSerializer()
     completion = CommunityProfileCompletionSerializer()
+
+
+class CommunityWriteSerializer(serializers.Serializer):
+    def to_internal_value(self, data):
+        unknown_fields = set(data.keys()) - set(self.fields.keys())
+        if unknown_fields:
+            raise serializers.ValidationError({field: ["This field is not allowed."] for field in sorted(unknown_fields)})
+        return super().to_internal_value(data)
+
+
+class CommunityProfilePersonWriteSerializer(CommunityWriteSerializer):
+    first_name = serializers.CharField(required=False, max_length=150, allow_blank=False)
+    last_name = serializers.CharField(required=False, max_length=150, allow_blank=False)
+    location = serializers.CharField(required=False, max_length=255, allow_blank=True)
+
+    def validate(self, attrs):
+        return attrs
+
+
+class CommunityProfileCommunityWriteSerializer(CommunityWriteSerializer):
+    bio = serializers.CharField(required=False, allow_blank=True, max_length=400, trim_whitespace=True)
+
+    def validate(self, attrs):
+        return attrs
+
+
+class CommunityProfileProfessionalWriteSerializer(CommunityWriteSerializer):
+    job_title = serializers.CharField(required=False, max_length=255, allow_blank=True)
+    company = serializers.CharField(required=False, max_length=255, allow_blank=True)
+    industry = serializers.SlugRelatedField(
+        slug_field="slug",
+        queryset=Industry.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    career_stage = serializers.ChoiceField(
+        choices=ProfessionalProfile.CareerStage.choices,
+        required=False,
+        allow_null=True,
+        allow_blank=True,
+    )
+    linkedin_url = serializers.URLField(required=False, allow_blank=True)
+
+    def validate_linkedin_url(self, value):
+        if value:
+            try:
+                URLValidator(schemes=["http", "https"])(value)
+            except DjangoValidationError:
+                raise serializers.ValidationError("LinkedIn URL must use http or https.")
+        return value.strip()
+
+    def validate(self, attrs):
+        return attrs
+
+
+class CommunityProfileWriteSerializer(CommunityWriteSerializer):
+    person = CommunityProfilePersonWriteSerializer(required=False)
+    community = CommunityProfileCommunityWriteSerializer(required=False)
+    professional = CommunityProfileProfessionalWriteSerializer(required=False)
+    skills = serializers.ListField(
+        child=serializers.SlugRelatedField(slug_field="slug", queryset=Skill.objects.filter(is_active=True)),
+        required=False,
+    )
+    interests = serializers.ListField(
+        child=serializers.SlugRelatedField(slug_field="slug", queryset=Interest.objects.filter(is_active=True)),
+        required=False,
+    )
+
+    def validate(self, attrs):
+        for field in ("skills", "interests"):
+            if field in attrs and len({item.slug for item in attrs[field]}) != len(attrs[field]):
+                raise serializers.ValidationError({field: ["Duplicate selections are not allowed."]})
+        return attrs
+
+
+class CommunityProfileOptionSerializer(serializers.Serializer):
+    slug = serializers.CharField()
+    label = serializers.CharField()
+
+
+class CommunityProfileOptionsSerializer(serializers.Serializer):
+    industries = CommunityProfileOptionSerializer(many=True)
+    career_stages = CommunityProfileOptionSerializer(many=True)
+    skills = CommunityProfileOptionSerializer(many=True)
+    interests = CommunityProfileOptionSerializer(many=True)

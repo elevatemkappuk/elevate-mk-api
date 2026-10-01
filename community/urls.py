@@ -1,6 +1,6 @@
 from django.urls import path
 
-from community.views import CommunityActivationView, CommunityIndustryListView, CommunityJoinView, CommunityLoginView, CommunityMeView, CommunityPasswordResetConfirmView, CommunityPasswordResetRequestView, CommunityProfileView
+from community.views import CommunityActivationView, CommunityIndustryListView, CommunityJoinView, CommunityLoginView, CommunityMeView, CommunityPasswordResetConfirmView, CommunityPasswordResetRequestView, CommunityProfileView, CommunityProfileOptionsView, CommunityProfileReviewAcknowledgementView
 
 
 urlpatterns = [
@@ -12,4 +12,6 @@ urlpatterns = [
     path("community/activate/<uuid:invitation_id>/<str:token>/", CommunityActivationView.as_view(), name="community-activate"),
     path("community/me/", CommunityMeView.as_view(), name="community-me"),
     path("community/profile/", CommunityProfileView.as_view(), name="community-profile"),
+    path("community/profile/options/", CommunityProfileOptionsView.as_view(), name="community-profile-options"),
+    path("community/profile/review-acknowledgement/", CommunityProfileReviewAcknowledgementView.as_view(), name="community-profile-review-acknowledgement"),
 ]

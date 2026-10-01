@@ -40,6 +40,8 @@ from community.serializers import (
     CommunityActivationSerializer,
     CommunityCurrentUserSerializer,
     CommunityProfileSerializer,
+    CommunityProfileWriteSerializer,
+    CommunityProfileOptionsSerializer,
     CommunityIndustrySerializer,
     CommunityJoinSerializer,
 )
@@ -50,6 +52,9 @@ from community.services import (
     is_community_eligible_user,
     build_community_profile_projection,
     get_or_create_community_profile,
+    update_community_profile,
+    community_profile_options,
+    acknowledge_community_profile_review,
 )
 from notifications.exceptions import TransactionalEmailError
 from notifications.services import send_transactional_email
@@ -362,6 +367,7 @@ class CommunityActivationView(APIView):
         )
 
 
+@method_decorator(csrf_protect, name="dispatch")
 class CommunityProfileView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -408,6 +414,56 @@ class CommunityProfileView(APIView):
             community_profile=community_profile,
         )
         return Response(CommunityProfileSerializer(projection).data, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        operation_id="community_profile_update",
+        summary="Update the authenticated member's Community profile",
+        request=CommunityProfileWriteSerializer,
+        responses={200: CommunityProfileSerializer, 400: OpenApiResponse(description="Invalid profile update."), 403: OpenApiResponse(description="Community access is unavailable.")},
+        tags=["Community"],
+    )
+    def patch(self, request):
+        if not is_community_eligible_user(request.user):
+            return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
+        serializer = CommunityProfileWriteSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        try:
+            projection = update_community_profile(person_id=request.user.person_id, data=serializer.validated_data, request=request)
+        except DjangoValidationError as error:
+            return Response(error.message_dict if hasattr(error, "message_dict") else {"detail": error.messages}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(CommunityProfileSerializer(projection).data, status=status.HTTP_200_OK)
+
+
+class CommunityProfileOptionsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        operation_id="community_profile_options",
+        summary="List options for the authenticated Community profile editor",
+        responses={200: CommunityProfileOptionsSerializer, 403: OpenApiResponse(description="Community access is unavailable.")},
+        tags=["Community"],
+    )
+    def get(self, request):
+        if not is_community_eligible_user(request.user):
+            return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
+        return Response(CommunityProfileOptionsSerializer(community_profile_options()).data, status=status.HTTP_200_OK)
+
+
+@method_decorator(csrf_protect, name="dispatch")
+class CommunityProfileReviewAcknowledgementView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        operation_id="community_profile_review_acknowledgement",
+        summary="Acknowledge the authenticated member's Community profile review",
+        responses={200: OpenApiResponse(description="Review acknowledgement recorded."), 403: OpenApiResponse(description="Community access is unavailable.")},
+        tags=["Community"],
+    )
+    def post(self, request):
+        if not is_community_eligible_user(request.user):
+            return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
+        profile = acknowledge_community_profile_review(person_id=request.user.person_id, request=request)
+        return Response({"review_required": profile.review_required}, status=status.HTTP_200_OK)
 
 
 class CommunityMeView(APIView):

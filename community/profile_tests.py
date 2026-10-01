@@ -173,6 +173,8 @@ class CommunityProfileFoundationTests(TestCase):
 
 class CommunityProfileApiTests(TestCase):
     profile_url = "/api/v1/community/profile/"
+    options_url = "/api/v1/community/profile/options/"
+    acknowledgement_url = "/api/v1/community/profile/review-acknowledgement/"
 
     def setUp(self):
         self.client = APIClient()
@@ -341,3 +343,130 @@ class CommunityProfileApiTests(TestCase):
         )
         self.client.force_authenticate(user=technical_user)
         self.assertEqual(self.client.get(self.profile_url).status_code, 403)
+
+    def test_patch_updates_canonical_profile_and_returns_fresh_completion(self):
+        response = self.client.patch(
+            self.profile_url,
+            {
+                "person": {"first_name": "  AMINA  ", "last_name": "McDonald", "location": "  Bletchley  Park "},
+                "community": {"bio": "  Building better connections.  "},
+                "professional": {
+                    "job_title": "Product Designer",
+                    "company": "Elevate MK",
+                    "industry": self.industry.slug,
+                    "career_stage": ProfessionalProfile.CareerStage.MID_CAREER,
+                    "linkedin_url": "https://www.linkedin.com/in/amina",
+                },
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["person"]["first_name"], "Amina")
+        self.assertEqual(response.data["person"]["location"], "Bletchley Park")
+        self.assertEqual(response.data["community"]["bio"], "Building better connections.")
+        self.assertTrue(response.data["completion"]["professional_details"])
+        self.person.refresh_from_db()
+        self.assertEqual(self.person.primary_email, "private@example.com")
+        self.assertEqual(self.person.mobile, "")
+        professional = ProfessionalProfile.objects.get(person=self.person)
+        self.assertEqual(professional.job_title, "Product Designer")
+
+    def test_patch_rejects_protected_fields_and_does_not_change_person(self):
+        response = self.client.patch(
+            self.profile_url,
+            {"person": {"primary_email": "changed@example.com", "mobile": "+447700900123"}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.person.refresh_from_db()
+        self.assertEqual(self.person.primary_email, "private@example.com")
+        self.assertEqual(self.person.mobile, "")
+
+    def test_patch_can_replace_and_clear_skills_and_interests(self):
+        skill = Skill.objects.filter(is_active=True).first()
+        interest = Interest.objects.filter(is_active=True).first()
+        response = self.client.patch(
+            self.profile_url,
+            {"skills": [skill.slug], "interests": [interest.slug]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["skills"][0]["slug"], skill.slug)
+        self.assertTrue(response.data["completion"]["skills"])
+        self.assertTrue(response.data["completion"]["interests"])
+
+        response = self.client.patch(self.profile_url, {"skills": [], "interests": []}, format="json")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data["completion"]["skills"])
+        self.assertFalse(response.data["completion"]["interests"])
+        self.assertFalse(PersonSkill.objects.filter(person=self.person).exists())
+        self.assertFalse(PersonInterest.objects.filter(person=self.person).exists())
+
+    def test_patch_rejects_inactive_taxonomy_and_unknown_fields(self):
+        inactive = Industry.objects.create(name="Inactive", slug="inactive-profile-test", is_active=False)
+        response = self.client.patch(self.profile_url, {"professional": {"industry": inactive.slug}}, format="json")
+        self.assertEqual(response.status_code, 400)
+        response = self.client.patch(self.profile_url, {"email": "private@example.com"}, format="json")
+        self.assertEqual(response.status_code, 400)
+
+    def test_patch_updates_existing_professional_profile_and_validates_name_and_stage(self):
+        ProfessionalProfile.objects.create(person=self.person, job_title="Old title", industry=self.industry)
+        response = self.client.patch(
+            self.profile_url,
+            {"person": {"first_name": ""}, "professional": {"career_stage": "NOT_A_STAGE"}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.person.refresh_from_db()
+        self.assertEqual(self.person.first_name, "Amina")
+        self.assertEqual(ProfessionalProfile.objects.get(person=self.person).job_title, "Old title")
+
+        response = self.client.patch(
+            self.profile_url,
+            {"professional": {"job_title": "Updated title", "company": "New company"}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        professional = ProfessionalProfile.objects.get(person=self.person)
+        self.assertEqual(professional.job_title, "Updated title")
+        self.assertEqual(professional.company, "New company")
+
+    def test_invalid_audited_update_rolls_back_all_profile_changes(self):
+        with mock.patch("community.services.record_audit_event", side_effect=RuntimeError("audit unavailable")):
+            with self.assertRaises(RuntimeError):
+                self.client.patch(self.profile_url, {"person": {"location": "New location"}}, format="json")
+        self.person.refresh_from_db()
+        self.assertEqual(self.person.location, "Milton Keynes")
+
+    def test_options_are_community_safe_and_active_only(self):
+        Industry.objects.create(name="Internal", slug="internal-options-test", is_active=False)
+        response = self.client.get(self.options_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn({"slug": self.industry.slug, "label": self.industry.name}, response.data["industries"])
+        self.assertNotIn("id", response.data["industries"][0])
+        self.assertNotIn({"slug": "internal-options-test", "label": "Internal"}, response.data["industries"])
+        self.assertTrue(response.data["career_stages"])
+
+    def test_review_acknowledgement_is_idempotent_and_preserves_provenance(self):
+        profile = CommunityProfile.objects.create(person=self.person, person_preexisted_community=True)
+        first = self.client.post(self.acknowledgement_url, {}, format="json")
+        profile.refresh_from_db()
+        acknowledged_at = profile.review_acknowledged_at
+        second = self.client.post(self.acknowledgement_url, {}, format="json")
+        profile.refresh_from_db()
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertFalse(first.data["review_required"])
+        self.assertFalse(second.data["review_required"])
+        self.assertEqual(profile.review_acknowledged_at, acknowledged_at)
+        self.assertTrue(profile.person_preexisted_community)
+
+    def test_profile_mutations_require_community_eligibility(self):
+        self.client.force_authenticate(user=None)
+        self.assertEqual(self.client.patch(self.profile_url, {"community": {"bio": "x"}}, format="json").status_code, 401)
+
+        self.membership.status = Membership.Status.FORMER
+        self.membership.save(update_fields=["status"])
+        self.client.force_authenticate(user=self.user)
+        self.assertEqual(self.client.patch(self.profile_url, {"community": {"bio": "x"}}, format="json").status_code, 403)
