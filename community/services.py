@@ -213,7 +213,15 @@ def _schedule_account_activation(*, person):
         .first()
     )
     if invitation is not None and invitation.expires_at > now:
-        return invitation
+        job = (
+            TransactionalEmailJob.objects.select_for_update()
+            .filter(invitation=invitation)
+            .first()
+        )
+        if job is not None and job.status != TransactionalEmailJob.Status.CANCELLED:
+            return invitation
+        # A cancelled or unexpectedly missing job cannot deliver this
+        # invitation. Preserve both records and create a fresh lifecycle pair.
     if invitation is not None:
         invitation.superseded_at = now
         invitation.save(update_fields=["superseded_at", "updated_at"])

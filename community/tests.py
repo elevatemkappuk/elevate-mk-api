@@ -137,6 +137,85 @@ class CommunityActivationSchedulingTests(TestCase):
         self.assertFalse(CommunityAccountInvitation.objects.exists())
         self.assertFalse(TransactionalEmailJob.objects.exists())
 
+    def test_cancelled_activation_job_is_replaced_by_a_new_current_invitation_and_job(self):
+        first = self.client.post(
+            self.join_url,
+            self.payload(email="cancelled@example.com"),
+            format="json",
+            HTTP_IDEMPOTENCY_KEY="cancelled-first",
+        )
+        person = Person.objects.get(primary_email="cancelled@example.com")
+        old_invitation = CommunityAccountInvitation.objects.get(person=person)
+        old_job = TransactionalEmailJob.objects.get(invitation=old_invitation)
+        old_job.status = TransactionalEmailJob.Status.CANCELLED
+        old_job.completed_at = timezone.now()
+        old_job.save(update_fields=["status", "completed_at", "updated_at"])
+
+        second = self.client.post(
+            self.join_url,
+            self.payload(email="cancelled@example.com"),
+            format="json",
+            HTTP_IDEMPOTENCY_KEY="cancelled-recovery",
+        )
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 202)
+        current_invitations = CommunityAccountInvitation.objects.filter(
+            person=person,
+            used_at__isnull=True,
+            revoked_at__isnull=True,
+            superseded_at__isnull=True,
+        )
+        self.assertEqual(current_invitations.count(), 1)
+        replacement = current_invitations.get()
+        replacement_job = TransactionalEmailJob.objects.get(invitation=replacement)
+        self.assertNotEqual(replacement.pk, old_invitation.pk)
+        self.assertNotEqual(replacement_job.pk, old_job.pk)
+        self.assertEqual(old_job.status, TransactionalEmailJob.Status.CANCELLED)
+        old_invitation.refresh_from_db()
+        self.assertIsNotNone(old_invitation.superseded_at)
+        self.assertEqual(replacement_job.status, TransactionalEmailJob.Status.PENDING)
+        self.assertEqual(Person.objects.filter(primary_email="cancelled@example.com").count(), 1)
+        self.assertEqual(Membership.objects.filter(person=person).count(), 1)
+        self.assertEqual(ProfessionalProfile.objects.filter(person=person).count(), 1)
+
+    def test_viable_activation_job_states_reuse_existing_invitation_and_job(self):
+        for index, job_status in enumerate(
+            (
+                TransactionalEmailJob.Status.PENDING,
+                TransactionalEmailJob.Status.PROCESSING,
+                TransactionalEmailJob.Status.SENT,
+                TransactionalEmailJob.Status.DELIVERY_UNCERTAIN,
+                TransactionalEmailJob.Status.FAILED,
+            )
+        ):
+            email = f"reuse-{index}@example.com"
+            response = self.client.post(
+                self.join_url,
+                self.payload(email=email),
+                format="json",
+                HTTP_IDEMPOTENCY_KEY=f"reuse-first-{index}",
+            )
+            person = Person.objects.get(primary_email=email)
+            invitation = CommunityAccountInvitation.objects.get(person=person)
+            job = TransactionalEmailJob.objects.get(invitation=invitation)
+            job.status = job_status
+            job.save(update_fields=["status", "updated_at"])
+
+            replay = self.client.post(
+                self.join_url,
+                self.payload(email=email),
+                format="json",
+                HTTP_IDEMPOTENCY_KEY=f"reuse-second-{index}",
+            )
+
+            self.assertEqual(response.status_code, 202)
+            self.assertEqual(replay.status_code, 202)
+            self.assertEqual(CommunityAccountInvitation.objects.filter(person=person).count(), 1)
+            self.assertEqual(TransactionalEmailJob.objects.filter(invitation=invitation).count(), 1)
+            job.refresh_from_db()
+            self.assertEqual(job.status, job_status)
+
     def test_inactive_or_unusable_user_is_not_mutated_or_invited(self):
         person = Person.objects.create(
             first_name="Existing",
