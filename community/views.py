@@ -1,8 +1,11 @@
 import logging
 
 from django.conf import settings
+from django.contrib.auth import get_user_model, login, password_validation
+from django.contrib.auth.tokens import default_token_generator
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from rest_framework import status
-from django.contrib.auth import get_user_model, login
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect
@@ -14,8 +17,8 @@ from rest_framework.views import APIView
 from memberships.models import Membership
 from people.models import Person
 from professional_profiles.models import Industry
-from accounts.serializers import LoginSerializer, PasswordResetRequestSerializer
-from accounts.views import build_password_reset_url, record_auth_audit_or_raise
+from accounts.serializers import LoginSerializer, PasswordResetConfirmSerializer, PasswordResetRequestSerializer
+from accounts.views import INVALID_RESET_TOKEN_DETAIL, build_password_reset_url, record_auth_audit_or_raise
 from audit.models import AuditEvent
 
 from community.activation import (
@@ -102,6 +105,80 @@ class CommunityPasswordResetRequestView(APIView):
             except TransactionalEmailError:
                 logger.warning("Community password reset email delivery failed.")
         return Response({"detail": COMMUNITY_PASSWORD_RESET_DETAIL}, status=status.HTTP_200_OK)
+
+
+@method_decorator(csrf_protect, name="dispatch")
+class CommunityPasswordResetConfirmView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "password_reset_confirm"
+
+    @extend_schema(
+        operation_id="community_password_reset_confirm",
+        summary="Confirm a Community password reset",
+        description="Public, CSRF-protected endpoint. The reset link must still belong to an eligible Community account. Successful reset does not log the user in.",
+        request=PasswordResetConfirmSerializer,
+        responses={200: OpenApiResponse(description="Password reset completed."), 400: OpenApiResponse(description="Invalid or unavailable reset link.")},
+        auth=[],
+        tags=["Community"],
+    )
+    def post(self, request):
+        serializer = PasswordResetConfirmSerializer(
+            data=request.data,
+            context={"defer_password_validation": True},
+        )
+        if not serializer.is_valid():
+            data = serializer.errors
+            if str(data.get("code", [""])[0]) == "invalid_password_reset_token":
+                return self.invalid_reset_response()
+            return Response(data, status=status.HTTP_400_BAD_REQUEST)
+
+        submitted_user = serializer.validated_data["user"]
+        with transaction.atomic():
+            person = Person.objects.select_for_update().filter(pk=submitted_user.person_id).first()
+            user = User.objects.select_for_update().select_related("person").filter(pk=submitted_user.pk).first()
+            membership = (
+                Membership.objects.select_for_update()
+                .filter(person_id=submitted_user.person_id, status=Membership.Status.ACTIVE)
+                .first()
+            )
+            if (
+                person is None
+                or user is None
+                or membership is None
+                or not is_community_eligible_user(user)
+                or not user.is_active
+                or not default_token_generator.check_token(user, serializer.validated_data["token"])
+            ):
+                return self.invalid_reset_response()
+
+            try:
+                password_validation.validate_password(serializer.validated_data["new_password"], user)
+            except DjangoValidationError as error:
+                return Response(
+                    {"new_password": list(error.messages)},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            user.set_password(serializer.validated_data["new_password"])
+            user.save(update_fields=["password"])
+            record_auth_audit_or_raise(
+                action=AuditEvent.Action.PASSWORD_RESET,
+                actor_user=None,
+                entity_type="User",
+                entity_id=user.id,
+                metadata={"user_id": str(user.id), "person_id": str(user.person_id)},
+            )
+
+        return Response({"detail": "Your password has been reset successfully."})
+
+    @staticmethod
+    def invalid_reset_response():
+        return Response(
+            {"code": "invalid_password_reset_token", "detail": INVALID_RESET_TOKEN_DETAIL},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 @method_decorator(csrf_protect, name="dispatch")

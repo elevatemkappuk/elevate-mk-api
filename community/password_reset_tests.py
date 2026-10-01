@@ -1,7 +1,10 @@
 from unittest.mock import patch
 
 from django.core.cache import cache
+from django.contrib.auth.tokens import default_token_generator
 from django.test import TestCase, override_settings
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_encode
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -139,3 +142,122 @@ class CommunityPasswordResetRequestTests(TestCase):
         from community.views import CommunityPasswordResetRequestView
 
         self.assertEqual(CommunityPasswordResetRequestView.throttle_scope, "community_password_reset")
+
+
+@override_settings(COMMUNITY_PASSWORD_RESET_THROTTLE_RATE="20/hour")
+class CommunityPasswordResetConfirmTests(TestCase):
+    url = "/api/v1/community/password-reset/confirm/"
+
+    def setUp(self):
+        cache.clear()
+        self.client = APIClient()
+        self.person = Person.objects.create(
+            first_name="Amina",
+            last_name="Zulu",
+            primary_email="member@example.com",
+        )
+        self.membership = Membership.objects.create(
+            person=self.person,
+            status=Membership.Status.ACTIVE,
+            joined_at=timezone.localdate(),
+            membership_source=Membership.Source.COMMUNITY_PLATFORM,
+        )
+        self.user = User.objects.create_user(
+            email=self.person.primary_email,
+            password="Old-password-123!",
+            person=self.person,
+        )
+
+    def token_payload(self, password="New-password-123!"):
+        return {
+            "uid": urlsafe_base64_encode(force_bytes(self.user.pk)),
+            "token": default_token_generator.make_token(self.user),
+            "new_password": password,
+            "confirm_password": password,
+        }
+
+    def post(self, payload=None, client=None):
+        return (client or self.client).post(self.url, payload or self.token_payload(), format="json")
+
+    def assert_password_unchanged(self, old_password="Old-password-123!"):
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password(old_password))
+
+    def test_eligible_user_can_redeem_and_password_changes(self):
+        response = self.post()
+
+        self.assertEqual(response.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("New-password-123!"))
+
+    def test_former_membership_after_issuance_fails_generically_without_mutation(self):
+        payload = self.token_payload()
+        self.membership.status = Membership.Status.FORMER
+        self.membership.ended_at = timezone.localdate()
+        self.membership.save(update_fields=["status", "ended_at", "updated_at"])
+
+        response = self.post(payload)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data, {"code": "invalid_password_reset_token", "detail": "This password reset link is invalid or has expired."})
+        self.assert_password_unchanged()
+
+    def test_archived_person_after_issuance_fails_generically_without_mutation(self):
+        payload = self.token_payload()
+        self.person.archived_at = timezone.now()
+        self.person.save(update_fields=["archived_at", "updated_at"])
+
+        response = self.post(payload)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["code"], "invalid_password_reset_token")
+        self.assert_password_unchanged()
+
+    def test_non_business_person_after_issuance_fails_generically_without_mutation(self):
+        payload = self.token_payload()
+        self.person.record_type = Person.RecordType.TECHNICAL
+        self.person.save(update_fields=["record_type", "updated_at"])
+
+        response = self.post(payload)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["code"], "invalid_password_reset_token")
+        self.assert_password_unchanged()
+
+    def test_invalid_token_and_ineligible_account_have_same_generic_response(self):
+        invalid = self.post({**self.token_payload(), "token": "invalid"})
+        self.person.archived_at = timezone.now()
+        self.person.save(update_fields=["archived_at", "updated_at"])
+        ineligible = self.post(self.token_payload())
+
+        self.assertEqual(invalid.data, ineligible.data)
+        self.assert_password_unchanged()
+
+    def test_confirm_requires_csrf_and_uses_existing_confirm_throttle_scope(self):
+        client = APIClient(enforce_csrf_checks=True)
+        response = self.post(client=client)
+
+        self.assertEqual(response.status_code, 403)
+        from community.views import CommunityPasswordResetConfirmView
+
+        self.assertEqual(CommunityPasswordResetConfirmView.throttle_scope, "password_reset_confirm")
+
+    def test_shared_confirm_endpoint_still_resets_ineligible_user(self):
+        self.person.archived_at = timezone.now()
+        self.person.save(update_fields=["archived_at", "updated_at"])
+        uid = urlsafe_base64_encode(force_bytes(self.user.pk))
+        token = default_token_generator.make_token(self.user)
+        response = self.client.post(
+            "/api/v1/auth/password-reset/confirm/",
+            {
+                "uid": uid,
+                "token": token,
+                "new_password": "Shared-password-123!",
+                "confirm_password": "Shared-password-123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("Shared-password-123!"))

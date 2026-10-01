@@ -121,9 +121,10 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 {"code": "invalid_password_reset_token", "detail": self.error_messages["invalid_token"]}
             )
-        try:
-            password_validation.validate_password(attrs["new_password"], user)
-        except DjangoValidationError as error:
-            raise serializers.ValidationError({"new_password": list(error.messages)}) from error
+        if not self.context.get("defer_password_validation"):
+            try:
+                password_validation.validate_password(attrs["new_password"], user)
+            except DjangoValidationError as error:
+                raise serializers.ValidationError({"new_password": list(error.messages)}) from error
         attrs["user"] = user
         return attrs
