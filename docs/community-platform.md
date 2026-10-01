@@ -295,6 +295,8 @@ Current Angular routes and behavior:
 | `/forgot-password` | Enumeration-safe reset request |
 | `/reset-password/:uid/:token` | Password reset form/success/invalid states |
 | `/community` | Authenticated Community home, auth guarded |
+| `/community/profile` | Authenticated owner-facing composed My Profile |
+| `/community/profile/edit` | Authenticated My Profile editor |
 
 `CommunityAuthService` owns CSRF bootstrap, Community login, activation, reset,
 logout, and `/community/me` calls. The shared account-security shell is reused
@@ -304,7 +306,8 @@ provides a minimal welcome/sign-out experience.
 
 The current visual language uses Elevate mustard, cream, black editorial type,
 shared header/shell components, and no public-site navigation on the Community
-application pages. The current authenticated page is not Community Profile V1.
+application pages. The authenticated Community application includes the
+owner-facing My Profile and Edit Profile pages described below.
 
 ### CommunityProfile foundation
 
@@ -318,7 +321,7 @@ professional, membership, taxonomy, or account fields.
 | `person` | `OneToOneField(Person, on_delete=PROTECT)` | Owning canonical Person; exposed through `person.community_profile` |
 | `bio` | `TextField` | Optional plain-text Community bio, maximum 400 characters |
 | `person_preexisted_community` | `BooleanField` | Whether the Person existed before original Community onboarding; defaults to `False` and is not editable |
-| `review_acknowledged_at` | `DateTimeField` | Timestamp for future explicit acknowledgement of the existing-record review banner |
+| `review_acknowledged_at` | `DateTimeField` | Timestamp for explicit acknowledgement of the existing-record review banner |
 | `created_at` | `DateTimeField` | Row creation timestamp |
 | `updated_at` | `DateTimeField` | Last row update timestamp |
 
@@ -329,14 +332,12 @@ person_preexisted_community = true
 AND review_acknowledged_at IS NULL
 ```
 
-This state supports the future authenticated My Profile banner:
+This state supports the authenticated My Profile banner:
 
 > Check your details
 >
 > We already had some information associated with your Elevate MK membership.
 > Please review your profile and make sure everything is up to date.
-
-No acknowledgement endpoint or member-facing Profile API is implemented yet.
 
 #### Provenance and Join behavior
 
@@ -364,6 +365,51 @@ the existing-record review banner.
 The model is registered minimally in Django admin. Provenance and timestamps
 are read-only there; member-facing endpoints must continue using explicit
 Community-safe serializers.
+
+### Community Profile V1 — authenticated My Profile
+
+My Profile is an authenticated owner-facing composed profile. It is assembled
+from the canonical `Person`, `ProfessionalProfile`, `Membership`,
+`PersonSkill`/`Skill`, and `PersonInterest`/`Interest` records together with
+the Community-owned `CommunityProfile` extension. `CommunityProfile` is not a
+duplicate Person or professional-profile record.
+
+Authenticated eligible members can update only:
+
+- Person: `first_name`, `last_name`, `location`;
+- ProfessionalProfile: `job_title`, `company`, `industry`, `career_stage`,
+  `linkedin_url`;
+- CommunityProfile: `bio`;
+- relationships: `skills` and `interests`.
+
+Email, mobile, demographics, membership state, marketing preferences, tags,
+notes, staff roles, account state, provider state, and review provenance are
+outside the self-service mutation boundary. Skills and interests use active
+canonical slugs with replacement semantics: omitted means unchanged and `[]`
+clears the relationship.
+
+The backend derives completion for Name, Professional details, Bio, Skills,
+and Interests. Completion is returned in the composed response and is not
+persisted or independently recalculated by Angular.
+
+The four member-facing endpoints are:
+
+- `GET /api/v1/community/profile/` — composed My Profile;
+- `PATCH /api/v1/community/profile/` — partial canonical/profile update;
+- `GET /api/v1/community/profile/options/` — active editor taxonomy options;
+- `POST /api/v1/community/profile/review-acknowledgement/` — explicit review
+  acknowledgement.
+
+Self-service mutations use the existing append-only audit mechanism with
+`metadata.source = COMMUNITY_SELF_SERVICE`. Audit changes record changed
+fields/relationship actions and request context; raw profile values are not
+placed in the source metadata.
+
+Review is not an approval workflow and Profile V1 has no field-by-field
+mismatch UI. Anonymous Join remains generic. After authentication, an
+existing-record member receives the general Check Your Details prompt and may
+review/update the canonical profile or explicitly acknowledge it through
+Review Profile or Looks Good. Editing alone does not acknowledge review.
 
 ## 10. Staff CRM Community visibility
 
@@ -432,15 +478,16 @@ relevant authenticated or account-creation flow.
 
 ## 13. Deferred / not implemented
 
-The following are not implemented and must not be inferred from the current
-minimal `/community` page:
+The following remain future scope and must not be inferred from the current
+Profile V1 implementation:
 
-- Community Profile member-facing APIs and UI, including bio editing, profile
-  completion, and the review acknowledgement action;
-- profile photo and durable object storage;
-- member directory/discovery, connections, networking, or messaging;
+- Profile Photo and durable object storage;
+- Directory and the future Directory Profile projection;
+- QR profile sharing;
+- connections and networking;
+- Directory visibility/privacy controls;
+- email/mobile self-service editing;
 - Community events, opportunities, or other in-app content modules;
-- Community privacy/discoverability controls;
 - SMS marketing consent or synchronization;
 - historical E.164 migration of existing Person mobile values;
 - Community filtering or account actions in the CRM People list;

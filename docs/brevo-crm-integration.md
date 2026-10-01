@@ -487,11 +487,13 @@ CRM OPTED_OUT -> new BREVO synchronization job
 
 ## 14. Person profile synchronization
 
-`PERSON_PROFILE` jobs are created in the authoritative `PersonDetailView.patch`
-path after a successful Person update. Changes to `first_name`, `last_name`, or
-`mobile` trigger them. Unrelated changes and identical saves do not. A pending
-profile job for that Person is reused rather than accumulating duplicate pending
-work. Jobs store no profile PII snapshot; the worker reads the current Person.
+`PERSON_PROFILE` jobs are created after successful authoritative Person updates
+from both the Staff CRM `PersonDetailView.patch` path and the authenticated
+Community Profile self-service path. Changes to `first_name`, `last_name`, or
+`mobile` trigger them; Community Profile currently edits only the first two.
+Unrelated changes and identical saves do not. A pending profile job for that
+Person is reused rather than accumulating duplicate pending work. Jobs store no
+profile PII snapshot; the worker reads the current Person.
 
 Profile synchronization requires an active Brevo marketing
 `ExternalPersonReference`. It never creates a contact or reference merely
@@ -508,6 +510,14 @@ state. If Brevo rejects the optional non-empty `SMS` value as an invalid phone,
 the update is retried once without `SMS`; an intentionally empty `SMS` value
 still goes through unchanged to clear stale provider data. Successful updates
 use `UPDATED_PERSON_PROFILE`.
+
+Community self-service name changes enqueue this existing asynchronous,
+coalesced path inside the same database transaction as the canonical update and
+audit event. No synchronous Brevo request is made. Community Profile does not
+currently edit mobile, so a Community bio, professional-field, skills, or
+interests edit does not require a `PERSON_PROFILE` job under the approved
+mapping. Marketing preferences and consent remain an independent domain and
+are not changed by Community Profile edits.
 
 ## 15. Email identity changes and controlled migration
 

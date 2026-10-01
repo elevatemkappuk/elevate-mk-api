@@ -223,6 +223,37 @@ Purpose:
 - A new Community profile defaults to no review requirement.
 - CommunityProfile is not a replacement for Person, Membership, User, or ProfessionalProfile data.
 
+### Profile V1 composition and ownership
+
+Authenticated Community My Profile is composed from this CommunityProfile
+extension together with canonical shared records:
+
+- `Person` for name and location;
+- `ProfessionalProfile` for professional fields and canonical Industry;
+- `Membership` for the existing Elevate relationship;
+- `PersonSkill`/`Skill` and `PersonInterest`/`Interest` for taxonomy
+  relationships.
+
+CommunityProfile owns only Community-specific extension state: `bio`, the
+`person_preexisted_community` provenance flag, review acknowledgement state,
+and timestamps. It does not duplicate canonical Person, professional,
+membership, taxonomy, account, or provider data.
+
+The authenticated self-service Profile V1 mutation boundary is:
+
+- Person: `first_name`, `last_name`, `location`;
+- ProfessionalProfile: `job_title`, `company`, `industry`, `career_stage`,
+  `linkedin_url`;
+- CommunityProfile: `bio`;
+- relationships: `skills`, `interests`.
+
+Email, mobile, demographics, membership state, marketing preferences, tags,
+notes, staff roles, account state, provider state, and review provenance are
+not writable through Profile V1. Profile writes and their append-only
+`COMMUNITY_SELF_SERVICE` audit events are transactional. Effective first/last
+name changes also create the existing coalesced asynchronous `PERSON_PROFILE`
+sync job; the job stores no profile snapshot.
+
 Django-managed framework tables also exist because this project uses Django authentication, permissions, content types, admin, and server-side sessions. Those framework tables are not documented field-by-field here.
 
 ## Identity Relationship

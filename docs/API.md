@@ -229,6 +229,9 @@ These endpoints are separate from the Staff CRM People API. Join, industry looku
 | `POST` | `/api/v1/community/activate/{invitation_id}/{token}/` | Public; invitation token required |
 | `GET` | `/api/v1/community/me/` | Authenticated Community session |
 | `GET` | `/api/v1/community/profile/` | Authenticated eligible Community member |
+| `PATCH` | `/api/v1/community/profile/` | Authenticated eligible Community member; CSRF |
+| `GET` | `/api/v1/community/profile/options/` | Authenticated eligible Community member |
+| `POST` | `/api/v1/community/profile/review-acknowledgement/` | Authenticated eligible Community member; CSRF |
 
 Community Join returns the generic `202 Accepted` representation documented in [Community Platform](community-platform.md). It does not expose CRM identity evidence or create a User account. Successful activation creates the Community User account and establishes the authenticated Community session; activation and password-reset failures remain enumeration-safe.
 
@@ -2357,9 +2360,10 @@ explicit opt-out. SMS marketing preferences are not supported by Join V1.
 
 ## Community Profile V1 — My Profile
 
-`GET /api/v1/community/profile/` returns the authenticated member's composed,
-read-only Community profile. It is not a direct `CommunityProfile` model
-serialization and does not accept a Person ID.
+`GET /api/v1/community/profile/` returns the authenticated member's composed
+My Profile. It is not a direct `CommunityProfile` model serialization and does
+not accept a Person ID. The same composed response is returned by the PATCH
+endpoint after a successful update.
 
 Authentication and eligibility:
 
@@ -2436,9 +2440,91 @@ Privacy boundary:
   notes, audit history, import provenance, Brevo/provider data, marketing
   administration, staff roles, User internals, invitation state, transactional
   email jobs, `person_preexisted_community`, or `review_acknowledged_at`.
-- Profile photo data and editing/acknowledgement actions are not part of P2.
+- Profile photo data, Directory Profile data, and public-profile identifiers
+  are not part of Profile V1.
 
 The projection uses `select_related` for the Person's ProfessionalProfile,
 Industry, Membership, and CommunityProfile, and filtered `prefetch_related`
 queries for active Skills and Interests. It does not perform per-item queries
 for the composed collections.
+
+### Update My Profile
+
+`PATCH /api/v1/community/profile/` accepts a partial update from the
+authenticated eligible member and returns the complete authoritative composed
+profile with `200 OK`. Cookie-authenticated unsafe requests require the normal
+Django CSRF token.
+
+The accepted request shape is:
+
+```json
+{
+  "person": {
+    "first_name": "Amina",
+    "last_name": "Zulu",
+    "location": "Milton Keynes"
+  },
+  "community": {"bio": "Community builder"},
+  "professional": {
+    "job_title": "Designer",
+    "company": "Elevate MK",
+    "industry": "technology",
+    "career_stage": "MID_CAREER",
+    "linkedin_url": "https://www.linkedin.com/in/amina"
+  },
+  "skills": ["strategy"],
+  "interests": ["networking"]
+}
+```
+
+The writable boundary is limited to the fields shown above. Email, mobile,
+demographics, membership, marketing preferences, tags, notes, staff roles,
+account state, provider state, and review provenance are not writable through
+this endpoint. Unknown fields are rejected.
+
+`skills` and `interests` use replacement semantics when supplied: values must
+be slugs for active canonical taxonomy definitions, `[]` intentionally clears
+the relationship, and an omitted field leaves the existing relationship
+unchanged. Duplicate selections are rejected.
+
+The backend derives the `completion` object in the response from current
+canonical data. It is not persisted by the API.
+
+### Profile editor options
+
+`GET /api/v1/community/profile/options/` returns `200 OK` with the active
+canonical editor options:
+
+```json
+{
+  "industries": [{"slug": "technology", "label": "Technology"}],
+  "career_stages": [{"slug": "MID_CAREER", "label": "Mid Career"}],
+  "skills": [{"slug": "strategy", "label": "Strategy"}],
+  "interests": [{"slug": "networking", "label": "Networking"}]
+}
+```
+
+Only active Industry, Skill, and Interest definitions are returned. The
+endpoint does not create taxonomy values.
+
+### Review acknowledgement
+
+`POST /api/v1/community/profile/review-acknowledgement/` accepts an empty JSON
+object and returns `200 OK` with:
+
+```json
+{"review_required": false}
+```
+
+The operation is explicit and idempotent. Saving profile edits alone does not
+acknowledge review. Review state is derived as:
+
+```text
+review_required = person_preexisted_community AND review_acknowledged_at IS NULL
+```
+
+Profile V1 has no field-by-field mismatch or conflict system and this is not an
+approval workflow. Anonymous Join remains generic; an existing-record member
+is prompted to review the composed canonical profile after authentication.
+Review Profile followed by explicit acknowledgement and the My Profile
+Looks Good action both use this acknowledgement behavior.
