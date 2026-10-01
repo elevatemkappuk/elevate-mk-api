@@ -19,6 +19,7 @@ from people.services import normalize_email, normalize_mobile, normalize_phone_f
 from professional_profiles.models import Industry, ProfessionalProfile
 
 from community.models import CommunityAccountInvitation, JoinSubmissionReceipt
+from community.locking import acquire_community_join_email_lock
 from notifications.models import TransactionalEmailJob
 
 
@@ -383,8 +384,10 @@ def submit_community_join(*, data, request, idempotency_key=None):
         if industry is None:
             raise CommunityJoinReviewRequired
 
+        canonical_email = normalize_email(data["email"])
+        acquire_community_join_email_lock(canonical_email)
         person = _matching_people(
-            email=normalize_email(data["email"]),
+            email=canonical_email,
             mobile=data.get("mobile", ""),
             phone_region=data.get("phone_region", ""),
         )
