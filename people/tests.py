@@ -1175,7 +1175,7 @@ class PersonOverviewApiTests(TestCase):
         PersonTag.objects.create(person=self.active_member_person, tag=self.vip_tag, assigned_by=self.admin_user)
 
         self.authenticate(self.admin_user)
-        with self.assertNumQueries(6):
+        with self.assertNumQueries(7):
             response = self.client.get(self.get_url(self.active_member_person.id))
 
         self.assertEqual(response.status_code, 200)

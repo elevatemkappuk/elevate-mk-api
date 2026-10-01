@@ -418,7 +418,7 @@ class AuthenticationApiTests(TestCase):
     ROOT_URLCONF="config.urls",
     CORS_ALLOWED_ORIGINS=["http://localhost:4200", "http://localhost:4201"],
     CORS_ALLOW_CREDENTIALS=True,
-    CSRF_TRUSTED_ORIGINS=["http://localhost:4200"],
+    CSRF_TRUSTED_ORIGINS=["http://localhost:4200", "http://localhost:4201"],
     SESSION_COOKIE_HTTPONLY=True,
     CSRF_COOKIE_HTTPONLY=False,
     SESSION_COOKIE_SAMESITE="Lax",
