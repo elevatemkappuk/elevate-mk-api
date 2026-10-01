@@ -17,6 +17,9 @@ from professional_profiles.models import Industry, ProfessionalProfile
 from accounts.models import User
 from skills.models import PersonSkill, Skill
 from interests.models import Interest, PersonInterest
+from brevo_marketing.jobs import PERSON_PROFILE_SYNC
+from brevo_marketing.routing import BREVO_PROVIDER
+from external_references.models import ExternalPersonSyncJob
 
 
 class CommunityProfileFoundationTests(TestCase):
@@ -371,6 +374,60 @@ class CommunityProfileApiTests(TestCase):
         self.assertEqual(self.person.mobile, "")
         professional = ProfessionalProfile.objects.get(person=self.person)
         self.assertEqual(professional.job_title, "Product Designer")
+        self.assertEqual(
+            ExternalPersonSyncJob.objects.filter(
+                person=self.person,
+                provider=BREVO_PROVIDER,
+                job_type=PERSON_PROFILE_SYNC,
+                status=ExternalPersonSyncJob.Status.PENDING,
+            ).count(),
+            1,
+        )
+
+    def test_patch_person_name_noop_does_not_enqueue_profile_sync(self):
+        response = self.client.patch(
+            self.profile_url,
+            {"person": {"last_name": " Zulu "}},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(ExternalPersonSyncJob.objects.filter(person=self.person).exists())
+
+    def test_patch_non_brevo_profile_fields_does_not_enqueue_profile_sync(self):
+        skill = Skill.objects.filter(is_active=True).first()
+        interest = Interest.objects.filter(is_active=True).first()
+        response = self.client.patch(
+            self.profile_url,
+            {
+                "community": {"bio": "A community builder"},
+                "skills": [skill.slug],
+                "interests": [interest.slug],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(ExternalPersonSyncJob.objects.filter(person=self.person).exists())
+
+    def test_patch_person_name_reuses_existing_pending_profile_sync(self):
+        existing = ExternalPersonSyncJob.objects.create(
+            person=self.person,
+            provider=BREVO_PROVIDER,
+            job_type=PERSON_PROFILE_SYNC,
+            source_event_id=999,
+        )
+
+        response = self.client.patch(
+            self.profile_url,
+            {"person": {"first_name": "Amina Updated"}},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(ExternalPersonSyncJob.objects.filter(person=self.person).count(), 1)
+        existing.refresh_from_db()
+        self.assertEqual(existing.status, ExternalPersonSyncJob.Status.PENDING)
 
     def test_patch_rejects_protected_fields_and_does_not_change_person(self):
         response = self.client.patch(

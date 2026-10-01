@@ -20,6 +20,9 @@ from people.services import normalize_email, normalize_mobile, normalize_phone_f
 from professional_profiles.models import Industry, ProfessionalProfile
 from skills.models import PersonSkill, Skill
 from interests.models import PersonInterest, Interest
+from brevo_marketing.jobs import PERSON_PROFILE_SYNC
+from brevo_marketing.routing import BREVO_PROVIDER
+from external_references.services import enqueue_coalesced_person_sync_job
 
 from community.models import CommunityAccountInvitation, CommunityProfile, JoinSubmissionReceipt
 from community.locking import acquire_community_join_email_lock
@@ -139,7 +142,7 @@ def _community_request_context(request):
 
 
 def _audit_self_service(*, action, entity_type, entity_id, changed_fields, request, created=False):
-    record_audit_event(
+    return record_audit_event(
         action=action,
         actor_user=request.user,
         entity_type=entity_type,
@@ -158,6 +161,7 @@ def update_community_profile(*, person_id, data, request):
         person = Person.objects.select_for_update().get(pk=person_id)
         profile = CommunityProfile.objects.select_for_update().filter(person=person).first()
         changed_person = []
+        person_audit_event = None
         person_values = data.get("person", {})
         for field in ("first_name", "last_name", "location"):
             if field not in person_values:
@@ -175,7 +179,13 @@ def update_community_profile(*, person_id, data, request):
                 changed_person.append(field)
         if changed_person:
             _save_validated(person, [*changed_person, "updated_at"])
-            _audit_self_service(action=AuditEvent.Action.PERSON_UPDATED, entity_type="Person", entity_id=person.id, changed_fields=changed_person, request=request)
+            person_audit_event = _audit_self_service(
+                action=AuditEvent.Action.PERSON_UPDATED,
+                entity_type="Person",
+                entity_id=person.id,
+                changed_fields=changed_person,
+                request=request,
+            )
 
         community_values = data.get("community", {})
         if community_values:
@@ -226,6 +236,14 @@ def update_community_profile(*, person_id, data, request):
                 _audit_self_service(action=removed_action, entity_type=model.__name__, entity_id=item_id, changed_fields=["person_id"], request=request)
             for item_id in sorted(submitted_ids - existing_ids):
                 _audit_self_service(action=assigned_action, entity_type=model.__name__, entity_id=item_id, changed_fields=["person_id"], request=request)
+
+        if person_audit_event is not None and set(changed_person).intersection({"first_name", "last_name", "mobile"}):
+            enqueue_coalesced_person_sync_job(
+                person=person,
+                provider=BREVO_PROVIDER,
+                job_type=PERSON_PROFILE_SYNC,
+                source_event_id=person_audit_event.id,
+            )
 
         person = Person.objects.select_related("professional_profile", "professional_profile__industry", "membership", "community_profile").prefetch_related(
             Prefetch("person_skills", queryset=PersonSkill.objects.filter(skill__is_active=True).select_related("skill"), to_attr="community_profile_skills"),
