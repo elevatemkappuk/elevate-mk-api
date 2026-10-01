@@ -1,4 +1,9 @@
 # Elevate MK API
+
+For the current cross-repository Community architecture and implementation
+checkpoint, see [Community Platform](community-platform.md). This includes the
+implemented Join, activation, sign-in, password recovery, frontend, and Staff
+CRM projections.
 Status: Living Documentation
 Last Updated: 2026-08-31
 

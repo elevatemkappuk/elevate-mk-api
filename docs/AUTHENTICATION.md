@@ -83,20 +83,16 @@ Current behavior:
 - Login rejects inactive users.
 - Inactive login failures use the same generic error as other credential failures.
 
-Community Join activation scheduling (J2.1) is currently limited to durable
-invitation and transactional-email job creation. It does not create a User,
-set a password, establish a session, or expose an activation endpoint. Eligible
-accepted joins use historical invitation records with one current invitation
-per Person and a 72-hour configurable expiry by default. J2.1 does not mint a
-token during Join; the future delivery worker will hash a token immediately
-before sending. Raw activation tokens, full activation URLs, passwords, and
-marketing consent data are not stored in the invitation/job records. The
-activation email is transactional and is independent of EMAIL marketing opt-in
-state. A provider-accepted/process-crash delivery outcome is intentionally
-ambiguous and requires explicit J2.2 reconciliation rather than blind token
-rotation.
+Community Join creates a durable invitation and transactional-email job for an
+eligible Person without a User. Delivery is performed by the transactional
+worker, which issues and hashes a token only immediately before sending. Raw
+activation tokens, full activation URLs, passwords, and marketing consent data
+are not stored in invitation/job records. The activation email is transactional
+and independent of EMAIL marketing opt-in state. Provider-accepted or
+process-crash delivery outcomes are represented as delivery-uncertain rather
+than blindly token-rotated.
 
-Community activation redemption is provided by
+Community activation redemption is implemented at
 `POST /api/v1/community/activate/<invitation_uuid>/<token>/`. It uses the
 existing CSRF-protected, credentialed Django session architecture and creates
 the User only after atomically revalidating the invitation, Person, Membership,
@@ -107,12 +103,13 @@ Membership. Community Users are not assigned staff roles and do not gain CRM
 authorization. Activation attempts use the dedicated
 `COMMUNITY_ACTIVATION_THROTTLE_RATE` setting, defaulting to `10/hour`.
 
-The separate `process_transactional_email_jobs --watch` worker claims pending
+The combined `process_background_jobs --watch` worker claims pending
 activation jobs using database locks and a configurable lease. It issues the
 activation token only at delivery time, refreshes the configured usable expiry
 from that issuance, and never logs or persists the raw token or URL. Stale
 processing and generic provider failures become terminal
-`DELIVERY_UNCERTAIN`; only definitive pre-acceptance failures are retried.
+`DELIVERY_UNCERTAIN`; only definitive pre-acceptance failures are retried. The
+same worker also processes durable Brevo marketing synchronization jobs.
 
 ## Session Authentication
 Elevate's current first-party web authentication strategy is Django server-side sessions/cookies rather than JWT.
