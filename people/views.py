@@ -157,6 +157,7 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
         description=(
             "Returns BUSINESS Person records for the Staff CRM People directory. "
             "Includes read-only job_title from ProfessionalProfile and relationship from Membership. "
+            "Includes the read-only backend-derived community_account_status lifecycle state. "
             "TECHNICAL persons are excluded for all record_state values. "
             "Supports repeated relationship, location, industry, career_stage, interest, skill, and tag filters: "
             "values are ORed within a category and categories combine with AND. "
@@ -194,6 +195,7 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
                             "archived_at": None,
                             "created_at": "2026-08-29T12:00:00Z",
                             "updated_at": "2026-08-29T12:00:00Z",
+                            "community_account_status": "ACTIVE",
                         }
                     ],
                 },
@@ -208,8 +210,19 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
 
     def get_queryset(self):
         params = getattr(self, "validated_query_params", self.get_validated_query_params())
+        current_community_invitations = CommunityAccountInvitation.objects.filter(
+            used_at__isnull=True,
+            revoked_at__isnull=True,
+            superseded_at__isnull=True,
+        ).select_related("transactional_email_job").order_by("-created_at", "-id")
         return PeopleDirectoryQuery(self.get_business_people_queryset(), params).apply().select_related(
-            "professional_profile", "membership",
+            "user", "professional_profile", "membership",
+        ).prefetch_related(
+            Prefetch(
+                "community_account_invitations",
+                queryset=current_community_invitations,
+                to_attr="current_community_invitations",
+            ),
         )
 
     def get_validated_query_params(self):

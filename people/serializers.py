@@ -6,7 +6,7 @@ from rest_framework import serializers
 from memberships.models import Membership
 from memberships.serializers import MembershipSerializer
 from people.models import Person
-from community.services import build_community_account_projection
+from community.services import build_community_account_projection, get_community_account_status
 from people.services import is_plausible_crm_mobile
 from professional_profiles.models import ProfessionalProfile
 from professional_profiles.serializers import ProfessionalProfileSerializer
@@ -105,9 +105,10 @@ class PersonDirectoryListSerializer(PersonListSerializer):
 
     job_title = serializers.SerializerMethodField()
     relationship = serializers.SerializerMethodField()
+    community_account_status = serializers.SerializerMethodField()
 
     class Meta(PersonListSerializer.Meta):
-        fields = PersonListSerializer.Meta.fields + ("job_title", "relationship")
+        fields = PersonListSerializer.Meta.fields + ("job_title", "relationship", "community_account_status")
 
     @extend_schema_field(serializers.CharField(allow_null=True, max_length=255))
     def get_job_title(self, instance):
@@ -125,6 +126,10 @@ class PersonDirectoryListSerializer(PersonListSerializer):
             Membership.Status.ACTIVE: "ACTIVE_MEMBER",
             Membership.Status.FORMER: "FORMER_MEMBER",
         }[membership.status]
+
+    @extend_schema_field(serializers.ChoiceField(choices=("ACTIVE", "SETUP_PENDING", "NOT_SET_UP", "ACCESS_UNAVAILABLE")))
+    def get_community_account_status(self, instance):
+        return get_community_account_status(person=instance)
 
 
 class StrictPersonWriteSerializer(serializers.Serializer):

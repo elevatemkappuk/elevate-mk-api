@@ -1,10 +1,11 @@
-from datetime import date
+from datetime import date, timedelta
 
 from django.utils import timezone
 from rest_framework.request import Request
 from rest_framework.test import APIRequestFactory, APITestCase
 
 from accounts.models import User
+from community.models import CommunityAccountInvitation
 from memberships.models import Membership
 from people.models import Person
 from people.serializers import PersonDirectoryListSerializer
@@ -38,6 +39,29 @@ class PeopleDirectoryProjectionTests(APITestCase):
             joined_at=date(2024, 1, 1), ended_at=date(2025, 1, 1),
             membership_source=Membership.Source.STAFF,
         )
+        self.pending = Person.objects.create(first_name="Pending", last_name="Directory")
+        CommunityAccountInvitation.objects.create(
+            person=self.pending,
+            intended_email="pending@example.com",
+            expires_at=timezone.now() + timedelta(days=1),
+        )
+        self.active_account = User.objects.create_user(
+            email="active-account@example.com",
+            password="testpass123",
+            person_first_name="Active",
+            person_last_name="Account",
+        )
+        Membership.objects.create(
+            person=self.active_account.person, status=Membership.Status.ACTIVE,
+            joined_at=date(2024, 1, 1), membership_source=Membership.Source.STAFF,
+        )
+        self.unavailable_account = User.objects.create_user(
+            email="unavailable-account@example.com",
+            password="testpass123",
+            person_first_name="Unavailable",
+            person_last_name="Account",
+            is_active=False,
+        )
 
     def rows(self, **params):
         response = self.client.get("/api/v1/people/", params)
@@ -61,6 +85,20 @@ class PeopleDirectoryProjectionTests(APITestCase):
         current = self.rows()[self.member.id]
         self.assertEqual(current["job_title"], "Director")
         self.assertEqual(current["relationship"], "FORMER_MEMBER")
+
+    def test_list_projects_authoritative_community_account_status(self):
+        rows = self.rows()
+
+        self.assertEqual(rows[self.active_account.person_id]["community_account_status"], "ACTIVE")
+        self.assertEqual(rows[self.pending.id]["community_account_status"], "SETUP_PENDING")
+        self.assertEqual(rows[self.contact.id]["community_account_status"], "NOT_SET_UP")
+        self.assertEqual(rows[self.unavailable_account.person_id]["community_account_status"], "ACCESS_UNAVAILABLE")
+
+        for row in rows.values():
+            self.assertNotIn("account_email", row)
+            self.assertNotIn("setup_email", row)
+            self.assertNotIn("invitation_sent_at", row)
+            self.assertNotIn("invitation_expires_at", row)
 
     def test_archive_state_does_not_change_membership_type(self):
         Person.objects.filter(pk__in=[self.member.pk, self.contact.pk]).update(archived_at=timezone.now())
@@ -106,6 +144,6 @@ class PeopleDirectoryProjectionTests(APITestCase):
             )
         view = PeopleListView()
         view.request = Request(APIRequestFactory().get("/api/v1/people/"))
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             rows = PersonDirectoryListSerializer(view.get_queryset(), many=True).data
-        self.assertEqual(len(rows), 13)
+        self.assertEqual(len(rows), 16)
