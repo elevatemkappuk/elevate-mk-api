@@ -79,6 +79,11 @@ jobs:
           brevo_marketing.tests.BrevoSyncJobTests.test_worker_processes_brevo_job_and_completes_business_outcomes
           brevo_marketing.tests.BrevoMarketingWebhookTests.test_authenticated_unsubscribe_records_brevo_opt_out_without_echo_job
           marketing_preferences.test_audience_preview.AudiencePreviewApiTests.test_authorization_matches_people_read_access
+          community.tests.CommunityJoinApiTests
+          community.activation_tests.CommunityActivationApiTests
+          community.password_reset_tests.CommunityPasswordResetRequestTests
+          community.password_reset_tests.CommunityPasswordResetConfirmTests
+          community.profile_tests.CommunityProfileApiTests
           --noinput -v 1
-        # Intentionally limited deployment-contract coverage; this does not replace
-        # the full backend test suite, which will be implemented separately.
+        # Keep this as a fast representative gate; the full backend suite runs
+        # separately on master pull requests and manual dispatch.
