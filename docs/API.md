@@ -5,7 +5,7 @@ checkpoint, see [Community Platform](community-platform.md). This includes the
 implemented Join, activation, sign-in, password recovery, frontend, and Staff
 CRM projections.
 Status: Living Documentation
-Last Updated: 2026-08-31
+Last Updated: 2026-10-01
 
 ## Scope
 This document describes the HTTP API currently implemented in the Django server repository.
@@ -14,7 +14,7 @@ This document describes the HTTP API currently implemented in the Django server 
 Current base path and versioning convention:
 
 - Base prefix: `/api/v1/`
-- Current Elevate API routes are defined in `accounts.urls`, `people.urls`, `memberships.urls`, `professional_profiles.urls`, `skills.urls`, `interests.urls`, and `tags.urls`, all mounted from `config.urls`
+- Current Elevate API routes are defined in the application URL modules mounted from `config.urls`: authentication, dashboard, people, memberships, professional profiles, skills, interests, tags, notes, imports, marketing preferences, campaigns, Community, and Brevo webhooks.
 - Machine-readable OpenAPI schema: `/api/schema/`
 - Swagger UI: `/api/docs/`
 - ReDoc: `/api/redoc/`
@@ -114,7 +114,130 @@ Currently implemented Elevate endpoints:
 - `GET /api/v1/people/{person_id}/professional-profile/`
 - `GET /api/v1/people/{person_id}/overview/`
 
-No other Elevate API endpoints are currently implemented.
+The complete route inventory is documented below. The OpenAPI schema remains the authoritative machine-readable contract.
+
+## Complete Endpoint Inventory
+
+The following is the current route inventory under `/api/v1/`. Authentication labels describe the normal application contract; CSRF is additionally required for cookie-authenticated unsafe requests.
+
+### Authentication and account recovery
+
+| Method | Endpoint | Access |
+| --- | --- | --- |
+| `GET` | `/api/v1/auth/csrf/` | Public |
+| `POST` | `/api/v1/auth/login/` | Public |
+| `POST` | `/api/v1/auth/logout/` | Authenticated session |
+| `GET` | `/api/v1/auth/me/` | Authenticated session |
+| `POST` | `/api/v1/auth/password-reset/` | Public; generic response |
+| `POST` | `/api/v1/auth/password-reset/confirm/` | Public; uid/token required |
+
+### Dashboard
+
+| Method | Endpoint | Access |
+| --- | --- | --- |
+| `GET` | `/api/v1/dashboard/` | Authenticated CRM role |
+
+### People and CRM relationship endpoints
+
+| Method | Endpoint | Access |
+| --- | --- | --- |
+| `GET` | `/api/v1/people/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/members/` | Authenticated CRM role |
+| `GET` | `/api/v1/people/{person_id}/` | Authenticated CRM role |
+| `PATCH` | `/api/v1/people/{person_id}/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/archive/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/restore/` | Authenticated CRM role |
+| `GET` | `/api/v1/people/{person_id}/overview/` | Authenticated CRM role |
+| `GET` | `/api/v1/people/{person_id}/audit-history/` | Authenticated CRM role |
+| `GET` | `/api/v1/people/{person_id}/brevo-integration/` | Authenticated CRM role |
+| `GET` | `/api/v1/people/{person_id}/membership/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/membership/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/membership/end/` | Authenticated CRM role |
+| `GET` | `/api/v1/people/{person_id}/professional-profile/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/professional-profile/` | Authenticated CRM role |
+| `PATCH` | `/api/v1/people/{person_id}/professional-profile/` | Authenticated CRM role |
+| `GET` | `/api/v1/people/{person_id}/skills/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/skills/` | Authenticated CRM role |
+| `DELETE` | `/api/v1/people/{person_id}/skills/{skill_id}/` | Authenticated CRM role |
+| `GET` | `/api/v1/people/{person_id}/interests/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/interests/` | Authenticated CRM role |
+| `DELETE` | `/api/v1/people/{person_id}/interests/{interest_id}/` | Authenticated CRM role |
+| `GET` | `/api/v1/people/{person_id}/tags/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/tags/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/tags/{tag_id}/remove/` | Authenticated CRM role |
+| `GET` | `/api/v1/people/{person_id}/notes/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/notes/` | Authenticated CRM role |
+| `PATCH` | `/api/v1/people/{person_id}/notes/{note_id}/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/notes/{note_id}/archive/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/notes/{note_id}/restore/` | Authenticated CRM role |
+
+### Shared catalog endpoints
+
+| Method | Endpoint | Access |
+| --- | --- | --- |
+| `GET` | `/api/v1/industries/` | Authenticated CRM role |
+| `GET` | `/api/v1/skills/` | Authenticated CRM role |
+| `GET` | `/api/v1/interests/` | Authenticated CRM role |
+| `GET` | `/api/v1/tags/` | Authenticated CRM role |
+
+### Imports
+
+| Method | Endpoint | Access |
+| --- | --- | --- |
+| `POST` | `/api/v1/imports/eventbrite/` | Authenticated CRM role |
+| `POST` | `/api/v1/imports/membership-form/` | Authenticated CRM role |
+| `GET` | `/api/v1/imports/` | Authenticated CRM role |
+| `GET` | `/api/v1/imports/{batch_id}/` | Authenticated CRM role |
+| `POST` | `/api/v1/imports/{batch_id}/analyze/` | Authenticated CRM role |
+| `POST` | `/api/v1/imports/{batch_id}/import/` | Authenticated CRM role |
+| `GET` | `/api/v1/imports/{batch_id}/records/` | Authenticated CRM role |
+| `GET` | `/api/v1/imports/{batch_id}/review/` | Authenticated CRM role |
+| `GET` | `/api/v1/imports/{batch_id}/review/{record_id}/` | Authenticated CRM role |
+| `POST` | `/api/v1/imports/{batch_id}/review/{record_id}/resolve/` | Authenticated CRM role |
+
+### Marketing, campaigns, and provider integration
+
+| Method | Endpoint | Access |
+| --- | --- | --- |
+| `GET` | `/api/v1/people/{person_id}/marketing-preference/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/marketing-preference/` | Authenticated CRM role |
+| `POST` | `/api/v1/marketing/audiences/preview/` | Authenticated CRM role |
+| `GET` | `/api/v1/marketing/campaigns/` | Authenticated CRM role |
+| `POST` | `/api/v1/marketing/campaigns/` | Authenticated CRM role |
+| `GET` | `/api/v1/marketing/campaigns/{campaign_id}/` | Authenticated CRM role |
+| `DELETE` | `/api/v1/marketing/campaigns/{campaign_id}/` | Authenticated CRM role |
+| `POST` | `/api/v1/marketing/campaigns/{campaign_id}/archive/` | Authenticated CRM role |
+| `POST` | `/api/v1/marketing/campaigns/{campaign_id}/restore/` | Authenticated CRM role |
+| `POST` | `/api/v1/marketing/campaigns/{campaign_id}/prepare/` | Authenticated CRM role |
+| `POST` | `/api/v1/marketing/campaigns/{campaign_id}/prepare-provider/` | Authenticated CRM role |
+| `GET` | `/api/v1/marketing/campaigns/{campaign_id}/recipients/` | Authenticated CRM role |
+| `POST` | `/api/v1/webhooks/brevo/marketing/` | Brevo webhook authentication |
+
+### Community account and membership endpoints
+
+These endpoints are separate from the Staff CRM People API. Join, industry lookup, login, password recovery, and activation are public flows; `community/me/` requires an authenticated Community session.
+
+| Method | Endpoint | Access |
+| --- | --- | --- |
+| `GET` | `/api/v1/community/industries/` | Public |
+| `POST` | `/api/v1/community/join/` | Public; CSRF, scoped throttle, optional `Idempotency-Key` |
+| `POST` | `/api/v1/community/login/` | Public; CSRF |
+| `POST` | `/api/v1/community/password-reset/` | Public; CSRF; generic response |
+| `POST` | `/api/v1/community/password-reset/confirm/` | Public; CSRF; uid/token required |
+| `GET` | `/api/v1/community/activate/{invitation_id}/{token}/` | Public; invitation token required |
+| `POST` | `/api/v1/community/activate/{invitation_id}/{token}/` | Public; invitation token required |
+| `GET` | `/api/v1/community/me/` | Authenticated Community session |
+
+Community Join returns the generic `202 Accepted` representation documented in [Community Platform](community-platform.md). It does not expose CRM identity evidence or create a User account. Successful activation creates the Community User account and establishes the authenticated Community session; activation and password-reset failures remain enumeration-safe.
+
+### API documentation endpoints
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/schema/` | Machine-readable OpenAPI schema |
+| `GET` | `/api/docs/` | Swagger UI |
+| `GET` | `/api/redoc/` | ReDoc |
 
 ## OpenAPI Documentation
 Current documentation endpoints:

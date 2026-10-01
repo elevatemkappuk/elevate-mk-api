@@ -1,5 +1,6 @@
 import uuid
 
+from django.core.validators import MaxLengthValidator
 from django.db import models
 from django.utils import timezone
 
@@ -18,6 +19,32 @@ class JoinSubmissionReceipt(models.Model):
 
     class Meta:
         ordering = ["-created_at", "-id"]
+
+
+class CommunityProfile(models.Model):
+    """Community-owned presentation and onboarding state for a Person."""
+
+    person = models.OneToOneField(
+        Person,
+        on_delete=models.PROTECT,
+        related_name="community_profile",
+    )
+    bio = models.TextField(
+        blank=True,
+        max_length=400,
+        validators=[MaxLengthValidator(400)],
+    )
+    person_preexisted_community = models.BooleanField(default=False, editable=False)
+    review_acknowledged_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @property
+    def review_required(self):
+        return self.person_preexisted_community and self.review_acknowledged_at is None
+
+    def __str__(self):
+        return f"Community profile for {self.person}"
 
 
 class CommunityAccountInvitation(models.Model):

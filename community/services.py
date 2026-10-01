@@ -18,7 +18,7 @@ from people.models import Person
 from people.services import normalize_email, normalize_mobile, normalize_phone_for_community, PhoneNormalizationStatus
 from professional_profiles.models import Industry, ProfessionalProfile
 
-from community.models import CommunityAccountInvitation, JoinSubmissionReceipt
+from community.models import CommunityAccountInvitation, CommunityProfile, JoinSubmissionReceipt
 from community.locking import acquire_community_join_email_lock
 from notifications.models import TransactionalEmailJob
 
@@ -46,6 +46,17 @@ def is_community_eligible_user(user):
         and person.archived_at is None
         and Membership.objects.filter(person=person, status=Membership.Status.ACTIVE).exists()
     )
+
+
+def get_or_create_community_profile(*, person, person_preexisted_community=False):
+    """Lazily create Community-owned state without rewriting established provenance."""
+    profile, _ = CommunityProfile.objects.get_or_create(
+        person=person,
+        defaults={
+            "person_preexisted_community": bool(person_preexisted_community),
+        },
+    )
+    return profile
 
 
 def build_community_account_projection(*, person):
@@ -434,6 +445,11 @@ def submit_community_join(*, data, request, idempotency_key=None):
 
         if person_created or changed_person_fields:
             _audit_person(person, created=person_created, changed_fields=changed_person_fields, request=request)
+
+        get_or_create_community_profile(
+            person=person,
+            person_preexisted_community=not person_created,
+        )
 
         membership = Membership.objects.select_for_update().filter(person=person).first()
         if membership is not None and membership.status == Membership.Status.FORMER:

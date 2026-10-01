@@ -1,6 +1,13 @@
 from django.contrib import admin
 
-from community.models import CommunityAccountInvitation
+from community.models import CommunityAccountInvitation, CommunityProfile
+
+
+@admin.register(CommunityProfile)
+class CommunityProfileAdmin(admin.ModelAdmin):
+    list_display = ("person", "person_preexisted_community", "review_acknowledged_at", "created_at", "updated_at")
+    search_fields = ("person__first_name", "person__last_name", "person__primary_email")
+    readonly_fields = ("person_preexisted_community", "created_at", "updated_at")
 
 
 @admin.register(CommunityAccountInvitation)

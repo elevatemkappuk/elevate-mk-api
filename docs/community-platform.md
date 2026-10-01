@@ -1,9 +1,9 @@
 # Elevate MK Community Platform — Implementation Checkpoint
 
-Status: implemented checkpoint. This document describes the current code, not a
-future Community Profile specification. The shared Django/DRF backend is the
-authority for identity, membership, account eligibility, consent, and lifecycle
-states.
+Status: implemented checkpoint. This document describes the current code and
+the implemented CommunityProfile foundation. The shared Django/DRF backend is
+the authority for identity, membership, account eligibility, consent, and
+lifecycle states.
 
 ## 1. System architecture
 
@@ -306,6 +306,65 @@ The current visual language uses Elevate mustard, cream, black editorial type,
 shared header/shell components, and no public-site navigation on the Community
 application pages. The current authenticated page is not Community Profile V1.
 
+### CommunityProfile foundation
+
+The backend now includes `community.CommunityProfile`, a small Community-owned
+one-to-one extension of `people.Person`. It stores only Community presentation
+and onboarding state; it does not duplicate canonical CRM identity,
+professional, membership, taxonomy, or account fields.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `person` | `OneToOneField(Person, on_delete=PROTECT)` | Owning canonical Person; exposed through `person.community_profile` |
+| `bio` | `TextField` | Optional plain-text Community bio, maximum 400 characters |
+| `person_preexisted_community` | `BooleanField` | Whether the Person existed before original Community onboarding; defaults to `False` and is not editable |
+| `review_acknowledged_at` | `DateTimeField` | Timestamp for future explicit acknowledgement of the existing-record review banner |
+| `created_at` | `DateTimeField` | Row creation timestamp |
+| `updated_at` | `DateTimeField` | Last row update timestamp |
+
+The model exposes the derived `review_required` property:
+
+```text
+person_preexisted_community = true
+AND review_acknowledged_at IS NULL
+```
+
+This state supports the future authenticated My Profile banner:
+
+> Check your details
+>
+> We already had some information associated with your Elevate MK membership.
+> Please review your profile and make sure everything is up to date.
+
+No acknowledgement endpoint or member-facing Profile API is implemented yet.
+
+#### Provenance and Join behavior
+
+Community Join establishes provenance from the actual Person create/match
+decision inside the existing transaction:
+
+- a newly created Person receives `person_preexisted_community = false`;
+- a safely matched existing Person receives `true` when the CommunityProfile is
+  first established;
+- an existing CommunityProfile is never rewritten by a later Join or replay.
+
+The centralized `get_or_create_community_profile()` service creates the row
+lazily and sets provenance only through `get_or_create()` defaults. This keeps
+`False` permanently false and `True` permanently true after establishment.
+Profile creation participates in Join's existing PostgreSQL advisory-lock and
+database transaction behavior, so failed Join operations do not leave an
+orphaned CommunityProfile.
+
+There is no bulk backfill. Historical eligible Community users may continue to
+exist without a CommunityProfile row. Future authenticated Profile flows may
+call the centralized lazy-creation service; when historical provenance cannot
+be established reliably, the created row defaults to `false` and does not show
+the existing-record review banner.
+
+The model is registered minimally in Django admin. Provenance and timestamps
+are read-only there; member-facing endpoints must continue using explicit
+Community-safe serializers.
+
 ## 10. Staff CRM Community visibility
 
 The Person overview has a dedicated read-only Community account card. Its
@@ -376,7 +435,9 @@ relevant authenticated or account-creation flow.
 The following are not implemented and must not be inferred from the current
 minimal `/community` page:
 
-- Community Profile V1, including profile photo, bio, editing, and completion;
+- Community Profile member-facing APIs and UI, including bio editing, profile
+  completion, and the review acknowledgement action;
+- profile photo and durable object storage;
 - member directory/discovery, connections, networking, or messaging;
 - Community events, opportunities, or other in-app content modules;
 - Community privacy/discoverability controls;
