@@ -45,6 +45,8 @@ from community.serializers import (
     CommunityIndustrySerializer,
     CommunityJoinSerializer,
 )
+from community.photo_serializers import CommunityProfilePhotoUploadSerializer
+from community.photos import ProfilePhotoValidationError
 from community.services import (
     CommunityJoinIdempotencyConflict,
     CommunityJoinReviewRequired,
@@ -55,6 +57,8 @@ from community.services import (
     update_community_profile,
     community_profile_options,
     acknowledge_community_profile_review,
+    upload_community_profile_photo,
+    remove_community_profile_photo,
 )
 from notifications.exceptions import TransactionalEmailError
 from notifications.services import send_transactional_email
@@ -447,6 +451,45 @@ class CommunityProfileOptionsView(APIView):
         if not is_community_eligible_user(request.user):
             return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
         return Response(CommunityProfileOptionsSerializer(community_profile_options()).data, status=status.HTTP_200_OK)
+
+
+@method_decorator(csrf_protect, name="dispatch")
+class CommunityProfilePhotoView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        operation_id="community_profile_photo_upload",
+        summary="Upload or replace the authenticated member's Community profile photo",
+        request=CommunityProfilePhotoUploadSerializer,
+        responses={200: CommunityProfileSerializer, 400: OpenApiResponse(description="Invalid profile photo.")},
+        tags=["Community"],
+    )
+    def post(self, request):
+        if not is_community_eligible_user(request.user):
+            return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
+        serializer = CommunityProfilePhotoUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            projection = upload_community_profile_photo(
+                person_id=request.user.person_id,
+                uploaded_file=serializer.validated_data["photo"],
+                request=request,
+            )
+        except ProfilePhotoValidationError as error:
+            return Response({"photo": [str(error)]}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(CommunityProfileSerializer(projection).data, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        operation_id="community_profile_photo_delete",
+        summary="Remove the authenticated member's Community profile photo",
+        responses={200: CommunityProfileSerializer, 403: OpenApiResponse(description="Community access is unavailable.")},
+        tags=["Community"],
+    )
+    def delete(self, request):
+        if not is_community_eligible_user(request.user):
+            return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
+        projection = remove_community_profile_photo(person_id=request.user.person_id, request=request)
+        return Response(CommunityProfileSerializer(projection).data, status=status.HTTP_200_OK)
 
 
 @method_decorator(csrf_protect, name="dispatch")

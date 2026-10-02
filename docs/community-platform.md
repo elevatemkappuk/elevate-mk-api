@@ -392,11 +392,13 @@ The backend derives completion for Name, Professional details, Bio, Skills,
 and Interests. Completion is returned in the composed response and is not
 persisted or independently recalculated by Angular.
 
-The four member-facing endpoints are:
+The member-facing profile endpoints are:
 
 - `GET /api/v1/community/profile/` — composed My Profile;
 - `PATCH /api/v1/community/profile/` — partial canonical/profile update;
 - `GET /api/v1/community/profile/options/` — active editor taxonomy options;
+- `POST` and `DELETE /api/v1/community/profile/photo/` — private profile-photo
+  upload/replacement/removal;
 - `POST /api/v1/community/profile/review-acknowledgement/` — explicit review
   acknowledgement.
 
@@ -481,7 +483,6 @@ relevant authenticated or account-creation flow.
 The following remain future scope and must not be inferred from the current
 Profile V1 implementation:
 
-- Profile Photo and durable object storage;
 - Directory and the future Directory Profile projection;
 - QR profile sharing;
 - connections and networking;
@@ -492,6 +493,26 @@ Profile V1 implementation:
 - historical E.164 migration of existing Person mobile values;
 - Community filtering or account actions in the CRM People list;
 - invitation resend/reissue UI or public account actions.
+
+### Profile Photo V1
+
+Profile Photo V1 is an authenticated owner-facing extension of My Profile. It
+uses `POST` and `DELETE` on `/api/v1/community/profile/photo/`, accepts only
+JPEG, PNG, and WebP uploads up to 5 MiB, and returns the normal composed profile
+projection. The backend normalizes accepted images to metadata-stripped JPEG
+or PNG objects with a maximum 1024-pixel longest edge and rejects animated,
+malformed, unsupported, oversized, and over-25-megapixel images. It preserves
+transparency where practical and does not crop to a square.
+
+Only an opaque generated storage object name under
+`community/profile-photos/` is persisted. `photo_url` is generated at read
+time through the configured default storage, so private S3 deployments receive
+temporary signed URLs rather than a persisted URL. Replacement commits the new
+reference before old-object deletion; failed database writes attempt to remove
+the new object. Upload, replacement, and removal use the existing
+`COMMUNITY_SELF_SERVICE` audit path without storing image bytes, URLs,
+credentials, or original filenames. Profile Photo does not change completion,
+identity, membership, consent, Brevo, or Directory behavior.
 
 ## 14. Deployment configuration checkpoint
 

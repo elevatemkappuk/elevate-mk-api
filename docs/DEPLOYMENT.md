@@ -72,9 +72,9 @@ Admin CSS, JavaScript, and theme icons.
 ## Application object storage
 
 The API supports an explicit AWS S3-backed default storage for durable
-application objects. This is a general storage foundation; individual
-features choose their own object prefixes. It does not currently implement
-Community profile photos.
+application objects. Individual features choose their own object prefixes;
+Community Profile Photo V1 uses `community/profile-photos/` for normalized
+private photo objects.
 
 Local development remains filesystem-backed and does not require AWS
 credentials. Deployed S3 mode is enabled only when `USE_S3_STORAGE=True`.

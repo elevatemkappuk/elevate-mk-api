@@ -231,6 +231,8 @@ These endpoints are separate from the Staff CRM People API. Join, industry looku
 | `GET` | `/api/v1/community/profile/` | Authenticated eligible Community member |
 | `PATCH` | `/api/v1/community/profile/` | Authenticated eligible Community member; CSRF |
 | `GET` | `/api/v1/community/profile/options/` | Authenticated eligible Community member |
+| `POST` | `/api/v1/community/profile/photo/` | Authenticated eligible Community member; multipart; CSRF |
+| `DELETE` | `/api/v1/community/profile/photo/` | Authenticated eligible Community member; CSRF |
 | `POST` | `/api/v1/community/profile/review-acknowledgement/` | Authenticated eligible Community member; CSRF |
 
 Community Join returns the generic `202 Accepted` representation documented in [Community Platform](community-platform.md). It does not expose CRM identity evidence or create a User account. Successful activation creates the Community User account and establishes the authenticated Community session; activation and password-reset failures remain enumeration-safe.
@@ -2386,7 +2388,8 @@ Successful response: `200 OK`
   },
   "community": {
     "bio": "Community builder",
-    "review_required": false
+    "review_required": false,
+    "photo_url": "https://storage.example/private/community/profile-photos/…"
   },
   "professional": {
     "job_title": "Designer",
@@ -2440,8 +2443,11 @@ Privacy boundary:
   notes, audit history, import provenance, Brevo/provider data, marketing
   administration, staff roles, User internals, invitation state, transactional
   email jobs, `person_preexisted_community`, or `review_acknowledged_at`.
-- Profile photo data, Directory Profile data, and public-profile identifiers
-  are not part of Profile V1.
+- `photo_url` is a generated read projection for the current private profile
+  photo, or `null` when no photo exists. It is not stored as a URL in the
+  database and may be a signed/private URL when S3 storage is enabled.
+- Directory Profile data and public-profile identifiers are not part of
+  Profile V1.
 
 The projection uses `select_related` for the Person's ProfessionalProfile,
 Industry, Membership, and CommunityProfile, and filtered `prefetch_related`
@@ -2489,6 +2495,31 @@ unchanged. Duplicate selections are rejected.
 
 The backend derives the `completion` object in the response from current
 canonical data. It is not persisted by the API.
+
+### Profile photo
+
+`POST /api/v1/community/profile/photo/` accepts an authenticated eligible
+Community member's multipart upload under the `photo` field and returns the
+complete composed profile. `DELETE` on the same endpoint removes the current
+photo and returns the complete composed profile. Both methods are
+CSRF-protected for cookie-authenticated requests and operate only on the
+authenticated user's own Person.
+
+Accepted input is JPEG, PNG, or WebP up to 5 MiB. The backend rejects SVG,
+GIF, animated images, malformed files, unsupported formats, and decoded images
+larger than 25 megapixels. Accepted images are decoded and normalized before
+storage: EXIF orientation is applied, metadata is stripped, the longest edge
+is limited to 1024 pixels without upscaling, and transparency is preserved
+where practical. The backend does not crop images to a square.
+
+The stored value is only an opaque generated object name under
+`community/profile-photos/`; it contains no user-derived name or original
+filename. The response's `photo_url` is generated at read time. Replacement
+stores the new object and commits the new database reference before deleting
+the old object. Upload and removal are recorded through the existing
+`COMMUNITY_SELF_SERVICE` audit mechanism without image bytes, URLs, or
+credentials. Profile photos do not affect completion, Brevo synchronization,
+marketing preferences, or anonymous/public profile projections.
 
 ### Profile editor options
 

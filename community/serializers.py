@@ -118,6 +118,7 @@ class CommunityProfilePersonSerializer(serializers.Serializer):
 class CommunityProfileCommunitySerializer(serializers.Serializer):
     bio = serializers.CharField()
     review_required = serializers.BooleanField()
+    photo_url = serializers.URLField(allow_null=True)
 
 
 class CommunityProfileProfessionalSerializer(serializers.Serializer):

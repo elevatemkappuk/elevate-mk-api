@@ -6,6 +6,8 @@ from django.utils import timezone
 
 from people.models import Person
 
+from community.photos import community_profile_photo_upload_to
+
 
 class JoinSubmissionReceipt(models.Model):
     class Status(models.TextChoices):
@@ -33,6 +35,12 @@ class CommunityProfile(models.Model):
         blank=True,
         max_length=400,
         validators=[MaxLengthValidator(400)],
+    )
+    photo = models.ImageField(
+        upload_to=community_profile_photo_upload_to,
+        blank=True,
+        null=True,
+        max_length=500,
     )
     person_preexisted_community = models.BooleanField(default=False, editable=False)
     review_acknowledged_at = models.DateTimeField(null=True, blank=True)

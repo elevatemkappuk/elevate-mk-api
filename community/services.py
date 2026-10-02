@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -27,9 +28,14 @@ from external_references.services import enqueue_coalesced_person_sync_job
 from community.models import CommunityAccountInvitation, CommunityProfile, JoinSubmissionReceipt
 from community.locking import acquire_community_join_email_lock
 from notifications.models import TransactionalEmailJob
+from django.core.files.base import ContentFile
+
+from community.photos import ProfilePhotoValidationError, normalize_profile_photo
 
 
 PUBLIC_REVIEW_CODE = "SUBMISSION_REQUIRES_REVIEW"
+
+logger = logging.getLogger(__name__)
 
 COMMUNITY_ACCOUNT_ACTIVE = "ACTIVE"
 COMMUNITY_ACCOUNT_SETUP_PENDING = "SETUP_PENDING"
@@ -102,6 +108,12 @@ def build_community_profile_projection(*, person, community_profile=None):
         "career_stage": professional.career_stage if professional else None,
         "linkedin_url": professional.linkedin_url if professional else "",
     }
+    try:
+        photo_url = community_profile.photo.url if community_profile.photo else None
+    except Exception:
+        logger.exception("Unable to generate Community profile photo URL for profile %s", community_profile.pk)
+        raise
+
     return {
         "person": {
             "first_name": person.first_name,
@@ -111,6 +123,7 @@ def build_community_profile_projection(*, person, community_profile=None):
         "community": {
             "bio": community_profile.bio,
             "review_required": community_profile.review_required,
+            "photo_url": photo_url,
         },
         "professional": professional_data,
         "skills": skills,
@@ -132,6 +145,64 @@ def build_community_profile_projection(*, person, community_profile=None):
             "interests": bool(interests),
         },
     }
+
+
+def upload_community_profile_photo(*, person_id, uploaded_file, request):
+    """Validate, normalize and replace one member-owned Community photo."""
+    normalized = normalize_profile_photo(uploaded_file)
+    new_name = None
+    storage = None
+    try:
+        with transaction.atomic():
+            person = Person.objects.select_for_update().get(pk=person_id)
+            profile, _ = CommunityProfile.objects.select_for_update().get_or_create(person=person)
+            old_name = profile.photo.name if profile.photo else None
+            storage = profile.photo.storage
+            profile.photo.save(normalized.filename, ContentFile(normalized.content), save=False)
+            new_name = profile.photo.name
+            profile.save(update_fields=["photo", "updated_at"])
+            _audit_self_service(
+                action=AuditEvent.Action.PERSON_UPDATED,
+                entity_type="CommunityProfile",
+                entity_id=profile.id,
+                changed_fields=["photo_replaced" if old_name else "photo_uploaded"],
+                request=request,
+            )
+            if old_name:
+                transaction.on_commit(lambda: _delete_stored_object(storage, old_name))
+    except Exception:
+        if new_name and storage:
+            _delete_stored_object(storage, new_name)
+        raise
+    return build_community_profile_projection(person=person, community_profile=profile)
+
+
+def remove_community_profile_photo(*, person_id, request):
+    """Remove the current member-owned Community photo, if present."""
+    with transaction.atomic():
+        person = Person.objects.select_for_update().get(pk=person_id)
+        profile, _ = CommunityProfile.objects.select_for_update().get_or_create(person=person)
+        old_name = profile.photo.name if profile.photo else None
+        storage = profile.photo.storage
+        if old_name:
+            profile.photo = None
+            profile.save(update_fields=["photo", "updated_at"])
+            _audit_self_service(
+                action=AuditEvent.Action.PERSON_UPDATED,
+                entity_type="CommunityProfile",
+                entity_id=profile.id,
+                changed_fields=["photo_removed"],
+                request=request,
+            )
+            transaction.on_commit(lambda: _delete_stored_object(storage, old_name))
+    return build_community_profile_projection(person=person, community_profile=profile)
+
+
+def _delete_stored_object(storage, name):
+    try:
+        storage.delete(name)
+    except Exception:
+        logger.exception("Unable to clean up Community profile photo object")
 
 
 def _community_request_context(request):
