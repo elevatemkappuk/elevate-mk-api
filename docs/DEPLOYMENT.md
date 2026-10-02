@@ -69,6 +69,51 @@ Each deployment runs `collectstatic --noinput` before migrations and Gunicorn.
 WhiteNoise serves the collected files from `STATIC_ROOT`, including Django
 Admin CSS, JavaScript, and theme icons.
 
+## Application object storage
+
+The API supports an explicit AWS S3-backed default storage for durable
+application objects. This is a general storage foundation; individual
+features choose their own object prefixes. It does not currently implement
+Community profile photos.
+
+Local development remains filesystem-backed and does not require AWS
+credentials. Deployed S3 mode is enabled only when `USE_S3_STORAGE=True`.
+When enabled, the application fails during startup if the bucket, region,
+access key or secret key is missing. It does not silently fall back to local
+storage.
+
+The default S3 objects are private, public-read ACLs are not configured, and
+generated read URLs use query-string authentication. The default signed URL
+expiry is 900 seconds (15 minutes), configurable with
+`AWS_QUERYSTRING_EXPIRE`. Static files remain separate and continue using
+WhiteNoise; `collectstatic` does not place them in the application-assets
+bucket.
+
+The backend-only configuration contract is:
+
+| Variable | Purpose | Secret? |
+| --- | --- | --- |
+| `USE_S3_STORAGE` | Explicitly select S3 application storage | No |
+| `AWS_STORAGE_BUCKET_NAME` | Environment-specific S3 bucket | No |
+| `AWS_S3_REGION_NAME` | S3 region | No |
+| `AWS_ACCESS_KEY_ID` | S3 access identity | Yes |
+| `AWS_SECRET_ACCESS_KEY` | S3 access secret | Yes |
+| `AWS_QUERYSTRING_EXPIRE` | Signed URL lifetime in seconds; default `900` | No |
+
+The current environment buckets are:
+
+| Environment | Bucket | Region |
+| --- | --- | --- |
+| Development | `elevate-mk-assets-dev` | `eu-west-2` |
+| Staging | `elevate-mk-assets-staging` | `eu-west-2` |
+| Production | `elevate-mk-assets-production` | `eu-west-2` |
+
+The staging Railway API should use `elevate-mk-assets-staging` with the
+dedicated `elevate-mk-api-staging` IAM identity. Credentials belong only in
+Railway secret configuration and must never be committed or exposed to the
+Angular frontend. S3 CORS is not required for the current browser-to-Django-
+to-S3 flow.
+
 Set the Railway variable `ALLOWED_HOSTS` to the hostnames Django should accept.
 For the production API, use:
 

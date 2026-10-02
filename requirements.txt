@@ -1,6 +1,8 @@
 Django==6.1
+boto3==1.37.38
 django-cors-headers==4.9.0
 django-environ==0.14.0
+django-storages==1.14.6
 djangorestframework==3.18.0
 drf-spectacular==0.30.0
 phonenumbers==9.0.13

@@ -16,6 +16,8 @@ import math
 import environ
 from corsheaders.defaults import default_headers
 
+from config.storage import build_storage_config
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -161,14 +163,21 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
-STORAGES = {
-    'default': {
-        'BACKEND': 'django.core.files.storage.FileSystemStorage',
-    },
-    'staticfiles': {
-        'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
-    },
-}
+USE_S3_STORAGE = env.bool("USE_S3_STORAGE", default=False)
+AWS_STORAGE_BUCKET_NAME = env("AWS_STORAGE_BUCKET_NAME", default="")
+AWS_S3_REGION_NAME = env("AWS_S3_REGION_NAME", default="")
+AWS_ACCESS_KEY_ID = env("AWS_ACCESS_KEY_ID", default="")
+AWS_SECRET_ACCESS_KEY = env("AWS_SECRET_ACCESS_KEY", default="")
+AWS_QUERYSTRING_EXPIRE = env.int("AWS_QUERYSTRING_EXPIRE", default=900)
+
+STORAGES = build_storage_config(
+    use_s3=USE_S3_STORAGE,
+    bucket_name=AWS_STORAGE_BUCKET_NAME,
+    region_name=AWS_S3_REGION_NAME,
+    access_key_id=AWS_ACCESS_KEY_ID,
+    secret_access_key=AWS_SECRET_ACCESS_KEY,
+    querystring_expire=AWS_QUERYSTRING_EXPIRE,
+)
 
 CORS_ALLOWED_ORIGINS = env.list(
     "CORS_ALLOWED_ORIGINS",
