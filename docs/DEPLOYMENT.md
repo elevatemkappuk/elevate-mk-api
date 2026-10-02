@@ -87,7 +87,10 @@ generated read URLs use query-string authentication. The default signed URL
 expiry is 900 seconds (15 minutes), configurable with
 `AWS_QUERYSTRING_EXPIRE`. Static files remain separate and continue using
 WhiteNoise; `collectstatic` does not place them in the application-assets
-bucket.
+bucket. S3 addressing is explicitly configured as regional virtual-hosted
+(`AWS_S3_ADDRESSING_STYLE=virtual`) so private presigned URLs use the
+regional endpoint and avoid signature mismatches from global-host selection.
+The setting also accepts `path` when required by an environment.
 
 The backend-only configuration contract is:
 
@@ -99,6 +102,7 @@ The backend-only configuration contract is:
 | `AWS_ACCESS_KEY_ID` | S3 access identity | Yes |
 | `AWS_SECRET_ACCESS_KEY` | S3 access secret | Yes |
 | `AWS_QUERYSTRING_EXPIRE` | Signed URL lifetime in seconds; default `900` | No |
+| `AWS_S3_ADDRESSING_STYLE` | S3 URL addressing style; default `virtual` (`virtual` or `path`) | No |
 
 The current environment buckets are:
 

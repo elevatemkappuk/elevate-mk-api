@@ -5,7 +5,19 @@ class StorageConfigurationError(RuntimeError):
     """Raised when explicitly enabled S3 storage is incompletely configured."""
 
 
-def build_storage_config(*, use_s3, bucket_name="", region_name="", access_key_id="", secret_access_key="", querystring_expire=900):
+SUPPORTED_S3_ADDRESSING_STYLES = {"virtual", "path"}
+
+
+def build_storage_config(
+    *,
+    use_s3,
+    bucket_name="",
+    region_name="",
+    access_key_id="",
+    secret_access_key="",
+    querystring_expire=900,
+    addressing_style="virtual",
+):
     """Return Django STORAGES configuration without contacting the provider."""
     staticfiles = {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
@@ -16,6 +28,12 @@ def build_storage_config(*, use_s3, bucket_name="", region_name="", access_key_i
             "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
             "staticfiles": staticfiles,
         }
+
+    if addressing_style not in SUPPORTED_S3_ADDRESSING_STYLES:
+        raise StorageConfigurationError(
+            "AWS_S3_ADDRESSING_STYLE must be one of: "
+            + ", ".join(sorted(SUPPORTED_S3_ADDRESSING_STYLES))
+        )
 
     missing = [
         name
@@ -45,6 +63,7 @@ def build_storage_config(*, use_s3, bucket_name="", region_name="", access_key_i
                 "querystring_auth": True,
                 "querystring_expire": querystring_expire,
                 "file_overwrite": False,
+                "addressing_style": addressing_style,
             },
         },
         "staticfiles": staticfiles,

@@ -169,6 +169,7 @@ AWS_S3_REGION_NAME = env("AWS_S3_REGION_NAME", default="")
 AWS_ACCESS_KEY_ID = env("AWS_ACCESS_KEY_ID", default="")
 AWS_SECRET_ACCESS_KEY = env("AWS_SECRET_ACCESS_KEY", default="")
 AWS_QUERYSTRING_EXPIRE = env.int("AWS_QUERYSTRING_EXPIRE", default=900)
+AWS_S3_ADDRESSING_STYLE = env("AWS_S3_ADDRESSING_STYLE", default="virtual")
 
 STORAGES = build_storage_config(
     use_s3=USE_S3_STORAGE,
@@ -177,6 +178,7 @@ STORAGES = build_storage_config(
     access_key_id=AWS_ACCESS_KEY_ID,
     secret_access_key=AWS_SECRET_ACCESS_KEY,
     querystring_expire=AWS_QUERYSTRING_EXPIRE,
+    addressing_style=AWS_S3_ADDRESSING_STYLE,
 )
 
 CORS_ALLOWED_ORIGINS = env.list(
