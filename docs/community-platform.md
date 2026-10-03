@@ -486,13 +486,36 @@ Profile V1 implementation:
 - Directory and the future Directory Profile projection;
 - QR profile sharing;
 - connections and networking;
-- Directory visibility/privacy controls;
 - email/mobile self-service editing;
 - Community events, opportunities, or other in-app content modules;
 - SMS marketing consent or synchronization;
 - historical E.164 migration of existing Person mobile values;
 - Community filtering or account actions in the CRM People list;
 - invitation resend/reissue UI or public account actions.
+
+### Directory V1 D1 privacy foundation
+
+Directory is an authenticated Community-member feature. Directory appearance
+is opt-in through `CommunityProfile.directory_visible`, which defaults to
+`False` for existing and new profiles. `email_visible` and `mobile_visible`
+are independent opt-in sharing preferences and also default to `False`.
+Disabling whole-profile visibility suppresses contact projection but does not
+clear those preferences, so they can resume if visibility is later enabled.
+
+`CommunityProfile.directory_id` is a stable random non-sequential identifier
+for future member-facing Directory routes and QR sharing. It is intentionally
+separate from `asset_namespace_id`, which remains the private S3 ownership
+namespace. Canonical email and mobile remain on Person; only their sharing
+preferences are stored on CommunityProfile. Ordinary profile fields do not
+have independent visibility controls in D1.
+
+The D1 owner-facing My Profile contract returns and partially updates these
+three privacy settings. Directory list and Directory Profile read endpoints
+belong to D2 and are not implemented yet. Future Directory projections must
+exclude CRM/internal fields, demographics, marketing preferences, audit and
+import data, provider state, account/invitation internals, database IDs, raw
+S3 keys, and AWS metadata. QR sharing, connections, messaging, and social
+graph features remain future scope.
 
 ### Profile Photo V1
 

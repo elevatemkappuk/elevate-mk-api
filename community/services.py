@@ -124,6 +124,10 @@ def build_community_profile_projection(*, person, community_profile=None):
             "bio": community_profile.bio,
             "review_required": community_profile.review_required,
             "photo_url": photo_url,
+            "directory_id": community_profile.directory_id,
+            "directory_visible": community_profile.directory_visible,
+            "email_visible": community_profile.email_visible,
+            "mobile_visible": community_profile.mobile_visible,
         },
         "professional": professional_data,
         "skills": skills,
@@ -269,6 +273,10 @@ def update_community_profile(*, person_id, data, request):
                 if profile.bio != bio:
                     profile.bio = bio
                     changed_community.append("bio")
+            for field in ("directory_visible", "email_visible", "mobile_visible"):
+                if field in community_values and getattr(profile, field) != community_values[field]:
+                    setattr(profile, field, community_values[field])
+                    changed_community.append(field)
             if changed_community:
                 _save_validated(profile, [*changed_community, "updated_at"])
                 _audit_self_service(action=AuditEvent.Action.PERSON_UPDATED, entity_type="CommunityProfile", entity_id=profile.id, changed_fields=changed_community, request=request)

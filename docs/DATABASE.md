@@ -210,6 +210,10 @@ Purpose:
 | `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
 | `person` | `OneToOneField(people.Person)` | not null | none | Required Person; `PROTECT` on delete |
 | `asset_namespace_id` | `UUIDField` | not null | random UUID; unique; immutable | Stable non-PII storage namespace for Community profile-owned assets; not an authentication identifier |
+| `directory_id` | `UUIDField` | not null | random UUID; unique; immutable | Stable non-sequential member-facing Directory/QR route identifier; separate from asset storage ownership |
+| `directory_visible` | `BooleanField` | not null | `False` | Opt-in whole-profile Directory visibility |
+| `email_visible` | `BooleanField` | not null | `False` | Independent opt-in for canonical Person email in future Directory projection |
+| `mobile_visible` | `BooleanField` | not null | `False` | Independent opt-in for canonical Person mobile in future Directory projection |
 | `bio` | `TextField(max_length=400)` | not null, blank allowed | empty string | Optional plain-text Community bio |
 | `photo` | `ImageField` | null, blank allowed | none | Opaque generated reference to the normalized private profile-photo object under the profile-owned asset namespace |
 | `person_preexisted_community` | `BooleanField` | not null | `False` | Immutable provenance flag; not editable by users |
@@ -224,6 +228,8 @@ Purpose:
 - `review_required` is true only when `person_preexisted_community=True` and `review_acknowledged_at` is null.
 - A new Community profile defaults to no review requirement.
 - CommunityProfile is not a replacement for Person, Membership, User, or ProfessionalProfile data.
+- Directory and contact-sharing preferences are Community-owned settings. Canonical email and mobile remain on Person and are not copied.
+- All Directory and contact-sharing settings default to hidden/off; disabling Directory visibility does not clear the independent contact preferences.
 
 ### Profile V1 composition and ownership
 

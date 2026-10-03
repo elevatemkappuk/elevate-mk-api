@@ -9,6 +9,7 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from audit.models import AuditEvent
 from community.models import CommunityProfile
 from community.services import get_or_create_community_profile
 from memberships.models import Membership
@@ -55,6 +56,14 @@ class CommunityProfileFoundationTests(TestCase):
         self.assertFalse(profile.person_preexisted_community)
         self.assertIsNone(profile.review_acknowledged_at)
         self.assertFalse(profile.review_required)
+        self.assertFalse(profile.directory_visible)
+        self.assertFalse(profile.email_visible)
+        self.assertFalse(profile.mobile_visible)
+
+        second_profile = CommunityProfile.objects.create(
+            person=Person.objects.create(first_name="Second", last_name="Member")
+        )
+        self.assertNotEqual(profile.directory_id, second_profile.directory_id)
 
         profile.person_preexisted_community = True
         profile.save(update_fields=["person_preexisted_community", "updated_at"])
@@ -224,7 +233,15 @@ class CommunityProfileApiTests(TestCase):
             "last_name": "Zulu",
             "location": "Milton Keynes",
         })
-        self.assertEqual(response.data["community"], {"bio": "Community builder", "review_required": False})
+        self.assertEqual(response.data["community"], {
+            "bio": "Community builder",
+            "review_required": False,
+            "photo_url": None,
+            "directory_id": str(CommunityProfile.objects.get(person=self.person).directory_id),
+            "directory_visible": False,
+            "email_visible": False,
+            "mobile_visible": False,
+        })
         self.assertEqual(response.data["professional"]["industry"], {
             "id": self.industry.id,
             "slug": self.industry.slug,
@@ -259,7 +276,10 @@ class CommunityProfileApiTests(TestCase):
             "career_stage": None,
             "linkedin_url": "",
         })
-        self.assertEqual(response.data["community"], {"bio": "", "review_required": False})
+        self.assertEqual(response.data["community"]["bio"], "")
+        self.assertFalse(response.data["community"]["directory_visible"])
+        self.assertFalse(response.data["community"]["email_visible"])
+        self.assertFalse(response.data["community"]["mobile_visible"])
         self.assertEqual(response.data["completion"], {
             "name": True,
             "professional_details": False,
@@ -393,6 +413,68 @@ class CommunityProfileApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(ExternalPersonSyncJob.objects.filter(person=self.person).exists())
+
+    def test_privacy_settings_are_readable_and_partially_updatable(self):
+        profile = CommunityProfile.objects.create(person=self.person)
+        before_completion = self.client.get(self.profile_url).data["completion"]
+        before_event_count = AuditEvent.objects.filter(
+            entity_type="CommunityProfile", entity_id=str(profile.id)
+        ).count()
+
+        response = self.client.patch(
+            self.profile_url,
+            {"community": {"directory_visible": True, "email_visible": True, "mobile_visible": True}},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        profile.refresh_from_db()
+        self.assertTrue(profile.directory_visible)
+        self.assertTrue(profile.email_visible)
+        self.assertTrue(profile.mobile_visible)
+        self.assertEqual(response.data["community"]["directory_id"], str(profile.directory_id))
+        self.assertEqual(response.data["completion"], before_completion)
+        self.assertFalse(ExternalPersonSyncJob.objects.filter(person=self.person).exists())
+        privacy_event = AuditEvent.objects.filter(
+            entity_type="CommunityProfile", entity_id=str(profile.id)
+        ).order_by("-id").first()
+        self.assertEqual(
+            set(privacy_event.changes),
+            {"directory_visible", "email_visible", "mobile_visible"},
+        )
+        self.assertEqual(privacy_event.metadata["source"], "COMMUNITY_SELF_SERVICE")
+        self.assertNotIn("private@example.com", privacy_event.metadata)
+        self.assertNotIn("private@example.com", privacy_event.changes)
+
+        response = self.client.patch(
+            self.profile_url,
+            {"community": {"directory_visible": False}},
+            format="json",
+        )
+        profile.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(profile.directory_visible)
+        self.assertTrue(profile.email_visible)
+        self.assertTrue(profile.mobile_visible)
+
+    def test_privacy_noop_does_not_create_audit_event_and_directory_id_is_stable(self):
+        profile = CommunityProfile.objects.create(person=self.person, email_visible=True)
+        directory_id = profile.directory_id
+        before = AuditEvent.objects.filter(entity_type="CommunityProfile", entity_id=str(profile.id)).count()
+
+        response = self.client.patch(
+            self.profile_url,
+            {"community": {"email_visible": True}},
+            format="json",
+        )
+
+        profile.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(profile.directory_id, directory_id)
+        self.assertEqual(
+            AuditEvent.objects.filter(entity_type="CommunityProfile", entity_id=str(profile.id)).count(),
+            before,
+        )
 
     def test_patch_non_brevo_profile_fields_does_not_enqueue_profile_sync(self):
         skill = Skill.objects.filter(is_active=True).first()

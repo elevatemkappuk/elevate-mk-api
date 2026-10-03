@@ -2389,7 +2389,11 @@ Successful response: `200 OK`
   "community": {
     "bio": "Community builder",
     "review_required": false,
-    "photo_url": "https://storage.example/private/community/profiles/<profile-uuid>/profile-photos/<photo-uuid>.jpg?..."
+    "photo_url": "https://storage.example/private/community/profiles/<profile-uuid>/profile-photos/<photo-uuid>.jpg?...",
+    "directory_id": "opaque-directory-uuid",
+    "directory_visible": false,
+    "email_visible": false,
+    "mobile_visible": false
   },
   "professional": {
     "job_title": "Designer",
@@ -2470,7 +2474,12 @@ The accepted request shape is:
     "last_name": "Zulu",
     "location": "Milton Keynes"
   },
-  "community": {"bio": "Community builder"},
+  "community": {
+    "bio": "Community builder",
+    "directory_visible": true,
+    "email_visible": false,
+    "mobile_visible": false
+  },
   "professional": {
     "job_title": "Designer",
     "company": "Elevate MK",
@@ -2487,6 +2496,15 @@ The writable boundary is limited to the fields shown above. Email, mobile,
 demographics, membership, marketing preferences, tags, notes, staff roles,
 account state, provider state, and review provenance are not writable through
 this endpoint. Unknown fields are rejected.
+
+Community privacy settings use partial-update semantics. They default to
+hidden/off: `directory_visible`, `email_visible`, and `mobile_visible` are all
+`false`. Contact-sharing settings remain independent and are not cleared when
+Directory visibility is disabled; hidden profiles suppress both contact fields
+from future Directory projections. `directory_id` is returned only through
+this owner-facing Community profile projection and is separate from the
+private `asset_namespace_id` storage namespace. Directory list/read endpoints
+are D2 and are not implemented by this contract.
 
 `skills` and `interests` use replacement semantics when supplied: values must
 be slugs for active canonical taxonomy definitions, `[]` intentionally clears

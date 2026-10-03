@@ -119,6 +119,10 @@ class CommunityProfileCommunitySerializer(serializers.Serializer):
     bio = serializers.CharField()
     review_required = serializers.BooleanField()
     photo_url = serializers.URLField(allow_null=True)
+    directory_id = serializers.UUIDField()
+    directory_visible = serializers.BooleanField()
+    email_visible = serializers.BooleanField()
+    mobile_visible = serializers.BooleanField()
 
 
 class CommunityProfileProfessionalSerializer(serializers.Serializer):
@@ -171,6 +175,9 @@ class CommunityProfilePersonWriteSerializer(CommunityWriteSerializer):
 
 class CommunityProfileCommunityWriteSerializer(CommunityWriteSerializer):
     bio = serializers.CharField(required=False, allow_blank=True, max_length=400, trim_whitespace=True)
+    directory_visible = serializers.BooleanField(required=False)
+    email_visible = serializers.BooleanField(required=False)
+    mobile_visible = serializers.BooleanField(required=False)
 
     def validate(self, attrs):
         return attrs

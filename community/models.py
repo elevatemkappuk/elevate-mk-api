@@ -36,6 +36,14 @@ class CommunityProfile(models.Model):
         unique=True,
         editable=False,
     )
+    directory_id = models.UUIDField(
+        default=uuid.uuid4,
+        unique=True,
+        editable=False,
+    )
+    directory_visible = models.BooleanField(default=False)
+    email_visible = models.BooleanField(default=False)
+    mobile_visible = models.BooleanField(default=False)
     bio = models.TextField(
         blank=True,
         max_length=400,
