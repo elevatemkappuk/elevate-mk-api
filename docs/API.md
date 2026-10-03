@@ -2504,7 +2504,8 @@ Directory visibility is disabled; hidden profiles suppress both contact fields
 from future Directory projections. `directory_id` is returned only through
 this owner-facing Community profile projection and is separate from the
 private `asset_namespace_id` storage namespace. Directory list/read endpoints
-are D2 and are not implemented by this contract.
+are separate D2 member-facing read APIs described below; they do not expand
+this owner-facing contract.
 
 `skills` and `interests` use replacement semantics when supplied: values must
 be slugs for active canonical taxonomy definitions, `[]` intentionally clears
@@ -2513,6 +2514,78 @@ unchanged. Duplicate selections are rejected.
 
 The backend derives the `completion` object in the response from current
 canonical data. It is not persisted by the API.
+
+### Community Member Directory V1 — D2 read APIs
+
+The following endpoints are authenticated Community-member read APIs:
+
+- `GET /api/v1/community/directory/`
+- `GET /api/v1/community/directory/{directory_id}/`
+
+The viewer must be authenticated and eligible: their User must be linked to a
+non-archived `BUSINESS` Person with an `ACTIVE` Membership. Unauthenticated or
+ineligible viewers receive the existing Community authentication/eligibility
+response. There is no public, staff, or administrator bypass.
+
+Target profiles enter the queryset only when the target has an eligible active
+Community User, a non-archived `BUSINESS` Person, an `ACTIVE` Membership, a
+CommunityProfile, and `directory_visible=true`. Hidden, unknown, archived,
+non-BUSINESS, former-member, and otherwise ineligible direct lookups all return
+the same generic `404 Not Found` response.
+
+The list is paginated with a default page size of 25 and a maximum of 100. It
+uses deterministic case-insensitive `first_name`, `last_name`, and
+`directory_id` ordering. `page_size` may be supplied between 1 and 100.
+
+List search uses the trimmed, case-insensitive `q` parameter against canonical
+Person first and last names only. Search is limited to 100 characters; blank
+search behaves as no search. The supported filters are one active canonical
+taxonomy slug each: `industry`, `skill`, and `interest`. Filters combine with
+logical AND. Invalid or inactive taxonomy slugs return `400` validation errors.
+
+The compact list result contains only:
+
+```json
+{
+  "directory_id": "opaque-directory-uuid",
+  "photo_url": null,
+  "first_name": "Amina",
+  "last_name": "Zulu",
+  "location": "Milton Keynes",
+  "professional": {
+    "job_title": "Designer",
+    "company": "Elevate MK",
+    "industry": {"slug": "technology", "label": "Technology"}
+  },
+  "skills": [{"slug": "strategy", "label": "Strategy"}],
+  "interests": [{"slug": "networking", "label": "Networking"}]
+}
+```
+
+The direct profile result contains the same fields plus `bio`, the complete
+professional summary (`career_stage` and `linkedin_url` included), and:
+
+```json
+"contact": {"email": null, "mobile": "+447700900123"}
+```
+
+Contact values are projected from canonical Person fields only when the
+corresponding CommunityProfile preference is enabled. Whole-profile visibility
+is enforced first, and disabling it suppresses both contact values without
+clearing the stored independent preferences. Email/mobile are never included
+in list results.
+
+`photo_url` is generated at read time through Django's configured default
+storage and may be a temporary signed/private URL. Raw photo keys, bucket
+names, `asset_namespace_id`, internal database IDs, demographics, membership
+metadata, marketing data, tags, notes, audit/provider/account/invitation data,
+and security data are excluded. Reads do not create profiles, mutate domain
+records, enqueue Brevo work, write audit events, or modify S3 objects.
+
+Directory requests use the configurable `community_directory` DRF throttle
+scope, defaulting to `60/hour` via `COMMUNITY_DIRECTORY_THROTTLE_RATE`.
+Frontend D3 work remains pending; QR sharing, connections, and messaging are
+future scope.
 
 ### Profile photo
 

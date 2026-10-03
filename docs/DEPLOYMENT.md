@@ -174,6 +174,7 @@ follows:
 | `CRM_FRONTEND_URL` | `https://<crm-production-domain>` | `https://elevate-mk-crm-staging.up.railway.app` |
 | `COMMUNITY_FRONTEND_URL` | `https://community.elevatemk.org` | `http://localhost:4201` or the staging Community origin |
 | `COMMUNITY_PASSWORD_RESET_THROTTLE_RATE` | `5/hour` | `5/hour` |
+| `COMMUNITY_DIRECTORY_THROTTLE_RATE` | `60/hour` | `60/hour` |
 | `COMMUNITY_ACTIVATION_EXPIRY_HOURS` | `72` | `72` |
 | `COMMUNITY_ACTIVATION_THROTTLE_RATE` | `10/hour` | `10/hour` |
 | `COMMUNITY_LOGIN_THROTTLE_RATE` | `10/hour` | `10/hour` |

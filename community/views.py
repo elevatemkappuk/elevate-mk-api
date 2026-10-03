@@ -14,6 +14,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
+from django.shortcuts import get_object_or_404
 
 from memberships.models import Membership
 from interests.models import PersonInterest
@@ -44,6 +45,9 @@ from community.serializers import (
     CommunityProfileOptionsSerializer,
     CommunityIndustrySerializer,
     CommunityJoinSerializer,
+    CommunityDirectoryDetailSerializer,
+    CommunityDirectoryListSerializer,
+    CommunityDirectoryQuerySerializer,
 )
 from community.photo_serializers import CommunityProfilePhotoUploadSerializer
 from community.photos import ProfilePhotoValidationError
@@ -59,6 +63,13 @@ from community.services import (
     acknowledge_community_profile_review,
     upload_community_profile_photo,
     remove_community_profile_photo,
+)
+from community.directory import (
+    CommunityDirectoryPagination,
+    build_directory_projection,
+    community_directory_queryset,
+    directory_filter_queryset,
+    directory_search_queryset,
 )
 from notifications.exceptions import TransactionalEmailError
 from notifications.services import send_transactional_email
@@ -419,6 +430,7 @@ class CommunityProfileView(APIView):
         )
         return Response(CommunityProfileSerializer(projection).data, status=status.HTTP_200_OK)
 
+
     @extend_schema(
         operation_id="community_profile_update",
         summary="Update the authenticated member's Community profile",
@@ -437,6 +449,54 @@ class CommunityProfileView(APIView):
             return Response(error.message_dict if hasattr(error, "message_dict") else {"detail": error.messages}, status=status.HTTP_400_BAD_REQUEST)
         return Response(CommunityProfileSerializer(projection).data, status=status.HTTP_200_OK)
 
+
+class CommunityDirectoryListView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "community_directory"
+
+    @extend_schema(
+        operation_id="community_directory_list",
+        summary="List visible Community members",
+        responses={200: CommunityDirectoryListSerializer(many=True), 400: OpenApiResponse(description="Invalid directory query."), 403: OpenApiResponse(description="Community access is unavailable.")},
+        tags=["Community"],
+    )
+    def get(self, request):
+        if not is_community_eligible_user(request.user):
+            return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
+
+        query_serializer = CommunityDirectoryQuerySerializer(data=request.query_params)
+        query_serializer.is_valid(raise_exception=True)
+        values = query_serializer.validated_data
+        queryset = directory_search_queryset(community_directory_queryset(), values.get("q"))
+        queryset = directory_filter_queryset(
+            queryset,
+            industry=values.get("industry"),
+            skill=values.get("skill"),
+            interest=values.get("interest"),
+        )
+        paginator = CommunityDirectoryPagination()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+        data = [build_directory_projection(person) for person in page]
+        return paginator.get_paginated_response(CommunityDirectoryListSerializer(data, many=True).data)
+
+
+class CommunityDirectoryDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "community_directory"
+
+    @extend_schema(
+        operation_id="community_directory_detail",
+        summary="Read a visible Community member profile",
+        responses={200: CommunityDirectoryDetailSerializer, 403: OpenApiResponse(description="Community access is unavailable."), 404: OpenApiResponse(description="Directory profile not found.")},
+        tags=["Community"],
+    )
+    def get(self, request, directory_id):
+        if not is_community_eligible_user(request.user):
+            return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
+        person = get_object_or_404(community_directory_queryset(), community_profile__directory_id=directory_id)
+        return Response(CommunityDirectoryDetailSerializer(build_directory_projection(person, include_detail=True)).data)
 
 class CommunityProfileOptionsView(APIView):
     permission_classes = [IsAuthenticated]

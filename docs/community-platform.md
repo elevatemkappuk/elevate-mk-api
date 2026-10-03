@@ -483,7 +483,6 @@ relevant authenticated or account-creation flow.
 The following remain future scope and must not be inferred from the current
 Profile V1 implementation:
 
-- Directory and the future Directory Profile projection;
 - QR profile sharing;
 - connections and networking;
 - email/mobile self-service editing;
@@ -510,12 +509,27 @@ preferences are stored on CommunityProfile. Ordinary profile fields do not
 have independent visibility controls in D1.
 
 The D1 owner-facing My Profile contract returns and partially updates these
-three privacy settings. Directory list and Directory Profile read endpoints
-belong to D2 and are not implemented yet. Future Directory projections must
-exclude CRM/internal fields, demographics, marketing preferences, audit and
-import data, provider state, account/invitation internals, database IDs, raw
-S3 keys, and AWS metadata. QR sharing, connections, messaging, and social
-graph features remain future scope.
+three privacy settings. D2 now provides authenticated member-only Directory
+list and direct Profile read APIs. Their queryset is the privacy boundary:
+only visible profiles with an eligible active Community account, active
+Membership, non-archived BUSINESS Person, and CommunityProfile are eligible.
+Hidden or otherwise ineligible direct targets return generic 404 responses.
+
+D2 uses a compact paginated list projection and a richer direct Profile
+projection. Name search is bounded and case-insensitive; active Industry,
+Skill, and Interest slugs are supported as AND-combined filters. Email and
+mobile are omitted from lists and independently projected in direct results
+only when sharing is enabled. Profile photos are represented only by a
+read-time private/signed `photo_url`.
+
+Directory projections exclude CRM/internal fields, demographics, marketing
+preferences, audit and import data, provider state, account/invitation
+internals, database IDs, raw S3 keys, and AWS metadata. Directory reads are
+read-only and do not create profiles, enqueue Brevo jobs, write audits, or
+modify storage. The `community_directory` throttle defaults to `60/hour` and
+is configurable with `COMMUNITY_DIRECTORY_THROTTLE_RATE`. Frontend D3 remains
+pending; QR sharing, connections, messaging, and social graph features remain
+future scope.
 
 ### Profile Photo V1
 

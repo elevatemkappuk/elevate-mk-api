@@ -230,6 +230,7 @@ Purpose:
 - CommunityProfile is not a replacement for Person, Membership, User, or ProfessionalProfile data.
 - Directory and contact-sharing preferences are Community-owned settings. Canonical email and mobile remain on Person and are not copied.
 - All Directory and contact-sharing settings default to hidden/off; disabling Directory visibility does not clear the independent contact preferences.
+- D2 Directory reads enforce the eligible active Community account, active Membership, non-archived BUSINESS Person, CommunityProfile, and `directory_visible` conditions in the queryset before serialization. Directory DTOs never expose `asset_namespace_id` or internal database identifiers.
 
 ### Profile V1 composition and ownership
 

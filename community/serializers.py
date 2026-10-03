@@ -242,3 +242,71 @@ class CommunityProfileOptionsSerializer(serializers.Serializer):
     career_stages = CommunityProfileOptionSerializer(many=True)
     skills = CommunityProfileOptionSerializer(many=True)
     interests = CommunityProfileOptionSerializer(many=True)
+
+
+class CommunityDirectoryIndustrySerializer(serializers.Serializer):
+    slug = serializers.CharField()
+    label = serializers.CharField()
+
+
+class CommunityDirectoryProfessionalSerializer(serializers.Serializer):
+    job_title = serializers.CharField()
+    company = serializers.CharField()
+    industry = CommunityDirectoryIndustrySerializer(allow_null=True)
+    career_stage = serializers.CharField(allow_blank=True, allow_null=True)
+    linkedin_url = serializers.URLField(allow_blank=True)
+
+
+class CommunityDirectoryListProfessionalSerializer(serializers.Serializer):
+    job_title = serializers.CharField()
+    company = serializers.CharField()
+    industry = CommunityDirectoryIndustrySerializer(allow_null=True)
+
+
+class CommunityDirectoryTaxonomySerializer(serializers.Serializer):
+    slug = serializers.CharField()
+    label = serializers.CharField()
+
+
+class CommunityDirectoryListSerializer(serializers.Serializer):
+    directory_id = serializers.UUIDField()
+    photo_url = serializers.URLField(allow_null=True)
+    first_name = serializers.CharField()
+    last_name = serializers.CharField()
+    location = serializers.CharField()
+    professional = CommunityDirectoryListProfessionalSerializer()
+    skills = CommunityDirectoryTaxonomySerializer(many=True)
+    interests = CommunityDirectoryTaxonomySerializer(many=True)
+
+
+class CommunityDirectoryContactSerializer(serializers.Serializer):
+    email = serializers.EmailField(allow_null=True)
+    mobile = serializers.CharField(allow_null=True, allow_blank=True)
+
+
+class CommunityDirectoryDetailSerializer(CommunityDirectoryListSerializer):
+    professional = CommunityDirectoryProfessionalSerializer()
+    bio = serializers.CharField()
+    contact = CommunityDirectoryContactSerializer()
+
+
+class CommunityDirectoryQuerySerializer(serializers.Serializer):
+    q = serializers.CharField(required=False, allow_blank=True, max_length=100, trim_whitespace=True)
+    page_size = serializers.IntegerField(required=False, min_value=1, max_value=100)
+    industry = serializers.SlugField(required=False)
+    skill = serializers.SlugField(required=False)
+    interest = serializers.SlugField(required=False)
+
+    def _validate_active_slug(self, value, model, field):
+        if value and not model.objects.filter(slug=value, is_active=True).exists():
+            raise serializers.ValidationError("Select a valid active taxonomy value.")
+        return value
+
+    def validate_industry(self, value):
+        return self._validate_active_slug(value, Industry, "industry")
+
+    def validate_skill(self, value):
+        return self._validate_active_slug(value, Skill, "skill")
+
+    def validate_interest(self, value):
+        return self._validate_active_slug(value, Interest, "interest")
