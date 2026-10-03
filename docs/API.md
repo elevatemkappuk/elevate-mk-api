@@ -2497,11 +2497,14 @@ demographics, membership, marketing preferences, tags, notes, staff roles,
 account state, provider state, and review provenance are not writable through
 this endpoint. Unknown fields are rejected.
 
-Community privacy settings use partial-update semantics. They default to
-hidden/off: `directory_visible`, `email_visible`, and `mobile_visible` are all
-`false`. Contact-sharing settings remain independent and are not cleared when
-Directory visibility is disabled; hidden profiles suppress both contact fields
-from future Directory projections. `directory_id` is returned only through
+Community privacy settings use partial-update semantics. Eligible Community
+profiles are discoverable by default: `directory_visible` defaults to `true`.
+Members may opt out by setting it to `false`. Email and mobile remain private
+by default: `email_visible` and `mobile_visible` both default to `false` and
+are independent opt-ins. Contact-sharing settings remain independent and are
+not cleared when Directory visibility is disabled; hidden profiles suppress
+the whole profile and both contact fields from Directory projections.
+`directory_id` is returned only through
 this owner-facing Community profile projection and is separate from the
 private `asset_namespace_id` storage namespace. Directory list/read endpoints
 are separate D2 member-facing read APIs described below; they do not expand

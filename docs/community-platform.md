@@ -494,12 +494,13 @@ Profile V1 implementation:
 
 ### Directory V1 D1 privacy foundation
 
-Directory is an authenticated Community-member feature. Directory appearance
-is opt-in through `CommunityProfile.directory_visible`, which defaults to
-`False` for existing and new profiles. `email_visible` and `mobile_visible`
-are independent opt-in sharing preferences and also default to `False`.
-Disabling whole-profile visibility suppresses contact projection but does not
-clear those preferences, so they can resume if visibility is later enabled.
+Directory is an authenticated Community-member feature. Eligible Community
+profiles are discoverable by default through `CommunityProfile.directory_visible`.
+Members may opt out by setting it to `False`. `email_visible` and
+`mobile_visible` are independent opt-in sharing preferences and default to
+`False`. Disabling whole-profile visibility suppresses the entire Connect
+profile but does not clear those preferences, so they remain preserved if
+visibility is later enabled.
 
 `CommunityProfile.directory_id` is a stable random non-sequential identifier
 for future member-facing Directory routes and QR sharing. It is intentionally

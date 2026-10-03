@@ -211,7 +211,7 @@ Purpose:
 | `person` | `OneToOneField(people.Person)` | not null | none | Required Person; `PROTECT` on delete |
 | `asset_namespace_id` | `UUIDField` | not null | random UUID; unique; immutable | Stable non-PII storage namespace for Community profile-owned assets; not an authentication identifier |
 | `directory_id` | `UUIDField` | not null | random UUID; unique; immutable | Stable non-sequential member-facing Directory/QR route identifier; separate from asset storage ownership |
-| `directory_visible` | `BooleanField` | not null | `False` | Opt-in whole-profile Directory visibility |
+| `directory_visible` | `BooleanField` | not null | `True` | Whole-profile Directory visibility; eligible profiles are discoverable by default and members may opt out |
 | `email_visible` | `BooleanField` | not null | `False` | Independent opt-in for canonical Person email in future Directory projection |
 | `mobile_visible` | `BooleanField` | not null | `False` | Independent opt-in for canonical Person mobile in future Directory projection |
 | `bio` | `TextField(max_length=400)` | not null, blank allowed | empty string | Optional plain-text Community bio |
@@ -229,7 +229,7 @@ Purpose:
 - A new Community profile defaults to no review requirement.
 - CommunityProfile is not a replacement for Person, Membership, User, or ProfessionalProfile data.
 - Directory and contact-sharing preferences are Community-owned settings. Canonical email and mobile remain on Person and are not copied.
-- All Directory and contact-sharing settings default to hidden/off; disabling Directory visibility does not clear the independent contact preferences.
+- Eligible Community profiles are discoverable by default. Email and mobile sharing remain hidden by default and require independent opt-in. Disabling Directory visibility does not clear the independent contact preferences.
 - D2 Directory reads enforce the eligible active Community account, active Membership, non-archived BUSINESS Person, CommunityProfile, and `directory_visible` conditions in the queryset before serialization. Directory DTOs never expose `asset_namespace_id` or internal database identifiers.
 
 ### Profile V1 composition and ownership

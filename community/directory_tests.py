@@ -27,7 +27,7 @@ class CommunityDirectoryApiTests(TestCase):
         self.skill = Skill.objects.create(name="Strategy", slug="directory-strategy")
         self.interest = Interest.objects.create(name="Networking", slug="directory-networking")
 
-        self.viewer = self.create_member("Viewer", "Member", "viewer@example.com")
+        self.viewer = self.create_member("Viewer", "Member", "viewer@example.com", visible=False)
         self.client.force_authenticate(user=self.viewer)
         self.target = self.create_member("Ada", "Lovelace", "ada@example.com", visible=True)
         ProfessionalProfile.objects.create(
@@ -48,7 +48,7 @@ class CommunityDirectoryApiTests(TestCase):
         profile.person.save(update_fields=["mobile"])
         profile.save(update_fields=["bio", "email_visible", "mobile_visible"])
 
-    def create_member(self, first_name, last_name, email, *, visible=False, record_type=Person.RecordType.BUSINESS):
+    def create_member(self, first_name, last_name, email, *, visible=None, record_type=Person.RecordType.BUSINESS):
         person = Person.objects.create(
             first_name=first_name,
             last_name=last_name,
@@ -62,7 +62,8 @@ class CommunityDirectoryApiTests(TestCase):
             membership_source=Membership.Source.COMMUNITY_PLATFORM,
         )
         user = User.objects.create_user(email=email, password="Strong-password-123!", person=person)
-        CommunityProfile.objects.create(person=person, directory_visible=visible)
+        profile_kwargs = {} if visible is None else {"directory_visible": visible}
+        CommunityProfile.objects.create(person=person, **profile_kwargs)
         return user
 
     def test_authentication_and_eligibility_are_required(self):
@@ -98,6 +99,37 @@ class CommunityDirectoryApiTests(TestCase):
         self.assertLessEqual(len(queries), 6)
         self.assertEqual(CommunityProfile.objects.count(), before_profiles)
         self.assertEqual(AuditEvent.objects.count(), before_events)
+
+    def test_eligible_member_is_visible_by_default(self):
+        default_visible = self.create_member("Default", "Visible", "default-visible@example.com")
+
+        response = self.client.get(self.list_url, {"q": "Default"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["first_name"], "Default")
+        self.assertTrue(default_visible.person.community_profile.directory_visible)
+
+    def test_contact_fields_are_private_by_default_and_preserved_when_hidden(self):
+        default_visible = self.create_member("Private", "Contact", "private-contact@example.com")
+        profile = default_visible.person.community_profile
+        profile.person.mobile = "+447700900123"
+        profile.person.save(update_fields=["mobile"])
+
+        response = self.client.get(f"{self.list_url}{profile.directory_id}/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["contact"], {"email": None, "mobile": None})
+
+        profile.email_visible = True
+        profile.mobile_visible = True
+        profile.directory_visible = False
+        profile.save(update_fields=["email_visible", "mobile_visible", "directory_visible"])
+        self.assertEqual(self.client.get(f"{self.list_url}{profile.directory_id}/").status_code, 404)
+
+        profile.directory_visible = True
+        profile.save(update_fields=["directory_visible"])
+        response = self.client.get(f"{self.list_url}{profile.directory_id}/")
+        self.assertEqual(response.data["contact"], {"email": "private-contact@example.com", "mobile": "+447700900123"})
 
     def test_detail_projects_contact_independently_and_excludes_internal_data(self):
         directory_id = self.target.person.community_profile.directory_id

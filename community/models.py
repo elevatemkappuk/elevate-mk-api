@@ -41,7 +41,7 @@ class CommunityProfile(models.Model):
         unique=True,
         editable=False,
     )
-    directory_visible = models.BooleanField(default=False)
+    directory_visible = models.BooleanField(default=True)
     email_visible = models.BooleanField(default=False)
     mobile_visible = models.BooleanField(default=False)
     bio = models.TextField(

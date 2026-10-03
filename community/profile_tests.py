@@ -1,4 +1,5 @@
 from datetime import timedelta
+from importlib import import_module
 from unittest import mock
 
 from django.core.exceptions import ValidationError
@@ -21,6 +22,10 @@ from interests.models import Interest, PersonInterest
 from brevo_marketing.jobs import PERSON_PROFILE_SYNC
 from brevo_marketing.routing import BREVO_PROVIDER
 from external_references.models import ExternalPersonSyncJob
+
+promote_existing_profiles = import_module(
+    "community.migrations.0007_communityprofile_directory_visible_default",
+).promote_existing_profiles
 
 
 class CommunityProfileFoundationTests(TestCase):
@@ -56,9 +61,29 @@ class CommunityProfileFoundationTests(TestCase):
         self.assertFalse(profile.person_preexisted_community)
         self.assertIsNone(profile.review_acknowledged_at)
         self.assertFalse(profile.review_required)
-        self.assertFalse(profile.directory_visible)
+        self.assertTrue(profile.directory_visible)
         self.assertFalse(profile.email_visible)
         self.assertFalse(profile.mobile_visible)
+
+    def test_directory_visibility_migration_promotes_old_false_values_without_touching_contacts(self):
+        person = Person.objects.create(first_name="Legacy", last_name="Member")
+        profile = CommunityProfile.objects.create(
+            person=person,
+            directory_visible=False,
+            email_visible=True,
+            mobile_visible=True,
+        )
+
+        class Apps:
+            @staticmethod
+            def get_model(app_label, model_name):
+                return CommunityProfile
+
+        promote_existing_profiles(Apps(), None)
+        profile.refresh_from_db()
+        self.assertTrue(profile.directory_visible)
+        self.assertTrue(profile.email_visible)
+        self.assertTrue(profile.mobile_visible)
 
         second_profile = CommunityProfile.objects.create(
             person=Person.objects.create(first_name="Second", last_name="Member")
@@ -238,7 +263,7 @@ class CommunityProfileApiTests(TestCase):
             "review_required": False,
             "photo_url": None,
             "directory_id": str(CommunityProfile.objects.get(person=self.person).directory_id),
-            "directory_visible": False,
+            "directory_visible": True,
             "email_visible": False,
             "mobile_visible": False,
         })
@@ -277,7 +302,7 @@ class CommunityProfileApiTests(TestCase):
             "linkedin_url": "",
         })
         self.assertEqual(response.data["community"]["bio"], "")
-        self.assertFalse(response.data["community"]["directory_visible"])
+        self.assertTrue(response.data["community"]["directory_visible"])
         self.assertFalse(response.data["community"]["email_visible"])
         self.assertFalse(response.data["community"]["mobile_visible"])
         self.assertEqual(response.data["completion"], {
@@ -423,13 +448,13 @@ class CommunityProfileApiTests(TestCase):
 
         response = self.client.patch(
             self.profile_url,
-            {"community": {"directory_visible": True, "email_visible": True, "mobile_visible": True}},
+            {"community": {"directory_visible": False, "email_visible": True, "mobile_visible": True}},
             format="json",
         )
 
         self.assertEqual(response.status_code, 200)
         profile.refresh_from_db()
-        self.assertTrue(profile.directory_visible)
+        self.assertFalse(profile.directory_visible)
         self.assertTrue(profile.email_visible)
         self.assertTrue(profile.mobile_visible)
         self.assertEqual(response.data["community"]["directory_id"], str(profile.directory_id))
