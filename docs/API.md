@@ -2389,7 +2389,7 @@ Successful response: `200 OK`
   "community": {
     "bio": "Community builder",
     "review_required": false,
-    "photo_url": "https://storage.example/private/community/profile-photos/…"
+    "photo_url": "https://storage.example/private/community/profiles/<profile-uuid>/profile-photos/<photo-uuid>.jpg?..."
   },
   "professional": {
     "job_title": "Designer",
@@ -2513,8 +2513,12 @@ is limited to 1024 pixels without upscaling, and transparency is preserved
 where practical. The backend does not crop images to a square.
 
 The stored value is only an opaque generated object name under
-`community/profile-photos/`; it contains no user-derived name or original
-filename. The response's `photo_url` is generated at read time. Replacement
+`community/profiles/<profile-uuid>/profile-photos/<photo-uuid>.<ext>`; it
+contains no user-derived name or original filename. The profile UUID is a
+stable random non-PII storage namespace, not an authentication identifier,
+and the final asset name is independently random. Existing legacy references
+under `community/profile-photos/` remain readable. The response's `photo_url`
+is generated at read time. Replacement
 stores the new object and commits the new database reference before deleting
 the old object. Upload and removal are recorded through the existing
 `COMMUNITY_SELF_SERVICE` audit mechanism without image bytes, URLs, or

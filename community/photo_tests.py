@@ -15,7 +15,10 @@ from audit.models import AuditEvent
 from brevo_marketing.jobs import PERSON_PROFILE_SYNC
 from community.models import CommunityProfile
 from community.photos import (
+    COMMUNITY_PROFILE_ASSET_PREFIX,
+    PROFILE_PHOTO_ASSET_TYPE,
     PROFILE_PHOTO_MAX_PIXELS,
+    community_profile_asset_key,
     normalize_profile_photo,
 )
 from community.services import upload_community_profile_photo
@@ -107,15 +110,48 @@ class CommunityProfilePhotoTests(TestCase):
         response = self.post_photo(self.image_upload())
 
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.data["community"]["photo_url"].startswith("/media/community/profile-photos/"))
+        self.assertTrue(response.data["community"]["photo_url"].startswith(f"/media/{COMMUNITY_PROFILE_ASSET_PREFIX}"))
         profile = CommunityProfile.objects.get(person=self.person)
-        self.assertTrue(profile.photo.name.startswith("community/profile-photos/"))
+        self.assertTrue(profile.photo.name.startswith(f"{COMMUNITY_PROFILE_ASSET_PREFIX}{profile.asset_namespace_id}/{PROFILE_PHOTO_ASSET_TYPE}/"))
         self.assertNotIn("avatar", profile.photo.name)
         self.assertEqual(response.data["completion"], before["completion"])
         self.assertFalse(ExternalPersonSyncJob.objects.filter(person=self.person, job_type=PERSON_PROFILE_SYNC).exists())
         event = AuditEvent.objects.filter(entity_type="CommunityProfile", entity_id=str(CommunityProfile.objects.get(person=self.person).id)).first()
         self.assertEqual(event.action, AuditEvent.Action.PERSON_UPDATED)
         self.assertIn("photo_uploaded", event.changes)
+
+    def test_profile_asset_key_uses_stable_profile_namespace_and_random_asset_name(self):
+        profile = CommunityProfile.objects.create(person=self.person)
+        first = community_profile_asset_key(profile, PROFILE_PHOTO_ASSET_TYPE, "jpg")
+        second = community_profile_asset_key(profile, PROFILE_PHOTO_ASSET_TYPE, ".jpg")
+        prefix = f"{COMMUNITY_PROFILE_ASSET_PREFIX}{profile.asset_namespace_id}/{PROFILE_PHOTO_ASSET_TYPE}/"
+
+        self.assertTrue(first.startswith(prefix))
+        self.assertTrue(second.startswith(prefix))
+        self.assertNotEqual(first, second)
+        self.assertEqual(first.count("/"), 4)
+        self.assertNotIn(f"/{self.person.id}/", first)
+        self.assertNotIn(f"/{self.user.id}/", first)
+        for private_value in (self.person.first_name, self.person.last_name, self.person.primary_email, self.person.mobile):
+            if not private_value:
+                continue
+            self.assertNotIn(private_value.lower(), first.lower())
+
+        other_person = Person.objects.create(first_name="Other", last_name="Member")
+        other_profile = CommunityProfile.objects.create(person=other_person)
+        other = community_profile_asset_key(other_profile, PROFILE_PHOTO_ASSET_TYPE, "jpg")
+        self.assertNotEqual(first.split(f"/{PROFILE_PHOTO_ASSET_TYPE}/")[0], other.split(f"/{PROFILE_PHOTO_ASSET_TYPE}/")[0])
+
+    def test_existing_legacy_photo_reference_remains_readable(self):
+        profile = CommunityProfile.objects.create(person=self.person)
+        legacy_name = "community/profile-photos/legacy-photo.jpg"
+        TestMemoryStorage.files[legacy_name] = b"legacy"
+        profile.photo.name = legacy_name
+        profile.save(update_fields=["photo", "updated_at"])
+
+        self.assertTrue(profile.photo.storage.exists(legacy_name))
+        with profile.photo.storage.open(legacy_name, "rb") as stored_file:
+            self.assertEqual(stored_file.read(), b"legacy")
 
     def test_uploads_png_and_preserves_transparency(self):
         response = self.post_photo(self.image_upload("PNG", filename="avatar.png", transparent=True))

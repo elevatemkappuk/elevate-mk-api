@@ -31,6 +31,11 @@ class CommunityProfile(models.Model):
         on_delete=models.PROTECT,
         related_name="community_profile",
     )
+    asset_namespace_id = models.UUIDField(
+        default=uuid.uuid4,
+        unique=True,
+        editable=False,
+    )
     bio = models.TextField(
         blank=True,
         max_length=400,

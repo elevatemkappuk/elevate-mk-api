@@ -1,4 +1,5 @@
 import io
+import re
 import uuid
 import warnings
 from dataclasses import dataclass
@@ -6,7 +7,8 @@ from dataclasses import dataclass
 from PIL import Image, ImageOps
 
 
-PROFILE_PHOTO_PREFIX = "community/profile-photos/"
+COMMUNITY_PROFILE_ASSET_PREFIX = "community/profiles/"
+PROFILE_PHOTO_ASSET_TYPE = "profile-photos"
 PROFILE_PHOTO_MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 PROFILE_PHOTO_MAX_PIXELS = 25_000_000
 PROFILE_PHOTO_MAX_EDGE = 1024
@@ -23,9 +25,22 @@ class NormalizedProfilePhoto:
     content: bytes
 
 
+def community_profile_asset_key(profile, asset_type, extension):
+    """Build a random key in the stable namespace owned by a CommunityProfile."""
+    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", asset_type):
+        raise ValueError("Community profile asset type must be lowercase kebab-case.")
+    extension = extension.lstrip(".").lower()
+    if not re.fullmatch(r"[a-z0-9]+", extension):
+        raise ValueError("Community profile asset extension is invalid.")
+    return (
+        f"{COMMUNITY_PROFILE_ASSET_PREFIX}{profile.asset_namespace_id}/"
+        f"{asset_type}/{uuid.uuid4().hex}.{extension}"
+    )
+
+
 def community_profile_photo_upload_to(instance, filename):
     extension = ".png" if filename.lower().endswith(".png") else ".jpg"
-    return f"{PROFILE_PHOTO_PREFIX}{uuid.uuid4().hex}{extension}"
+    return community_profile_asset_key(instance, PROFILE_PHOTO_ASSET_TYPE, extension)
 
 
 def normalize_profile_photo(uploaded_file):

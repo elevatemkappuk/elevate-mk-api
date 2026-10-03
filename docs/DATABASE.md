@@ -209,8 +209,9 @@ Purpose:
 | --- | --- | --- | --- | --- |
 | `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
 | `person` | `OneToOneField(people.Person)` | not null | none | Required Person; `PROTECT` on delete |
+| `asset_namespace_id` | `UUIDField` | not null | random UUID; unique; immutable | Stable non-PII storage namespace for Community profile-owned assets; not an authentication identifier |
 | `bio` | `TextField(max_length=400)` | not null, blank allowed | empty string | Optional plain-text Community bio |
-| `photo` | `ImageField` | null, blank allowed | none | Opaque generated reference to the normalized private profile-photo object under `community/profile-photos/` |
+| `photo` | `ImageField` | null, blank allowed | none | Opaque generated reference to the normalized private profile-photo object under the profile-owned asset namespace |
 | `person_preexisted_community` | `BooleanField` | not null | `False` | Immutable provenance flag; not editable by users |
 | `review_acknowledged_at` | `DateTimeField` | null, blank | none | Set when required review is acknowledged |
 | `created_at` | `DateTimeField` | not null | `auto_now_add=True` | Set automatically on create |

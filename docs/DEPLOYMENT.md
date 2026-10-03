@@ -73,8 +73,11 @@ Admin CSS, JavaScript, and theme icons.
 
 The API supports an explicit AWS S3-backed default storage for durable
 application objects. Individual features choose their own object prefixes;
-Community Profile Photo V1 uses `community/profile-photos/` for normalized
-private photo objects.
+Community profile-owned assets use the convention
+`community/profiles/<profile-uuid>/<asset-type>/<asset>`. Profile Photo V1
+uses `community/profiles/<profile-uuid>/profile-photos/<photo-uuid>.<ext>` for
+normalized private photo objects; the profile UUID is a stable random,
+non-PII storage namespace and the final asset name is independently random.
 
 Local development remains filesystem-backed and does not require AWS
 credentials. Deployed S3 mode is enabled only when `USE_S3_STORAGE=True`.

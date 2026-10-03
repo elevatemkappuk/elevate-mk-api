@@ -504,12 +504,17 @@ or PNG objects with a maximum 1024-pixel longest edge and rejects animated,
 malformed, unsupported, oversized, and over-25-megapixel images. It preserves
 transparency where practical and does not crop to a square.
 
-Only an opaque generated storage object name under
-`community/profile-photos/` is persisted. `photo_url` is generated at read
-time through the configured default storage, so private S3 deployments receive
-temporary signed URLs rather than a persisted URL. Replacement commits the new
-reference before old-object deletion; failed database writes attempt to remove
-the new object. Upload, replacement, and removal use the existing
+Only an opaque generated storage object name under the Community profile-owned
+asset convention is persisted:
+`community/profiles/<profile-uuid>/<asset-type>/<asset>`. Profile Photo uses
+`community/profiles/<profile-uuid>/profile-photos/<photo-uuid>.<ext>`, where the
+profile UUID is a stable random non-PII storage namespace and the final asset
+name remains independently random. It is not an authentication identifier.
+`photo_url` is generated at read time through the configured default storage,
+so private S3 deployments receive temporary signed URLs rather than a
+persisted URL. Replacement commits the new reference before old-object deletion;
+failed database writes attempt to remove the new object. Upload, replacement,
+and removal use the existing
 `COMMUNITY_SELF_SERVICE` audit path without storing image bytes, URLs,
 credentials, or original filenames. Profile Photo does not change completion,
 identity, membership, consent, Brevo, or Directory behavior.
