@@ -2575,8 +2575,12 @@ professional summary (`career_stage` and `linkedin_url` included), and:
 Contact values are projected from canonical Person fields only when the
 corresponding CommunityProfile preference is enabled. Whole-profile visibility
 is enforced first, and disabling it suppresses both contact values without
-clearing the stored independent preferences. Email/mobile are never included
-in list results.
+clearing the stored independent preferences. Once an accepted Community
+connection exists, both participants receive each other's canonical email and
+mobile values where present, regardless of these non-connected visibility
+preferences. Pending, declined, and disconnected relationships do not grant
+connection-derived contact access. Email/mobile are never included in list
+results.
 
 `photo_url` is generated at read time through Django's configured default
 storage and may be a temporary signed/private URL. Raw photo keys, bucket
@@ -2587,8 +2591,98 @@ records, enqueue Brevo work, write audit events, or modify S3 objects.
 
 Directory requests use the configurable `community_directory` DRF throttle
 scope, defaulting to `60/hour` via `COMMUNITY_DIRECTORY_THROTTLE_RATE`.
-Community Connect V1 provides the authenticated discovery and member-profile
-frontend; QR sharing, connections, and messaging remain future scope.
+
+### Community Connections V1 — C2 backend APIs
+
+Connections are mutual Person-to-Person relationships. They are not a
+follower/following system and do not copy contact data into a relationship
+record. The relationship stores one canonical unordered Person pair, with the
+lower Person database key in `person_low` and the higher key in `person_high`.
+Clients use the opaque `public_id` UUID for relationship mutations; internal
+Person, User, Membership, CommunityProfile, and connection database IDs are
+not exposed.
+
+The relationship states are:
+
+- `PENDING` — the recipient has not decided;
+- `ACCEPTED` — both members are connected;
+- `DECLINED` — the request was declined;
+- `DISCONNECTED` — an accepted relationship was removed.
+
+Declined and disconnected pairs remain as historical rows and may be reopened
+by a later valid request without creating a second pair row. A crossed request
+does not auto-accept: the existing pending request remains available for the
+recipient's explicit decision.
+
+Available endpoints:
+
+```text
+GET    /api/v1/community/connections/
+GET    /api/v1/community/connections/requests/?direction=incoming
+GET    /api/v1/community/connections/requests/?direction=outgoing
+POST   /api/v1/community/connections/requests/
+POST   /api/v1/community/connections/{public_id}/accept/
+POST   /api/v1/community/connections/{public_id}/decline/
+DELETE /api/v1/community/connections/{public_id}/
+```
+
+Request creation accepts only a discoverable target `directory_id`:
+
+```json
+{"directory_id": "opaque-directory-uuid"}
+```
+
+All endpoints require an authenticated, currently eligible Community member.
+Eligibility requires an active User linked to a non-archived BUSINESS Person
+with an ACTIVE Membership. Both participants must remain currently eligible for
+connection access, contact access, lists, and mutations. A self-request is not
+allowed. New requests to hidden or otherwise unavailable targets return a
+generic `404` and do not reveal target existence.
+
+Connection and request list DTOs contain only a safe compact member projection
+and a public `connection_id`; they contain no contact details or internal
+identifiers. The detail Directory response additionally contains:
+
+```json
+"relationship": {
+  "state": "NO_RELATIONSHIP",
+  "connection_id": null,
+  "can_connect": true,
+  "can_accept": false,
+  "can_decline": false,
+  "can_remove": false
+}
+```
+
+The state is backend-derived and may be `NO_RELATIONSHIP`,
+`OUTGOING_PENDING`, `INCOMING_PENDING`, or `CONNECTED`. Relationship state is
+not added to Directory list results.
+
+General Directory lists remain strictly limited to `directory_visible=true`.
+For detail reads only, an accepted connection can access a currently eligible
+member whose profile is hidden. Pending, declined, disconnected, and unrelated
+viewers receive the same generic `404` response.
+
+Contact detail authorization is backend-controlled. A target's email/mobile
+visibility preference applies to non-connected viewers. An accepted,
+currently effective connection grants both participants access to each other's
+canonical Person email and mobile where present, even when those preferences
+are false. Disconnecting or losing current Community eligibility removes that
+effective access immediately. Contact values are never copied to the
+connection model.
+
+Connection mutations use the existing scoped throttle architecture:
+
+| Scope | Default |
+| --- | --- |
+| `community_connections` | `60/hour` |
+| `community_connection_requests` | `60/hour` |
+| `community_connection_create` | `10/hour` |
+| `community_connection_mutations` | `30/hour` |
+
+Each rate is configurable through the corresponding
+`COMMUNITY_CONNECTION_*_THROTTLE_RATE` environment setting. Connection reads
+and mutations do not call AWS or Brevo.
 
 ### Profile photo
 

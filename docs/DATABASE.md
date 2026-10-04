@@ -264,6 +264,47 @@ not writable through Profile V1. Profile writes and their append-only
 name changes also create the existing coalesced asynchronous `PERSON_PROFILE`
 sync job; the job stores no profile snapshot.
 
+## Model: `community.CommunityConnection`
+
+`CommunityConnection` stores one mutual Community relationship between two
+canonical `people.Person` records. It is not owned by `User`, does not copy
+contact data, and does not represent a follower/following relationship.
+
+### Fields
+
+| Field | Type | Null/blank | Default | Meaning |
+| --- | --- | --- | --- | --- |
+| `public_id` | `UUIDField` | not null | random UUID; unique; immutable | Client-facing relationship identifier |
+| `person_low` | `ForeignKey(Person)` | not null | — | Lower Person key in the canonical unordered pair |
+| `person_high` | `ForeignKey(Person)` | not null | — | Higher Person key in the canonical unordered pair |
+| `requester` | `ForeignKey(Person)` | not null | — | Person who made the current request; recipient is derived as the other pair member |
+| `status` | `CharField` | not null | — | `PENDING`, `ACCEPTED`, `DECLINED`, or `DISCONNECTED` |
+| `requested_at` | `DateTimeField` | not null | current time | Current request timestamp |
+| `accepted_at` | `DateTimeField` | nullable | null | Acceptance timestamp |
+| `declined_at` | `DateTimeField` | nullable | null | Decline timestamp |
+| `disconnected_at` | `DateTimeField` | nullable | null | Removal timestamp |
+| `created_at` | `DateTimeField` | not null | automatic | Row creation time |
+| `updated_at` | `DateTimeField` | not null | automatic | Last state update time |
+
+### Constraints and behavior
+
+- `(person_low, person_high)` is unique, so A-B and B-A cannot become separate rows.
+- Database checks prevent self-pairs and non-canonical ordering.
+- A database check requires `requester` to be one of the two pair participants.
+- Person foreign keys use `PROTECT`.
+- Indexes support participant/status and requester/status request queries.
+- `recipient` is derived from the pair and persisted `requester`; it is not a second stored relationship field.
+- Declined and disconnected rows remain for provenance and audit continuity. A later request reopens the existing pair row.
+- Current effective access requires both participants to remain eligible Community members.
+- Contact values, directory IDs, profile data, User IDs, Membership IDs, provider data, and audit payloads are not stored on this model.
+
+### Concurrency
+
+Connection mutations run in a transaction, lock both Person rows in ascending
+primary-key order, then lock the pair row before applying a transition. The
+database uniqueness constraint remains the final protection against concurrent
+pair creation.
+
 Django-managed framework tables also exist because this project uses Django authentication, permissions, content types, admin, and server-side sessions. Those framework tables are not documented field-by-field here.
 
 ## Identity Relationship

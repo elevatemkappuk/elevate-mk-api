@@ -284,10 +284,51 @@ class CommunityDirectoryContactSerializer(serializers.Serializer):
     mobile = serializers.CharField(allow_null=True, allow_blank=True)
 
 
+class CommunityConnectionRelationshipSerializer(serializers.Serializer):
+    state = serializers.ChoiceField(
+        choices=(
+            "NO_RELATIONSHIP",
+            "OUTGOING_PENDING",
+            "INCOMING_PENDING",
+            "CONNECTED",
+        )
+    )
+    connection_id = serializers.UUIDField(allow_null=True)
+    can_connect = serializers.BooleanField()
+    can_accept = serializers.BooleanField()
+    can_decline = serializers.BooleanField()
+    can_remove = serializers.BooleanField()
+
+
 class CommunityDirectoryDetailSerializer(CommunityDirectoryListSerializer):
     professional = CommunityDirectoryProfessionalSerializer()
     bio = serializers.CharField()
     contact = CommunityDirectoryContactSerializer()
+    relationship = CommunityConnectionRelationshipSerializer()
+
+
+class CommunityConnectionMemberSerializer(CommunityDirectoryListSerializer):
+    pass
+
+
+class CommunityConnectionSerializer(serializers.Serializer):
+    connection_id = serializers.UUIDField()
+    member = CommunityConnectionMemberSerializer()
+
+
+class CommunityConnectionRequestSerializer(serializers.Serializer):
+    connection_id = serializers.UUIDField()
+    state = serializers.ChoiceField(choices=("OUTGOING_PENDING", "INCOMING_PENDING"))
+    requested_at = serializers.DateTimeField()
+    member = CommunityConnectionMemberSerializer()
+
+
+class CommunityConnectionRequestCreateSerializer(serializers.Serializer):
+    directory_id = serializers.UUIDField()
+
+
+class CommunityConnectionRequestQuerySerializer(serializers.Serializer):
+    direction = serializers.ChoiceField(choices=("incoming", "outgoing"))
 
 
 class CommunityDirectoryQuerySerializer(serializers.Serializer):

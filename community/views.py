@@ -15,6 +15,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
+from django.http import Http404
 
 from memberships.models import Membership
 from interests.models import PersonInterest
@@ -48,6 +49,11 @@ from community.serializers import (
     CommunityDirectoryDetailSerializer,
     CommunityDirectoryListSerializer,
     CommunityDirectoryQuerySerializer,
+    CommunityConnectionRelationshipSerializer,
+    CommunityConnectionSerializer,
+    CommunityConnectionRequestSerializer,
+    CommunityConnectionRequestCreateSerializer,
+    CommunityConnectionRequestQuerySerializer,
 )
 from community.photo_serializers import CommunityProfilePhotoUploadSerializer
 from community.photos import ProfilePhotoValidationError
@@ -71,6 +77,19 @@ from community.directory import (
     directory_filter_queryset,
     directory_search_queryset,
 )
+from community.connections import (
+    CommunityConnectionError,
+    CommunityConnectionPagination,
+    build_connection_detail_projection,
+    build_connection_projection,
+    connection_aware_directory_person,
+    list_connection_requests,
+    list_connections,
+    member_for_connection,
+    send_connection_request,
+    _mutate_connection,
+)
+from community.models import CommunityConnection
 from notifications.exceptions import TransactionalEmailError
 from notifications.services import send_transactional_email
 
@@ -488,15 +507,159 @@ class CommunityDirectoryDetailView(APIView):
 
     @extend_schema(
         operation_id="community_directory_detail",
-        summary="Read a visible Community member profile",
+        summary="Read an available Community member profile",
         responses={200: CommunityDirectoryDetailSerializer, 403: OpenApiResponse(description="Community access is unavailable."), 404: OpenApiResponse(description="Directory profile not found.")},
         tags=["Community"],
     )
     def get(self, request, directory_id):
         if not is_community_eligible_user(request.user):
             return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
-        person = get_object_or_404(community_directory_queryset(), community_profile__directory_id=directory_id)
-        return Response(CommunityDirectoryDetailSerializer(build_directory_projection(person, include_detail=True)).data)
+        person = connection_aware_directory_person(
+            viewer_person_id=request.user.person_id,
+            directory_id=directory_id,
+        )
+        if person is None:
+            raise Http404
+        return Response(
+            CommunityDirectoryDetailSerializer(
+                build_connection_detail_projection(
+                    viewer_person_id=request.user.person_id,
+                    person=person,
+                )
+            ).data
+        )
+
+
+class CommunityConnectionListView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "community_connections"
+
+    @extend_schema(
+        operation_id="community_connections_list",
+        summary="List established Community connections",
+        responses={200: CommunityConnectionSerializer(many=True), 403: OpenApiResponse(description="Community access is unavailable.")},
+        tags=["Community"],
+    )
+    def get(self, request):
+        if not is_community_eligible_user(request.user):
+            return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
+        actor_person_id, queryset = list_connections(request=request, status=CommunityConnection.Status.ACCEPTED)
+        paginator = CommunityConnectionPagination()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+        serialized = [
+            {
+                "connection_id": connection.public_id,
+                "member": build_connection_projection(member_for_connection(connection, actor_person_id)),
+            }
+            for connection in page
+        ]
+        return paginator.get_paginated_response(CommunityConnectionSerializer(serialized, many=True).data)
+
+
+class CommunityConnectionRequestListView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "community_connection_requests"
+
+    @extend_schema(
+        operation_id="community_connection_requests_list",
+        summary="List incoming or outgoing Community connection requests",
+        parameters=[CommunityConnectionRequestQuerySerializer],
+        responses={200: CommunityConnectionRequestSerializer(many=True), 400: OpenApiResponse(description="Invalid request direction."), 403: OpenApiResponse(description="Community access is unavailable.")},
+        tags=["Community"],
+    )
+    def get(self, request):
+        if not is_community_eligible_user(request.user):
+            return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
+        query_serializer = CommunityConnectionRequestQuerySerializer(data=request.query_params)
+        query_serializer.is_valid(raise_exception=True)
+        direction = query_serializer.validated_data["direction"]
+        actor_person_id, queryset = list_connection_requests(request=request, direction=direction)
+        paginator = CommunityConnectionPagination()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+        serialized = []
+        for connection in page:
+            member = member_for_connection(connection, actor_person_id)
+            state = "INCOMING_PENDING" if direction == "incoming" else "OUTGOING_PENDING"
+            serialized.append({
+                "connection_id": connection.public_id,
+                "state": state,
+                "requested_at": connection.requested_at,
+                "member": build_connection_projection(member),
+            })
+        return paginator.get_paginated_response(CommunityConnectionRequestSerializer(serialized, many=True).data)
+
+    def post(self, request):
+        return CommunityConnectionRequestCreateView().post(request)
+
+
+class CommunityConnectionRequestCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "community_connection_create"
+
+    @extend_schema(
+        operation_id="community_connection_request_create",
+        summary="Send a Community connection request",
+        request=CommunityConnectionRequestCreateSerializer,
+        responses={200: CommunityConnectionSerializer, 201: CommunityConnectionSerializer, 400: OpenApiResponse(description="Invalid connection request."), 403: OpenApiResponse(description="Community access is unavailable."), 404: OpenApiResponse(description="Member unavailable."), 409: OpenApiResponse(description="Connection state conflict.")},
+        tags=["Community"],
+    )
+    def post(self, request):
+        if not is_community_eligible_user(request.user):
+            return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
+        serializer = CommunityConnectionRequestCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            connection = send_connection_request(
+                request=request,
+                directory_id=serializer.validated_data["directory_id"],
+            )
+            member = member_for_connection(connection, request.user.person_id)
+        except CommunityConnectionError as error:
+            return Response({"code": error.code, "detail": error.detail}, status=error.status_code)
+        payload = {
+            "connection_id": connection.public_id,
+            "member": build_connection_projection(member),
+        }
+        return Response(CommunityConnectionSerializer(payload).data, status=status.HTTP_200_OK)
+
+
+class CommunityConnectionActionView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "community_connection_mutations"
+
+    @extend_schema(
+        operation_id="community_connection_action",
+        summary="Accept, decline, or remove a Community connection",
+        responses={200: CommunityConnectionSerializer, 204: None, 403: OpenApiResponse(description="Community access is unavailable."), 404: OpenApiResponse(description="Connection unavailable."), 409: OpenApiResponse(description="Connection state conflict.")},
+        tags=["Community"],
+    )
+    def post(self, request, public_id, action):
+        if action not in {"accept", "decline"}:
+            return Response({"detail": "Unsupported connection action."}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
+        return self._mutate(request, public_id, action, remove=False)
+
+    def delete(self, request, public_id):
+        return self._mutate(request, public_id, "remove", remove=True)
+
+    def _mutate(self, request, public_id, action, *, remove):
+        if not is_community_eligible_user(request.user):
+            return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
+        try:
+            connection = _mutate_connection(request=request, public_id=public_id, action=action)
+            if remove:
+                return Response(status=status.HTTP_204_NO_CONTENT)
+            member = member_for_connection(connection, request.user.person_id)
+        except CommunityConnectionError as error:
+            return Response({"code": error.code, "detail": error.detail}, status=error.status_code)
+        payload = {
+            "connection_id": connection.public_id,
+            "member": build_connection_projection(member),
+        }
+        return Response(CommunityConnectionSerializer(payload).data, status=status.HTTP_200_OK)
 
 class CommunityProfileOptionsView(APIView):
     permission_classes = [IsAuthenticated]

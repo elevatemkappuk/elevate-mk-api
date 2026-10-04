@@ -68,6 +68,77 @@ class CommunityProfile(models.Model):
         return f"Community profile for {self.person}"
 
 
+class CommunityConnection(models.Model):
+    """A mutual Community relationship between one unordered Person pair."""
+
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        ACCEPTED = "ACCEPTED", "Accepted"
+        DECLINED = "DECLINED", "Declined"
+        DISCONNECTED = "DISCONNECTED", "Disconnected"
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    person_low = models.ForeignKey(
+        Person,
+        on_delete=models.PROTECT,
+        related_name="community_connections_low",
+    )
+    person_high = models.ForeignKey(
+        Person,
+        on_delete=models.PROTECT,
+        related_name="community_connections_high",
+    )
+    requester = models.ForeignKey(
+        Person,
+        on_delete=models.PROTECT,
+        related_name="community_connection_requests",
+    )
+    status = models.CharField(max_length=20, choices=Status.choices)
+    requested_at = models.DateTimeField(default=timezone.now)
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    declined_at = models.DateTimeField(null=True, blank=True)
+    disconnected_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["person_low", "person_high"],
+                name="community_connection_pair_unique",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(person_low__lt=models.F("person_high")),
+                name="community_connection_pair_canonical",
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(person_low=models.F("person_high")),
+                name="community_connection_no_self_pair",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(requester=models.F("person_low"))
+                    | models.Q(requester=models.F("person_high"))
+                ),
+                name="community_connection_requester_in_pair",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["person_low", "status"], name="community_conn_low_status_idx"),
+            models.Index(fields=["person_high", "status"], name="community_conn_high_status_idx"),
+            models.Index(fields=["requester", "status"], name="community_conn_req_status_idx"),
+        ]
+
+    @property
+    def recipient(self):
+        """Return the participant other than the persisted requester."""
+        return self.person_high if self.requester_id == self.person_low_id else self.person_low
+
+    def __str__(self):
+        return f"Community connection {self.public_id} ({self.status})"
+
+
 class CommunityAccountInvitation(models.Model):
     """Single Community account-activation lifecycle for one Person."""
 

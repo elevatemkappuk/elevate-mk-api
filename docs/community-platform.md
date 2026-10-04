@@ -530,8 +530,41 @@ read-only and do not create profiles, enqueue Brevo jobs, write audits, or
 modify storage. The `community_directory` throttle defaults to `60/hour` and
 is configurable with `COMMUNITY_DIRECTORY_THROTTLE_RATE`. Community Connect V1
 now provides the authenticated discovery and member-profile frontend for these
-read APIs; QR sharing, connections, messaging, and social graph features remain
-future scope.
+read APIs. Connections V1 backend foundations now provide mutual connection
+requests, acceptance/decline, disconnection, and backend-authoritative
+relationship/contact rules. QR sharing, messaging, recommendations, and social
+graph features remain future scope.
+
+### Connections V1 — C2 backend foundation
+
+Community connections are mutual Person-to-Person relationships. A request is
+sent to a currently discoverable eligible member and must be explicitly
+accepted or declined. Accepted connections are equal in both directions.
+
+The backend stores one canonical unordered Person pair and never copies email,
+mobile, names, directory identifiers, or profile data into the relationship.
+The recipient is derived as the pair member other than the persisted requester.
+The states are `PENDING`, `ACCEPTED`, `DECLINED`, and `DISCONNECTED`.
+Declined/disconnected pairs remain historical rows and may be reopened by a
+later valid request.
+
+General Connect discovery remains limited to profiles with
+`directory_visible=True`. An accepted connection may still access a currently
+eligible member's hidden Connect detail profile. This exception does not
+change general search/list behavior and does not apply to pending, declined,
+disconnected, or unrelated members.
+
+Accepted connections receive mutual access to each other's canonical email and
+mobile values where present, regardless of `email_visible` and
+`mobile_visible`. Those flags continue to control non-connected viewers.
+Contact access is calculated by the backend and disappears when the
+connection is removed or either participant loses current Community
+eligibility.
+
+The C2 API uses scoped throttles for connection reads, request reads, request
+creation, and relationship mutations. It does not add messaging, notifications,
+followers, recommendations, blocking, QR sharing, counts, or CRM-created
+relationships.
 
 ### Profile Photo V1
 

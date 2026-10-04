@@ -1,6 +1,6 @@
 from django.urls import path
 
-from community.views import CommunityActivationView, CommunityDirectoryDetailView, CommunityDirectoryListView, CommunityIndustryListView, CommunityJoinView, CommunityLoginView, CommunityMeView, CommunityPasswordResetConfirmView, CommunityPasswordResetRequestView, CommunityProfileView, CommunityProfileOptionsView, CommunityProfilePhotoView, CommunityProfileReviewAcknowledgementView
+from community.views import CommunityActivationView, CommunityConnectionActionView, CommunityConnectionListView, CommunityConnectionRequestListView, CommunityDirectoryDetailView, CommunityDirectoryListView, CommunityIndustryListView, CommunityJoinView, CommunityLoginView, CommunityMeView, CommunityPasswordResetConfirmView, CommunityPasswordResetRequestView, CommunityProfileView, CommunityProfileOptionsView, CommunityProfilePhotoView, CommunityProfileReviewAcknowledgementView
 
 
 urlpatterns = [
@@ -17,4 +17,9 @@ urlpatterns = [
     path("community/profile/review-acknowledgement/", CommunityProfileReviewAcknowledgementView.as_view(), name="community-profile-review-acknowledgement"),
     path("community/directory/", CommunityDirectoryListView.as_view(), name="community-directory-list"),
     path("community/directory/<uuid:directory_id>/", CommunityDirectoryDetailView.as_view(), name="community-directory-detail"),
+    path("community/connections/", CommunityConnectionListView.as_view(), name="community-connections-list"),
+    path("community/connections/requests/", CommunityConnectionRequestListView.as_view(), name="community-connection-requests"),
+    path("community/connections/<uuid:public_id>/accept/", CommunityConnectionActionView.as_view(), {"action": "accept"}, name="community-connection-accept"),
+    path("community/connections/<uuid:public_id>/decline/", CommunityConnectionActionView.as_view(), {"action": "decline"}, name="community-connection-decline"),
+    path("community/connections/<uuid:public_id>/", CommunityConnectionActionView.as_view(), name="community-connection-remove"),
 ]
