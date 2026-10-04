@@ -160,6 +160,32 @@ class CommunityConnectionApiTests(TestCase):
         self.assertEqual(response.data["relationship"]["state"], "CONNECTED")
         self.assertEqual(response.data["contact"], {"email": "ben@example.com", "mobile": self.target.person.mobile})
 
+    def test_public_contact_flags_are_independent_and_connection_only_contact_is_removed(self):
+        profile = self.target.person.community_profile
+        profile.email_visible = True
+        profile.mobile_visible = False
+        profile.save(update_fields=["email_visible", "mobile_visible"])
+        detail_url = f"/api/v1/community/directory/{self.target_directory_url()}/"
+
+        public_contact = self.client.get(detail_url)
+        self.assertEqual(public_contact.status_code, 200)
+        self.assertEqual(public_contact.data["contact"], {"email": "ben@example.com", "mobile": None})
+
+        profile.email_visible = False
+        profile.mobile_visible = False
+        profile.save(update_fields=["email_visible", "mobile_visible"])
+        request_response = self.send_request()
+        connection_id = request_response.data["connection_id"]
+        self.client.force_authenticate(user=self.target)
+        self.assertEqual(self.client.post(f"{self.connections_url}{connection_id}/accept/").status_code, 200)
+
+        self.client.force_authenticate(user=self.viewer)
+        connected = self.client.get(detail_url)
+        self.assertEqual(connected.data["contact"], {"email": "ben@example.com", "mobile": self.target.person.mobile})
+        self.assertEqual(self.client.delete(f"{self.connections_url}{connection_id}/").status_code, 204)
+        disconnected = self.client.get(detail_url)
+        self.assertEqual(disconnected.data["contact"], {"email": None, "mobile": None})
+
     def test_hidden_accepted_profile_is_available_only_to_connection(self):
         request_response = self.send_request()
         connection_id = request_response.data["connection_id"]

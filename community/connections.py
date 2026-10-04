@@ -220,11 +220,11 @@ def build_connection_projection(person, *, include_state_for=None):
 def build_connection_detail_projection(*, viewer_person_id, person):
     projection = build_directory_projection(person, include_detail=True)
     connected = currently_connected(viewer_person_id, person.pk)
-    if connected:
-        projection["contact"] = {
-            "email": person.primary_email,
-            "mobile": person.mobile,
-        }
+    profile = person.community_profile
+    projection["contact"] = {
+        "email": person.primary_email if profile.email_visible or connected else None,
+        "mobile": person.mobile if profile.mobile_visible or connected else None,
+    }
     projection["relationship"] = connection_relationship_projection(
         viewer_person_id=viewer_person_id,
         target_person_id=person.pk,
@@ -384,6 +384,42 @@ def member_for_connection(connection, viewer_person_id):
     if target is None:
         raise CommunityConnectionNotFound()
     return target
+
+
+def members_for_connections(connections, viewer_person_id):
+    """Load the visible counterpart profiles for a paginated connection page."""
+    target_ids = {
+        connection.person_high_id if connection.person_low_id == viewer_person_id else connection.person_low_id
+        for connection in connections
+    }
+    if viewer_person_id in target_ids:
+        raise CommunityConnectionNotFound()
+    targets = (
+        _eligible_person_queryset(require_community_profile=True)
+        .filter(pk__in=target_ids)
+        .select_related("community_profile", "professional_profile", "professional_profile__industry")
+        .prefetch_related(
+            Prefetch(
+                "person_skills",
+                queryset=PersonSkill.objects.filter(skill__is_active=True).select_related("skill"),
+                to_attr="directory_skills",
+            ),
+            Prefetch(
+                "person_interests",
+                queryset=PersonInterest.objects.filter(interest__is_active=True).select_related("interest"),
+                to_attr="directory_interests",
+            ),
+        )
+    )
+    targets_by_id = {target.pk: target for target in targets}
+    if len(targets_by_id) != len(target_ids):
+        raise CommunityConnectionNotFound()
+    return {
+        connection.pk: targets_by_id[
+            connection.person_high_id if connection.person_low_id == viewer_person_id else connection.person_low_id
+        ]
+        for connection in connections
+    }
 
 
 def list_connections(*, request, status):

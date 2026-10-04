@@ -85,6 +85,7 @@ from community.connections import (
     connection_aware_directory_person,
     list_connection_requests,
     list_connections,
+    members_for_connections,
     member_for_connection,
     send_connection_request,
     _mutate_connection,
@@ -547,10 +548,11 @@ class CommunityConnectionListView(APIView):
         actor_person_id, queryset = list_connections(request=request, status=CommunityConnection.Status.ACCEPTED)
         paginator = CommunityConnectionPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
+        members = members_for_connections(page, actor_person_id)
         serialized = [
             {
                 "connection_id": connection.public_id,
-                "member": build_connection_projection(member_for_connection(connection, actor_person_id)),
+                "member": build_connection_projection(members[connection.pk]),
             }
             for connection in page
         ]
@@ -578,15 +580,15 @@ class CommunityConnectionRequestListView(APIView):
         actor_person_id, queryset = list_connection_requests(request=request, direction=direction)
         paginator = CommunityConnectionPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
+        members = members_for_connections(page, actor_person_id)
         serialized = []
         for connection in page:
-            member = member_for_connection(connection, actor_person_id)
             state = "INCOMING_PENDING" if direction == "incoming" else "OUTGOING_PENDING"
             serialized.append({
                 "connection_id": connection.public_id,
                 "state": state,
                 "requested_at": connection.requested_at,
-                "member": build_connection_projection(member),
+                "member": build_connection_projection(members[connection.pk]),
             })
         return paginator.get_paginated_response(CommunityConnectionRequestSerializer(serialized, many=True).data)
 

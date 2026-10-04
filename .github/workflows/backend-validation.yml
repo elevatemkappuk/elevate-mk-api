@@ -84,6 +84,11 @@ jobs:
           community.password_reset_tests.CommunityPasswordResetRequestTests
           community.password_reset_tests.CommunityPasswordResetConfirmTests
           community.profile_tests.CommunityProfileApiTests
+          community.connection_tests.CommunityConnectionApiTests.test_public_contact_flags_are_independent_and_connection_only_contact_is_removed
+          community.connection_tests.CommunityConnectionApiTests.test_hidden_accepted_profile_is_available_only_to_connection
+          community.connection_tests.CommunityConnectionApiTests.test_self_hidden_and_ineligible_targets_are_rejected
+          community.connection_tests.CommunityConnectionApiTests.test_detail_relationship_states_and_contact_privacy
+          community.connection_tests.CommunityConnectionApiTests.test_pending_declined_and_disconnected_relationships_do_not_grant_hidden_access
           --noinput -v 1
         # Keep this as a fast representative gate; the full backend suite runs
         # separately on master pull requests and manual dispatch.

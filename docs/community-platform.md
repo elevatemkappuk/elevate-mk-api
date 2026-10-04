@@ -484,8 +484,8 @@ The following remain future scope and must not be inferred from the current
 Profile V1 implementation:
 
 - QR profile sharing;
-- connections and networking;
 - email/mobile self-service editing;
+- messaging and broader social-graph features beyond Connections V1;
 - Community events, opportunities, or other in-app content modules;
 - SMS marketing consent or synchronization;
 - historical E.164 migration of existing Person mobile values;
