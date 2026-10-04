@@ -53,6 +53,7 @@ def is_community_eligible_user(user):
     person = getattr(user, "person", None)
     return bool(
         getattr(user, "is_authenticated", False)
+        and getattr(user, "is_active", False)
         and person is not None
         and person.record_type == Person.RecordType.BUSINESS
         and person.archived_at is None

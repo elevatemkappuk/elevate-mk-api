@@ -528,8 +528,9 @@ preferences, audit and import data, provider state, account/invitation
 internals, database IDs, raw S3 keys, and AWS metadata. Directory reads are
 read-only and do not create profiles, enqueue Brevo jobs, write audits, or
 modify storage. The `community_directory` throttle defaults to `60/hour` and
-is configurable with `COMMUNITY_DIRECTORY_THROTTLE_RATE`. Frontend D3 remains
-pending; QR sharing, connections, messaging, and social graph features remain
+is configurable with `COMMUNITY_DIRECTORY_THROTTLE_RATE`. Community Connect V1
+now provides the authenticated discovery and member-profile frontend for these
+read APIs; QR sharing, connections, messaging, and social graph features remain
 future scope.
 
 ### Profile Photo V1

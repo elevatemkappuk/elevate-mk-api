@@ -2587,8 +2587,8 @@ records, enqueue Brevo work, write audit events, or modify S3 objects.
 
 Directory requests use the configurable `community_directory` DRF throttle
 scope, defaulting to `60/hour` via `COMMUNITY_DIRECTORY_THROTTLE_RATE`.
-Frontend D3 work remains pending; QR sharing, connections, and messaging are
-future scope.
+Community Connect V1 provides the authenticated discovery and member-profile
+frontend; QR sharing, connections, and messaging remain future scope.
 
 ### Profile photo
 

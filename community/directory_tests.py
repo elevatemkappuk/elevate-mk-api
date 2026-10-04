@@ -77,6 +77,11 @@ class CommunityDirectoryApiTests(TestCase):
         self.client.force_authenticate(user=ineligible)
         self.assertEqual(self.client.get(self.list_url).status_code, 403)
 
+        self.viewer.is_active = False
+        self.viewer.save(update_fields=["is_active"])
+        self.client.force_authenticate(user=self.viewer)
+        self.assertEqual(self.client.get(self.list_url).status_code, 403)
+
     def test_list_has_compact_allowlisted_projection_and_query_efficiency(self):
         before_profiles = CommunityProfile.objects.count()
         before_events = AuditEvent.objects.count()
