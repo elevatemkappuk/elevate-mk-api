@@ -280,6 +280,25 @@ Implemented Community routes are `/forgot-password` and
 `/reset-password/:uid/:token`, with success and invalid-link states. Existing
 sessions are invalidated by Django's password session-hash behavior after reset.
 
+## 8.1 Authenticated password change
+
+The authenticated Account & Preferences page uses `POST
+/api/v1/community/account/password/` for an eligible Community member. The
+request contains `current_password`, `new_password`, and `confirm_password`.
+The endpoint is session-authenticated and CSRF-protected, locks the authoritative
+User row, verifies the current password, applies Django's configured validators,
+rejects an unchanged password, and writes the existing `PASSWORD_CHANGED` audit
+action with `COMMUNITY_SELF_SERVICE` provenance. Passwords, hashes, session
+identifiers, and CSRF values are not audited or logged.
+
+The successful mutation preserves the current browser session through Django's
+`update_session_auth_hash()` mechanism. The old password no longer authenticates,
+the new password does, and a subsequent Community request continues to use the
+same session. The dedicated `community_account_password` throttle defaults to
+`5/hour` and is configurable with `COMMUNITY_ACCOUNT_PASSWORD_THROTTLE_RATE`.
+No Person, Profile, marketing preference, Connect, Brevo, or transactional-email
+state is changed by this operation.
+
 ## 9. Community frontend state
 
 Current Angular routes and behavior:

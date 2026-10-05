@@ -228,6 +228,8 @@ These endpoints are separate from the Staff CRM People API. Join, industry looku
 | `GET` | `/api/v1/community/activate/{invitation_id}/{token}/` | Public; invitation token required |
 | `POST` | `/api/v1/community/activate/{invitation_id}/{token}/` | Public; invitation token required |
 | `GET` | `/api/v1/community/me/` | Authenticated Community session |
+| `GET` | `/api/v1/community/account/` | Authenticated eligible Community member |
+| `POST` | `/api/v1/community/account/password/` | Authenticated eligible Community member; CSRF; scoped throttle |
 | `GET` | `/api/v1/community/profile/` | Authenticated eligible Community member |
 | `PATCH` | `/api/v1/community/profile/` | Authenticated eligible Community member; CSRF |
 | `GET` | `/api/v1/community/profile/options/` | Authenticated eligible Community member |
@@ -236,6 +238,19 @@ These endpoints are separate from the Staff CRM People API. Join, industry looku
 | `POST` | `/api/v1/community/profile/review-acknowledgement/` | Authenticated eligible Community member; CSRF |
 
 Community Join returns the generic `202 Accepted` representation documented in [Community Platform](community-platform.md). It does not expose CRM identity evidence or create a User account. Successful activation creates the Community User account and establishes the authenticated Community session; activation and password-reset failures remain enumeration-safe.
+
+`GET /api/v1/community/account/` returns the A1 member-safe account summary. The
+password projection contains only `password.configured`; it does not expose a
+hash, history, strength score, or session data. `POST /api/v1/community/account/password/`
+accepts only `current_password`,
+`new_password`, and `confirm_password`. It verifies the current password,
+applies Django's configured password validators, rejects an unchanged password,
+records `PASSWORD_CHANGED`, preserves the current session, and returns `200 OK`
+with `{"detail": "Your password has been changed successfully."}`. Validation
+failures use the structured `code`, `detail`, and `fields` contract. The
+endpoint uses the `community_account_password` throttle, default `5/hour`,
+configurable with `COMMUNITY_ACCOUNT_PASSWORD_THROTTLE_RATE`; it does not
+mutate Person/Profile/marketing data or enqueue provider work.
 
 ### API documentation endpoints
 

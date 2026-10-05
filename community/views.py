@@ -1,7 +1,7 @@
 import logging
 
 from django.conf import settings
-from django.contrib.auth import get_user_model, login, password_validation
+from django.contrib.auth import get_user_model, login, password_validation, update_session_auth_hash
 from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
@@ -42,6 +42,7 @@ from community.serializers import (
     CommunityActivationSerializer,
     CommunityCurrentUserSerializer,
     CommunityAccountSerializer,
+    CommunityPasswordChangeSerializer,
     CommunityProfileSerializer,
     CommunityProfileWriteSerializer,
     CommunityProfileOptionsSerializer,
@@ -71,6 +72,8 @@ from community.services import (
     upload_community_profile_photo,
     remove_community_profile_photo,
     build_community_account_summary_projection,
+    change_community_password,
+    CommunityPasswordChangeError,
 )
 from community.directory import (
     CommunityDirectoryPagination,
@@ -794,3 +797,49 @@ class CommunityAccountView(APIView):
             CommunityAccountSerializer(build_community_account_summary_projection(user=request.user)).data,
             status=status.HTTP_200_OK,
         )
+
+
+@method_decorator(csrf_protect, name="dispatch")
+class CommunityAccountPasswordView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "community_account_password"
+
+    @extend_schema(
+        operation_id="community_account_password_change",
+        summary="Change the authenticated Community member's password",
+        request=CommunityPasswordChangeSerializer,
+        responses={200: OpenApiResponse(description="Password changed successfully."), 400: OpenApiResponse(description="Password change validation failed."), 403: OpenApiResponse(description="Community access is unavailable."), 429: OpenApiResponse(description="Too many password changes.")},
+        tags=["Community"],
+    )
+    def post(self, request):
+        if not is_community_eligible_user(request.user):
+            return Response(
+                {"code": COMMUNITY_ACCESS_UNAVAILABLE_CODE, "detail": COMMUNITY_ACCESS_UNAVAILABLE_DETAIL},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        serializer = CommunityPasswordChangeSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {"code": "PASSWORD_VALIDATION_ERROR", "detail": "Please enter a valid password and confirmation.", "fields": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            changed_user = change_community_password(
+                user=request.user,
+                current_password=serializer.validated_data["current_password"],
+                new_password=serializer.validated_data["new_password"],
+                request=request,
+            )
+        except CommunityPasswordChangeError as error:
+            if error.code == "COMMUNITY_ACCESS_UNAVAILABLE":
+                return Response(
+                    {"code": COMMUNITY_ACCESS_UNAVAILABLE_CODE, "detail": COMMUNITY_ACCESS_UNAVAILABLE_DETAIL},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            return Response(
+                {"code": error.code, "detail": error.messages[0], "fields": {error.field: error.messages}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        update_session_auth_hash(request, changed_user)
+        return Response({"detail": "Your password has been changed successfully."}, status=status.HTTP_200_OK)

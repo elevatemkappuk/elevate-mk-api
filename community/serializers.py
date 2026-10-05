@@ -116,6 +116,22 @@ class CommunityAccountPasswordSerializer(serializers.Serializer):
     configured = serializers.BooleanField()
 
 
+class CommunityPasswordChangeSerializer(serializers.Serializer):
+    current_password = serializers.CharField(write_only=True, trim_whitespace=False)
+    new_password = serializers.CharField(write_only=True, trim_whitespace=False)
+    confirm_password = serializers.CharField(write_only=True, trim_whitespace=False)
+
+    def validate(self, attrs):
+        unknown_fields = set(self.initial_data.keys()) - set(self.fields.keys())
+        if unknown_fields:
+            raise serializers.ValidationError(
+                {field: ["This field is not allowed."] for field in sorted(unknown_fields)}
+            )
+        if attrs["new_password"] != attrs["confirm_password"]:
+            raise serializers.ValidationError({"confirm_password": ["The passwords do not match."]})
+        return attrs
+
+
 class CommunityAccountSerializer(serializers.Serializer):
     email = serializers.CharField(allow_blank=True)
     mobile = CommunityAccountMobileSerializer()

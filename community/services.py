@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from django.conf import settings
-from django.contrib.auth import get_user_model
+from django.contrib.auth import get_user_model, password_validation
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Prefetch
@@ -48,6 +48,14 @@ COMMUNITY_INVITATION_DELIVERY_UNCERTAIN = "DELIVERY_UNCERTAIN"
 COMMUNITY_INVITATION_FAILED = "FAILED"
 
 
+class CommunityPasswordChangeError(Exception):
+    def __init__(self, *, code, field, messages):
+        self.code = code
+        self.field = field
+        self.messages = messages
+        super().__init__(messages[0])
+
+
 def is_community_eligible_user(user):
     """Return whether an authenticated User currently has Community access."""
     person = getattr(user, "person", None)
@@ -86,6 +94,53 @@ def build_community_account_summary_projection(*, user):
         "email_marketing": {"state": preference.state},
         "password": {"configured": user.has_usable_password()},
     }
+
+
+def change_community_password(*, user, current_password, new_password, request):
+    """Change an eligible member's shared Django password atomically."""
+    with transaction.atomic():
+        locked_user = (
+            get_user_model().objects.select_for_update().select_related("person").get(pk=user.pk)
+        )
+        if not is_community_eligible_user(locked_user):
+            raise CommunityPasswordChangeError(
+                code="COMMUNITY_ACCESS_UNAVAILABLE",
+                field="current_password",
+                messages=["Community access is not available for this account."],
+            )
+        if not locked_user.check_password(current_password):
+            raise CommunityPasswordChangeError(
+                code="CURRENT_PASSWORD_INVALID",
+                field="current_password",
+                messages=["The current password is incorrect."],
+            )
+        if locked_user.check_password(new_password):
+            raise CommunityPasswordChangeError(
+                code="PASSWORD_UNCHANGED",
+                field="new_password",
+                messages=["Choose a new password different from your current password."],
+            )
+        try:
+            password_validation.validate_password(new_password, locked_user)
+        except DjangoValidationError as error:
+            raise CommunityPasswordChangeError(
+                code="PASSWORD_VALIDATION_ERROR",
+                field="new_password",
+                messages=list(error.messages),
+            ) from error
+
+        locked_user.set_password(new_password)
+        locked_user.save(update_fields=["password"])
+        record_audit_event(
+            action=AuditEvent.Action.PASSWORD_CHANGED,
+            actor_user=locked_user,
+            entity_type="User",
+            entity_id=locked_user.id,
+            metadata={"source": "COMMUNITY_SELF_SERVICE", "person_id": str(locked_user.person_id)},
+            request_id=getattr(request, "request_id", None),
+            ip_address=request.META.get("REMOTE_ADDR"),
+        )
+    return locked_user
 
 
 def get_or_create_community_profile(*, person, person_preexisted_community=False):

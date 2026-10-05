@@ -1,6 +1,6 @@
 from django.urls import path
 
-from community.views import CommunityAccountView, CommunityActivationView, CommunityConnectionActionView, CommunityConnectionListView, CommunityConnectionRequestListView, CommunityDirectoryDetailView, CommunityDirectoryListView, CommunityIndustryListView, CommunityJoinView, CommunityLoginView, CommunityMeView, CommunityPasswordResetConfirmView, CommunityPasswordResetRequestView, CommunityProfileView, CommunityProfileOptionsView, CommunityProfilePhotoView, CommunityProfileReviewAcknowledgementView
+from community.views import CommunityAccountPasswordView, CommunityAccountView, CommunityActivationView, CommunityConnectionActionView, CommunityConnectionListView, CommunityConnectionRequestListView, CommunityDirectoryDetailView, CommunityDirectoryListView, CommunityIndustryListView, CommunityJoinView, CommunityLoginView, CommunityMeView, CommunityPasswordResetConfirmView, CommunityPasswordResetRequestView, CommunityProfileView, CommunityProfileOptionsView, CommunityProfilePhotoView, CommunityProfileReviewAcknowledgementView
 
 
 urlpatterns = [
@@ -12,6 +12,7 @@ urlpatterns = [
     path("community/activate/<uuid:invitation_id>/<str:token>/", CommunityActivationView.as_view(), name="community-activate"),
     path("community/me/", CommunityMeView.as_view(), name="community-me"),
     path("community/account/", CommunityAccountView.as_view(), name="community-account"),
+    path("community/account/password/", CommunityAccountPasswordView.as_view(), name="community-account-password"),
     path("community/profile/", CommunityProfileView.as_view(), name="community-profile"),
     path("community/profile/options/", CommunityProfileOptionsView.as_view(), name="community-profile-options"),
     path("community/profile/photo/", CommunityProfilePhotoView.as_view(), name="community-profile-photo"),
