@@ -132,6 +132,34 @@ class CommunityPasswordChangeSerializer(serializers.Serializer):
         return attrs
 
 
+class CommunityMobileUpdateSerializer(serializers.Serializer):
+    mobile = serializers.CharField(max_length=50, allow_blank=True)
+    phone_region = serializers.CharField(max_length=2, required=False, allow_blank=True)
+
+    def validate_phone_region(self, value):
+        value = value.strip().upper()
+        if value and not is_supported_phone_region(value):
+            raise serializers.ValidationError("Enter a supported phone region.")
+        return value
+
+    def validate(self, attrs):
+        mobile = attrs.get("mobile", "").strip()
+        phone_region = attrs.get("phone_region", "")
+        attrs["mobile"] = mobile
+        if not mobile:
+            if phone_region:
+                raise serializers.ValidationError({"phone_region": ["This field must be empty when removing a mobile number."]})
+            attrs["mobile"] = ""
+            return attrs
+        if not phone_region:
+            raise serializers.ValidationError({"phone_region": ["This field is required when mobile is supplied."]})
+        normalized = normalize_phone_for_community(mobile, region=phone_region)
+        if normalized.status != PhoneNormalizationStatus.NORMALIZED:
+            raise serializers.ValidationError({"mobile": ["Enter a valid mobile number for the selected phone region."]})
+        attrs["mobile"] = normalized.e164
+        return attrs
+
+
 class CommunityAccountSerializer(serializers.Serializer):
     email = serializers.CharField(allow_blank=True)
     mobile = CommunityAccountMobileSerializer()

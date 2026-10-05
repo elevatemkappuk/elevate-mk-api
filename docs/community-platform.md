@@ -299,6 +299,32 @@ same session. The dedicated `community_account_password` throttle defaults to
 No Person, Profile, marketing preference, Connect, Brevo, or transactional-email
 state is changed by this operation.
 
+## 8.2 Authenticated mobile management
+
+Account & Preferences also supports `PATCH
+/api/v1/community/account/mobile/` for eligible authenticated members. Person's
+`mobile` remains the canonical contact field; CommunityProfile does not duplicate
+it. Add and change requests submit `mobile` plus `phone_region`, while removal
+submits both values as empty strings. The existing phonenumbers-backed Community
+normalizer validates region/number compatibility and stores genuine non-empty
+updates as E.164. `phone_region` is never persisted.
+
+The mutation blocks a submitted canonical number when it belongs to another
+active BUSINESS Person, including safely normalizable legacy formatting, without
+revealing the other member's identity. Ambiguous or invalid legacy values are
+ignored for comparison rather than rewritten. A normalized equivalent of the
+member's existing number is a no-op and preserves legacy formatting; genuine
+add/change/remove operations create a safe `PERSON_UPDATED` self-service audit
+event and enqueue the coalesced `PERSON_PROFILE` synchronization job. The
+existing provider mapping sends E.164 mobile as `SMS` and sends an empty `SMS`
+attribute on removal so stale downstream mobile state can be cleared.
+
+The response is the refreshed masked Account summary. Mobile mutations use the
+CSRF-protected `community_account_mobile` scope, default `10/hour`, configurable
+with `COMMUNITY_ACCOUNT_MOBILE_THROTTLE_RATE`. Mobile editing does not alter
+`directory_visible`, `email_visible`, `mobile_visible`, membership, marketing
+preferences, account credentials, or identity ownership.
+
 ## 9. Community frontend state
 
 Current Angular routes and behavior:

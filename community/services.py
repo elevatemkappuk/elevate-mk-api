@@ -17,7 +17,7 @@ from memberships.models import Membership
 from marketing_preferences.models import MarketingPreference
 from marketing_preferences.services import get_effective_marketing_preference, record_opt_in
 from people.models import Person
-from people.services import normalize_email, normalize_mobile, normalize_phone_for_community, PhoneNormalizationStatus
+from people.services import normalize_email, normalize_mobile, normalize_phone_for_community, normalize_phone_for_provider, PhoneNormalizationStatus
 from professional_profiles.models import Industry, ProfessionalProfile
 from skills.models import PersonSkill, Skill
 from interests.models import PersonInterest, Interest
@@ -26,7 +26,7 @@ from brevo_marketing.routing import BREVO_PROVIDER
 from external_references.services import enqueue_coalesced_person_sync_job
 
 from community.models import CommunityAccountInvitation, CommunityProfile, JoinSubmissionReceipt
-from community.locking import acquire_community_join_email_lock
+from community.locking import acquire_community_join_email_lock, acquire_community_mobile_lock
 from notifications.models import TransactionalEmailJob
 from django.core.files.base import ContentFile
 
@@ -54,6 +54,10 @@ class CommunityPasswordChangeError(Exception):
         self.field = field
         self.messages = messages
         super().__init__(messages[0])
+
+
+class CommunityMobileConflictError(Exception):
+    pass
 
 
 def is_community_eligible_user(user):
@@ -141,6 +145,61 @@ def change_community_password(*, user, current_password, new_password, request):
             ip_address=request.META.get("REMOTE_ADDR"),
         )
     return locked_user
+
+
+def _normalize_existing_mobile(value, *, region):
+    """Safely normalize legacy mobile formatting for comparison only."""
+    if not value or not str(value).strip():
+        return None
+    result = normalize_phone_for_provider(value, region=region)
+    return result.e164 if result.status == PhoneNormalizationStatus.NORMALIZED else None
+
+
+def update_community_mobile(*, person_id, mobile, phone_region, request):
+    """Apply an authenticated member's canonical mobile change."""
+    with transaction.atomic():
+        person = Person.objects.select_for_update().get(pk=person_id)
+        current_mobile = person.mobile or ""
+        effective_current = _normalize_existing_mobile(current_mobile, region=phone_region) if current_mobile.strip() else None
+
+        if mobile:
+            acquire_community_mobile_lock(mobile)
+            other_people = list(
+                Person.objects.active_business()
+                .exclude(pk=person.pk)
+                .exclude(mobile="")
+                .exclude(mobile__isnull=True)
+                .order_by("pk")
+                .values_list("mobile", flat=True)
+            )
+            if any(_normalize_existing_mobile(value, region=phone_region) == mobile for value in other_people):
+                raise CommunityMobileConflictError
+            if effective_current == mobile:
+                return person
+            changed_value = mobile
+            operation = "mobile_added" if not current_mobile.strip() else "mobile_changed"
+        else:
+            if not current_mobile.strip():
+                return person
+            changed_value = ""
+            operation = "mobile_removed"
+
+        person.mobile = changed_value
+        _save_validated(person, ["mobile", "updated_at"])
+        event = _audit_self_service(
+            action=AuditEvent.Action.PERSON_UPDATED,
+            entity_type="Person",
+            entity_id=person.id,
+            changed_fields=[operation],
+            request=request,
+        )
+        enqueue_coalesced_person_sync_job(
+            person=person,
+            provider=BREVO_PROVIDER,
+            job_type=PERSON_PROFILE_SYNC,
+            source_event_id=event.id,
+        )
+    return person
 
 
 def get_or_create_community_profile(*, person, person_preexisted_community=False):

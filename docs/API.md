@@ -230,6 +230,7 @@ These endpoints are separate from the Staff CRM People API. Join, industry looku
 | `GET` | `/api/v1/community/me/` | Authenticated Community session |
 | `GET` | `/api/v1/community/account/` | Authenticated eligible Community member |
 | `POST` | `/api/v1/community/account/password/` | Authenticated eligible Community member; CSRF; scoped throttle |
+| `PATCH` | `/api/v1/community/account/mobile/` | Authenticated eligible Community member; CSRF; scoped throttle |
 | `GET` | `/api/v1/community/profile/` | Authenticated eligible Community member |
 | `PATCH` | `/api/v1/community/profile/` | Authenticated eligible Community member; CSRF |
 | `GET` | `/api/v1/community/profile/options/` | Authenticated eligible Community member |
@@ -251,6 +252,18 @@ failures use the structured `code`, `detail`, and `fields` contract. The
 endpoint uses the `community_account_password` throttle, default `5/hour`,
 configurable with `COMMUNITY_ACCOUNT_PASSWORD_THROTTLE_RATE`; it does not
 mutate Person/Profile/marketing data or enqueue provider work.
+
+`PATCH /api/v1/community/account/mobile/` accepts `mobile` and
+`phone_region`. Non-empty mobile values require a supported ISO alpha-2 phone
+region and are normalized to E.164; an empty `mobile` with an empty
+`phone_region` explicitly removes the mobile. `phone_region` is validation
+metadata only and is never persisted. The endpoint blocks canonical and safely
+normalizable legacy collisions with another active BUSINESS Person using a
+generic `409` response, and returns the refreshed masked account summary. Genuine
+add/change/remove operations audit the Person change and enqueue the coalesced
+`PERSON_PROFILE` synchronization path; no-ops do neither. The scope is
+`community_account_mobile`, default `10/hour`, configurable with
+`COMMUNITY_ACCOUNT_MOBILE_THROTTLE_RATE`.
 
 ### API documentation endpoints
 

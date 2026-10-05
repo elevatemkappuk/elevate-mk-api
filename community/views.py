@@ -43,6 +43,7 @@ from community.serializers import (
     CommunityCurrentUserSerializer,
     CommunityAccountSerializer,
     CommunityPasswordChangeSerializer,
+    CommunityMobileUpdateSerializer,
     CommunityProfileSerializer,
     CommunityProfileWriteSerializer,
     CommunityProfileOptionsSerializer,
@@ -74,6 +75,8 @@ from community.services import (
     build_community_account_summary_projection,
     change_community_password,
     CommunityPasswordChangeError,
+    CommunityMobileConflictError,
+    update_community_mobile,
 )
 from community.directory import (
     CommunityDirectoryPagination,
@@ -843,3 +846,46 @@ class CommunityAccountPasswordView(APIView):
             )
         update_session_auth_hash(request, changed_user)
         return Response({"detail": "Your password has been changed successfully."}, status=status.HTTP_200_OK)
+
+
+@method_decorator(csrf_protect, name="dispatch")
+class CommunityAccountMobileView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "community_account_mobile"
+
+    @extend_schema(
+        operation_id="community_account_mobile_update",
+        summary="Add, change, or remove the authenticated Community member's mobile",
+        request=CommunityMobileUpdateSerializer,
+        responses={200: CommunityAccountSerializer, 400: OpenApiResponse(description="Mobile validation failed."), 403: OpenApiResponse(description="Community access is unavailable."), 429: OpenApiResponse(description="Too many mobile changes.")},
+        tags=["Community"],
+    )
+    def patch(self, request):
+        if not is_community_eligible_user(request.user):
+            return Response(
+                {"code": COMMUNITY_ACCESS_UNAVAILABLE_CODE, "detail": COMMUNITY_ACCESS_UNAVAILABLE_DETAIL},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        serializer = CommunityMobileUpdateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {"code": "MOBILE_VALIDATION_ERROR", "detail": "Please enter a valid mobile number.", "fields": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            person = update_community_mobile(
+                person_id=request.user.person_id,
+                mobile=serializer.validated_data["mobile"],
+                phone_region=serializer.validated_data.get("phone_region", ""),
+                request=request,
+            )
+        except CommunityMobileConflictError:
+            return Response(
+                {"code": "MOBILE_UPDATE_UNAVAILABLE", "detail": "We couldn't update this mobile number. Please check the number or contact Elevate MK for help."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        return Response(
+            CommunityAccountSerializer(build_community_account_summary_projection(user=person.user)).data,
+            status=status.HTTP_200_OK,
+        )

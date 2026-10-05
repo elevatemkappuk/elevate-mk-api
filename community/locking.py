@@ -31,3 +31,21 @@ def acquire_community_join_email_lock(email: str) -> bool:
             [community_join_email_lock_key(email)],
         )
     return True
+
+
+def community_mobile_lock_key(mobile: str) -> int:
+    """Return a stable PostgreSQL advisory-lock key for a canonical mobile."""
+    digest = hashlib.sha256(mobile.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=True)
+
+
+def acquire_community_mobile_lock(mobile: str) -> bool:
+    """Serialize Community mobile ownership checks for one canonical number."""
+    if connection.vendor != "postgresql":
+        if settings.DEBUG:
+            return False
+        raise RuntimeError("Community mobile locking requires PostgreSQL.")
+
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_advisory_xact_lock(%s)", [community_mobile_lock_key(mobile)])
+    return True
