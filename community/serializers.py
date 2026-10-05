@@ -103,6 +103,26 @@ class CommunityCurrentUserSerializer(serializers.Serializer):
     last_name = serializers.CharField()
 
 
+class CommunityAccountMobileSerializer(serializers.Serializer):
+    present = serializers.BooleanField()
+    masked = serializers.CharField(allow_null=True)
+
+
+class CommunityAccountMarketingSerializer(serializers.Serializer):
+    state = serializers.ChoiceField(choices=("UNKNOWN", "OPTED_IN", "OPTED_OUT"))
+
+
+class CommunityAccountPasswordSerializer(serializers.Serializer):
+    configured = serializers.BooleanField()
+
+
+class CommunityAccountSerializer(serializers.Serializer):
+    email = serializers.CharField(allow_blank=True)
+    mobile = CommunityAccountMobileSerializer()
+    email_marketing = CommunityAccountMarketingSerializer()
+    password = CommunityAccountPasswordSerializer()
+
+
 class CommunityProfileIndustrySerializer(serializers.Serializer):
     id = serializers.IntegerField()
     slug = serializers.CharField()

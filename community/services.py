@@ -61,6 +61,33 @@ def is_community_eligible_user(user):
     )
 
 
+def mask_community_mobile(value):
+    """Return a stable, non-sensitive display value for a member's mobile."""
+    normalized = normalize_mobile(value or "")
+    if not normalized:
+        return None
+    if len(normalized) <= 4:
+        return "*" * len(normalized)
+    prefix = normalized[:3]
+    suffix = normalized[-4:]
+    return f"{prefix}{'*' * max(len(normalized) - 7, 1)}{suffix}"
+
+
+def build_community_account_summary_projection(*, user):
+    """Build the authenticated member-safe Account Management read model."""
+    person = user.person
+    preference = get_effective_marketing_preference(person=person)
+    return {
+        "email": person.primary_email or "",
+        "mobile": {
+            "present": bool(normalize_mobile(person.mobile)),
+            "masked": mask_community_mobile(person.mobile),
+        },
+        "email_marketing": {"state": preference.state},
+        "password": {"configured": user.has_usable_password()},
+    }
+
+
 def get_or_create_community_profile(*, person, person_preexisted_community=False):
     """Lazily create Community-owned state without rewriting established provenance."""
     profile, _ = CommunityProfile.objects.get_or_create(

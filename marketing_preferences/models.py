@@ -25,6 +25,7 @@ class MarketingPreference(models.Model):
         MAILCHIMP = "MAILCHIMP", "Mailchimp"
         BREVO = "BREVO", "Brevo"
         COMMUNITY_JOIN = "COMMUNITY_JOIN", "Community Join"
+        COMMUNITY_SELF_SERVICE = "COMMUNITY_SELF_SERVICE", "Community self-service"
         OTHER = "OTHER", "Other"
 
     person = models.ForeignKey(

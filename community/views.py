@@ -41,6 +41,7 @@ from community.activation import (
 from community.serializers import (
     CommunityActivationSerializer,
     CommunityCurrentUserSerializer,
+    CommunityAccountSerializer,
     CommunityProfileSerializer,
     CommunityProfileWriteSerializer,
     CommunityProfileOptionsSerializer,
@@ -69,6 +70,7 @@ from community.services import (
     acknowledge_community_profile_review,
     upload_community_profile_photo,
     remove_community_profile_photo,
+    build_community_account_summary_projection,
 )
 from community.directory import (
     CommunityDirectoryPagination,
@@ -357,7 +359,7 @@ class CommunityActivationView(APIView):
     @extend_schema(
         operation_id="community_activate_account",
         summary="Redeem a Community account activation invitation",
-        request=CommunityActivationSerializer,
+        request=None,
         responses={200: CommunityCurrentUserSerializer, 400: OpenApiResponse(description="Activation failed."), 409: OpenApiResponse(description="Account setup unavailable."), 429: OpenApiResponse(description="Too many activation attempts.")},
         auth=[],
         tags=["Community"],
@@ -372,6 +374,14 @@ class CommunityActivationView(APIView):
             )
         return Response({"usable": True}, status=status.HTTP_200_OK)
 
+    @extend_schema(
+        operation_id="community_activate_account_submit",
+        summary="Complete a Community account activation",
+        request=CommunityActivationSerializer,
+        responses={200: CommunityCurrentUserSerializer, 400: OpenApiResponse(description="Activation failed."), 409: OpenApiResponse(description="Account setup unavailable."), 429: OpenApiResponse(description="Too many activation attempts.")},
+        auth=[],
+        tags=["Community"],
+    )
     def post(self, request, invitation_id, token):
         serializer = CommunityActivationSerializer(data=request.data)
         if not serializer.is_valid():
@@ -597,6 +607,12 @@ class CommunityConnectionRequestListView(APIView):
             })
         return paginator.get_paginated_response(CommunityConnectionRequestSerializer(serialized, many=True).data)
 
+    @extend_schema(
+        operation_id="community_connection_request_create_from_requests",
+        request=CommunityConnectionRequestCreateSerializer,
+        responses={200: CommunityConnectionSerializer, 400: OpenApiResponse(description="Invalid connection request."), 403: OpenApiResponse(description="Community access is unavailable."), 404: OpenApiResponse(description="Member unavailable."), 409: OpenApiResponse(description="Connection state conflict.")},
+        tags=["Community"],
+    )
     def post(self, request):
         return CommunityConnectionRequestCreateView().post(request)
 
@@ -639,8 +655,8 @@ class CommunityConnectionActionView(APIView):
     throttle_scope = "community_connection_mutations"
 
     @extend_schema(
-        operation_id="community_connection_action",
-        summary="Accept, decline, or remove a Community connection",
+        summary="Accept or decline a Community connection",
+        request=None,
         responses={200: CommunityConnectionSerializer, 204: None, 403: OpenApiResponse(description="Community access is unavailable."), 404: OpenApiResponse(description="Connection unavailable."), 409: OpenApiResponse(description="Connection state conflict.")},
         tags=["Community"],
     )
@@ -649,6 +665,12 @@ class CommunityConnectionActionView(APIView):
             return Response({"detail": "Unsupported connection action."}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
         return self._mutate(request, public_id, action, remove=False)
 
+    @extend_schema(
+        summary="Remove an accepted Community connection",
+        request=None,
+        responses={204: None, 403: OpenApiResponse(description="Community access is unavailable."), 404: OpenApiResponse(description="Connection unavailable."), 409: OpenApiResponse(description="Connection state conflict.")},
+        tags=["Community"],
+    )
     def delete(self, request, public_id):
         return self._mutate(request, public_id, "remove", remove=True)
 
@@ -729,6 +751,7 @@ class CommunityProfileReviewAcknowledgementView(APIView):
     @extend_schema(
         operation_id="community_profile_review_acknowledgement",
         summary="Acknowledge the authenticated member's Community profile review",
+        request=None,
         responses={200: OpenApiResponse(description="Review acknowledgement recorded."), 403: OpenApiResponse(description="Community access is unavailable.")},
         tags=["Community"],
     )
@@ -753,3 +776,21 @@ class CommunityMeView(APIView):
             return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
         person = request.user.person
         return Response(CommunityCurrentUserSerializer({"id": request.user.id, "first_name": person.first_name, "last_name": person.last_name}).data)
+
+
+class CommunityAccountView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        operation_id="community_account_summary",
+        summary="Get the authenticated member's Community account summary",
+        responses={200: CommunityAccountSerializer, 403: OpenApiResponse(description="Community access is unavailable.")},
+        tags=["Community"],
+    )
+    def get(self, request):
+        if not is_community_eligible_user(request.user):
+            return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
+        return Response(
+            CommunityAccountSerializer(build_community_account_summary_projection(user=request.user)).data,
+            status=status.HTTP_200_OK,
+        )

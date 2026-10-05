@@ -3,6 +3,7 @@ import logging
 
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from drf_spectacular.utils import OpenApiTypes, extend_schema
 from rest_framework.views import APIView
 
 from brevo_marketing.webhooks import (
@@ -22,6 +23,13 @@ class BrevoMarketingWebhookView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
 
+    @extend_schema(
+        operation_id="brevo_marketing_webhook",
+        request=OpenApiTypes.OBJECT,
+        responses={200: OpenApiTypes.OBJECT},
+        auth=[],
+        tags=["Brevo"],
+    )
     def post(self, request, *args, **kwargs):
         try:
             authenticate_webhook_request(request)

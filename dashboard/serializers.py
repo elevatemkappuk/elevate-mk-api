@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_serializer
 from people.models import Person
 
 
@@ -32,6 +33,7 @@ class AgeRangeCountSerializer(LabelCountSerializer):
     value = serializers.ChoiceField(choices=Person.AgeRange.choices)
 
 
+@extend_schema_serializer(component_name="DashboardCommunityProfile")
 class CommunityProfileSerializer(serializers.Serializer):
     top_locations = LabelCountSerializer(many=True, max_length=5)
     top_industries = IndustryCountSerializer(many=True, max_length=5)

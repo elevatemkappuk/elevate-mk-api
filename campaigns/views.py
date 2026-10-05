@@ -94,6 +94,7 @@ class CampaignDetailView(generics.RetrieveAPIView):
 
 class CampaignArchiveView(generics.GenericAPIView):
     queryset = Campaign.objects.all()
+    serializer_class = CampaignSerializer
     permission_classes = [IsAuthenticated, HasCampaignWriteAccess]
     lookup_url_kwarg = "campaign_id"
 
@@ -107,6 +108,7 @@ class CampaignArchiveView(generics.GenericAPIView):
 
 class CampaignRestoreView(generics.GenericAPIView):
     queryset = Campaign.objects.all()
+    serializer_class = CampaignSerializer
     permission_classes = [IsAuthenticated, HasCampaignWriteAccess]
     lookup_url_kwarg = "campaign_id"
 
@@ -120,6 +122,7 @@ class CampaignRestoreView(generics.GenericAPIView):
 
 class CampaignPrepareView(generics.GenericAPIView):
     queryset = Campaign.objects.all()
+    serializer_class = CampaignSerializer
     permission_classes = [IsAuthenticated, HasCampaignWriteAccess]
     lookup_url_kwarg = "campaign_id"
 
@@ -136,6 +139,7 @@ class CampaignPrepareView(generics.GenericAPIView):
 
 class CampaignPrepareProviderView(generics.GenericAPIView):
     queryset = Campaign.objects.all()
+    serializer_class = CampaignSerializer
     permission_classes = [IsAuthenticated, HasCampaignWriteAccess]
     lookup_url_kwarg = "campaign_id"
 
