@@ -2673,7 +2673,9 @@ identifiers. The detail Directory response additionally contains:
 
 The state is backend-derived and may be `NO_RELATIONSHIP`,
 `OUTGOING_PENDING`, `INCOMING_PENDING`, or `CONNECTED`. Relationship state is
-not added to Directory list results.
+always included in the direct Directory detail response. Compact connection
+and request member projections may omit it; authenticated Directory list
+results include the viewer-relative relationship projection described above.
 
 General Directory lists remain strictly limited to `directory_visible=true`.
 For detail reads only, an accepted connection can access a currently eligible
