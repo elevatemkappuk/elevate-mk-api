@@ -138,6 +138,15 @@ def currently_connected(first_person_id, second_person_id):
 
 def connection_relationship_projection(*, viewer_person_id, target_person_id, target_directory_visible):
     connection = _current_connection_between(viewer_person_id, target_person_id)
+    return _build_connection_relationship_projection(
+        viewer_person_id=viewer_person_id,
+        target_person_id=target_person_id,
+        target_directory_visible=target_directory_visible,
+        connection=connection,
+    )
+
+
+def _build_connection_relationship_projection(*, viewer_person_id, target_person_id, target_directory_visible, connection):
     if connection is None or connection.status in {
         CommunityConnection.Status.DECLINED,
         CommunityConnection.Status.DISCONNECTED,
@@ -169,6 +178,31 @@ def connection_relationship_projection(*, viewer_person_id, target_person_id, ta
         "can_accept": not viewer_is_requester,
         "can_decline": not viewer_is_requester,
         "can_remove": False,
+    }
+
+
+def connection_relationship_projections(*, viewer_person_id, target_person_ids):
+    target_person_ids = set(target_person_ids)
+    if not target_person_ids:
+        return {}
+
+    connections = CommunityConnection.objects.filter(
+        Q(person_low_id=viewer_person_id, person_high_id__in=target_person_ids)
+        | Q(person_high_id=viewer_person_id, person_low_id__in=target_person_ids)
+    ).only("person_low_id", "person_high_id", "requester_id", "status", "public_id")
+    by_target_id = {}
+    for connection in connections:
+        target_id = connection.person_high_id if connection.person_low_id == viewer_person_id else connection.person_low_id
+        by_target_id[target_id] = connection
+
+    return {
+        target_id: _build_connection_relationship_projection(
+            viewer_person_id=viewer_person_id,
+            target_person_id=target_id,
+            target_directory_visible=target_id != viewer_person_id,
+            connection=by_target_id.get(target_id),
+        )
+        for target_id in target_person_ids
     }
 
 

@@ -82,6 +82,7 @@ from community.connections import (
     CommunityConnectionPagination,
     build_connection_detail_projection,
     build_connection_projection,
+    connection_relationship_projections,
     connection_aware_directory_person,
     list_connection_requests,
     list_connections,
@@ -497,7 +498,11 @@ class CommunityDirectoryListView(APIView):
         )
         paginator = CommunityDirectoryPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
-        data = [build_directory_projection(person) for person in page]
+        relationships = connection_relationship_projections(
+            viewer_person_id=request.user.person_id,
+            target_person_ids=[person.pk for person in page],
+        )
+        data = [build_directory_projection(person, relationship=relationships[person.pk]) for person in page]
         return paginator.get_paginated_response(CommunityDirectoryListSerializer(data, many=True).data)
 
 

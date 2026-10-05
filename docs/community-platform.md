@@ -517,11 +517,20 @@ Membership, non-archived BUSINESS Person, and CommunityProfile are eligible.
 Hidden or otherwise ineligible direct targets return generic 404 responses.
 
 D2 uses a compact paginated list projection and a richer direct Profile
-projection. Name search is bounded and case-insensitive; active Industry,
-Skill, and Interest slugs are supported as AND-combined filters. Email and
+projection. The bounded, case-insensitive `q` search covers canonical Person
+first name, last name, and location; active Industry, Skill, and Interest
+slugs are supported as AND-combined filters. Email and
 mobile are omitted from lists and independently projected in direct results
 only when sharing is enabled. Profile photos are represented only by a
 read-time private/signed `photo_url`.
+
+Each authenticated Directory list result also contains a small
+viewer-relative relationship projection using the existing Connections states:
+`NO_RELATIONSHIP`, `OUTGOING_PENDING`, `INCOMING_PENDING`, or `CONNECTED`.
+It contains no contact or internal database identifiers beyond the existing
+safe public connection UUID where a relationship exists. The lookup is
+batched for the returned page so relationship state does not introduce a
+per-card query pattern.
 
 Directory projections exclude CRM/internal fields, demographics, marketing
 preferences, audit and import data, provider state, account/invitation
@@ -565,6 +574,12 @@ The C2 API uses scoped throttles for connection reads, request reads, request
 creation, and relationship mutations. It does not add messaging, notifications,
 followers, recommendations, blocking, QR sharing, counts, or CRM-created
 relationships.
+
+The member-facing Angular workspace for Connections V1 is documented in the
+Community repository's `docs/connections.md`. That document covers the
+Discover, My Connections, Requests, and Home request-preview experiences;
+this document and `docs/API.md` remain authoritative for backend eligibility,
+state transitions, privacy, and authorization.
 
 ### Profile Photo V1
 

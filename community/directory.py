@@ -62,7 +62,11 @@ def directory_filter_queryset(queryset, *, industry=None, skill=None, interest=N
 
 def directory_search_queryset(queryset, query):
     if query:
-        queryset = queryset.filter(Q(first_name__icontains=query) | Q(last_name__icontains=query))
+        queryset = queryset.filter(
+            Q(first_name__icontains=query)
+            | Q(last_name__icontains=query)
+            | Q(location__icontains=query)
+        )
     return queryset
 
 
@@ -78,7 +82,7 @@ def build_directory_professional(person):
     }
 
 
-def build_directory_projection(person, *, include_detail=False):
+def build_directory_projection(person, *, include_detail=False, relationship=None):
     profile = person.community_profile
     photo_url = profile.photo.url if profile.photo else None
     projection = {
@@ -91,6 +95,8 @@ def build_directory_projection(person, *, include_detail=False):
         "skills": [{"slug": item.skill.slug, "label": item.skill.name} for item in person.directory_skills],
         "interests": [{"slug": item.interest.slug, "label": item.interest.name} for item in person.directory_interests],
     }
+    if relationship is not None:
+        projection["relationship"] = relationship
     if include_detail:
         projection.update(
             {

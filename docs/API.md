@@ -2541,10 +2541,11 @@ uses deterministic case-insensitive `first_name`, `last_name`, and
 `directory_id` ordering. `page_size` may be supplied between 1 and 100.
 
 List search uses the trimmed, case-insensitive `q` parameter against canonical
-Person first and last names only. Search is limited to 100 characters; blank
-search behaves as no search. The supported filters are one active canonical
-taxonomy slug each: `industry`, `skill`, and `interest`. Filters combine with
-logical AND. Invalid or inactive taxonomy slugs return `400` validation errors.
+Person first name, last name, and location. Search is limited to 100
+characters; blank search behaves as no search. The supported filters are one
+active canonical taxonomy slug each: `industry`, `skill`, and `interest`.
+Filters combine with logical AND. Invalid or inactive taxonomy slugs return
+`400` validation errors.
 
 The compact list result contains only:
 
@@ -2561,9 +2562,25 @@ The compact list result contains only:
     "industry": {"slug": "technology", "label": "Technology"}
   },
   "skills": [{"slug": "strategy", "label": "Strategy"}],
-  "interests": [{"slug": "networking", "label": "Networking"}]
+  "interests": [{"slug": "networking", "label": "Networking"}],
+  "relationship": {
+    "state": "NO_RELATIONSHIP",
+    "connection_id": null,
+    "can_connect": true,
+    "can_accept": false,
+    "can_decline": false,
+    "can_remove": false
+  }
 }
 ```
+
+The list `relationship` object is calculated for the authenticated viewer
+using the existing Connections state machine. Its state is one of
+`NO_RELATIONSHIP`, `OUTGOING_PENDING`, `INCOMING_PENDING`, or `CONNECTED`.
+The projection is viewer-relative, does not expose contact data, and includes
+only the safe public connection UUID when a relationship exists. A member's
+self-result is never connectable. Relationship data does not make hidden
+profiles eligible for the general list; list eligibility is enforced first.
 
 The direct profile result contains the same fields plus `bio`, the complete
 professional summary (`career_stage` and `linkedin_url` included), and:

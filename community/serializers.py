@@ -268,22 +268,6 @@ class CommunityDirectoryTaxonomySerializer(serializers.Serializer):
     label = serializers.CharField()
 
 
-class CommunityDirectoryListSerializer(serializers.Serializer):
-    directory_id = serializers.UUIDField()
-    photo_url = serializers.URLField(allow_null=True)
-    first_name = serializers.CharField()
-    last_name = serializers.CharField()
-    location = serializers.CharField()
-    professional = CommunityDirectoryListProfessionalSerializer()
-    skills = CommunityDirectoryTaxonomySerializer(many=True)
-    interests = CommunityDirectoryTaxonomySerializer(many=True)
-
-
-class CommunityDirectoryContactSerializer(serializers.Serializer):
-    email = serializers.EmailField(allow_null=True)
-    mobile = serializers.CharField(allow_null=True, allow_blank=True)
-
-
 class CommunityConnectionRelationshipSerializer(serializers.Serializer):
     state = serializers.ChoiceField(
         choices=(
@@ -298,6 +282,23 @@ class CommunityConnectionRelationshipSerializer(serializers.Serializer):
     can_accept = serializers.BooleanField()
     can_decline = serializers.BooleanField()
     can_remove = serializers.BooleanField()
+
+
+class CommunityDirectoryListSerializer(serializers.Serializer):
+    directory_id = serializers.UUIDField()
+    photo_url = serializers.URLField(allow_null=True)
+    first_name = serializers.CharField()
+    last_name = serializers.CharField()
+    location = serializers.CharField()
+    professional = CommunityDirectoryListProfessionalSerializer()
+    skills = CommunityDirectoryTaxonomySerializer(many=True)
+    interests = CommunityDirectoryTaxonomySerializer(many=True)
+    relationship = CommunityConnectionRelationshipSerializer(required=False)
+
+
+class CommunityDirectoryContactSerializer(serializers.Serializer):
+    email = serializers.EmailField(allow_null=True)
+    mobile = serializers.CharField(allow_null=True, allow_blank=True)
 
 
 class CommunityDirectoryDetailSerializer(CommunityDirectoryListSerializer):

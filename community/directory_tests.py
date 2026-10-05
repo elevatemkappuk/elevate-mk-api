@@ -9,7 +9,7 @@ from rest_framework.test import APIClient
 
 from accounts.models import User
 from audit.models import AuditEvent
-from community.models import CommunityProfile
+from community.models import CommunityConnection, CommunityProfile
 from interests.models import Interest, PersonInterest
 from memberships.models import Membership
 from people.models import Person
@@ -95,6 +95,8 @@ class CommunityDirectoryApiTests(TestCase):
         self.assertEqual(result["professional"]["industry"], {"slug": "technology", "label": "Technology"})
         self.assertEqual(result["skills"], [{"slug": self.skill.slug, "label": self.skill.name}])
         self.assertEqual(result["interests"], [{"slug": self.interest.slug, "label": self.interest.name}])
+        self.assertEqual(result["relationship"]["state"], "NO_RELATIONSHIP")
+        self.assertTrue(result["relationship"]["can_connect"])
         self.assertNotIn("bio", result)
         self.assertNotIn("contact", result)
         self.assertNotIn("email", result)
@@ -104,6 +106,57 @@ class CommunityDirectoryApiTests(TestCase):
         self.assertLessEqual(len(queries), 6)
         self.assertEqual(CommunityProfile.objects.count(), before_profiles)
         self.assertEqual(AuditEvent.objects.count(), before_events)
+
+    def test_list_projects_viewer_relative_relationship_states_and_self_is_not_connectable(self):
+        target_id = self.target.person.community_profile.directory_id
+
+        def target_result():
+            response = self.client.get(self.list_url, {"page_size": 100})
+            return next(item for item in response.data["results"] if item["directory_id"] == str(target_id))
+
+        self.assertEqual(target_result()["relationship"]["state"], "NO_RELATIONSHIP")
+        connection = CommunityConnection.objects.create(
+            person_low_id=min(self.viewer.person_id, self.target.person_id),
+            person_high_id=max(self.viewer.person_id, self.target.person_id),
+            requester_id=self.viewer.person_id,
+            status=CommunityConnection.Status.PENDING,
+        )
+        self.assertEqual(target_result()["relationship"]["state"], "OUTGOING_PENDING")
+
+        connection.requester_id = self.target.person_id
+        connection.save(update_fields=["requester_id", "updated_at"])
+        self.assertEqual(target_result()["relationship"]["state"], "INCOMING_PENDING")
+        self.assertTrue(target_result()["relationship"]["can_accept"])
+
+        connection.status = CommunityConnection.Status.ACCEPTED
+        connection.accepted_at = timezone.now()
+        connection.save(update_fields=["status", "accepted_at", "updated_at"])
+        connected = target_result()["relationship"]
+        self.assertEqual(connected["state"], "CONNECTED")
+        self.assertFalse(connected["can_connect"])
+
+        self.viewer.person.community_profile.directory_visible = True
+        self.viewer.person.community_profile.save(update_fields=["directory_visible"])
+        response = self.client.get(self.list_url, {"page_size": 100})
+        self_result = next(item for item in response.data["results"] if item["directory_id"] == str(self.viewer.person.community_profile.directory_id))
+        self.assertEqual(self_result["relationship"]["state"], "NO_RELATIONSHIP")
+        self.assertFalse(self_result["relationship"]["can_connect"])
+        for result in response.data["results"]:
+            for field in ("email", "mobile", "contact", "person_id", "user_id", "membership_id", "requester_id", "audit"):
+                self.assertNotIn(field, result)
+
+    def test_relationship_projection_does_not_add_one_query_per_returned_member(self):
+        with CaptureQueriesContext(connection) as single_queries:
+            single_response = self.client.get(self.list_url, {"page_size": 100})
+        self.assertEqual(single_response.data["count"], 1)
+
+        for index in range(10):
+            self.create_member(f"Member{index}", "Location", f"member-{index}@example.com", visible=True)
+
+        with CaptureQueriesContext(connection) as many_queries:
+            many_response = self.client.get(self.list_url, {"page_size": 100})
+        self.assertEqual(many_response.data["count"], 11)
+        self.assertLessEqual(len(many_queries), len(single_queries) + 1)
 
     def test_eligible_member_is_visible_by_default(self):
         default_visible = self.create_member("Default", "Visible", "default-visible@example.com")
@@ -157,7 +210,14 @@ class CommunityDirectoryApiTests(TestCase):
     def test_hidden_unknown_archived_former_and_non_business_targets_are_not_found(self):
         hidden = self.create_member("Hidden", "Member", "hidden@example.com", visible=False)
         hidden_id = hidden.person.community_profile.directory_id
+        CommunityConnection.objects.create(
+            person_low_id=min(self.viewer.person_id, hidden.person_id),
+            person_high_id=max(self.viewer.person_id, hidden.person_id),
+            requester_id=self.viewer.person_id,
+            status=CommunityConnection.Status.PENDING,
+        )
         self.assertEqual(self.client.get(f"{self.list_url}{hidden_id}/").status_code, 404)
+        self.assertNotIn(str(hidden_id), {result["directory_id"] for result in self.client.get(self.list_url).data["results"]})
         self.assertEqual(self.client.get(f"{self.list_url}00000000-0000-0000-0000-000000000000/").status_code, 404)
 
         archived = self.create_member("Archived", "Member", "archived@example.com", visible=True)
@@ -189,6 +249,8 @@ class CommunityDirectoryApiTests(TestCase):
 
     def test_search_filters_pagination_and_invalid_taxonomy(self):
         second = self.create_member("Grace", "Hopper", "grace@example.com", visible=True)
+        second.person.location = "Bletchley Park, Milton Keynes"
+        second.person.save(update_fields=["location"])
         ProfessionalProfile.objects.create(person=second.person, industry=self.industry)
         response = self.client.get(self.list_url, {"q": "  ADA  ", "industry": "technology", "skill": self.skill.slug, "interest": self.interest.slug})
         self.assertEqual(response.status_code, 200)
@@ -196,6 +258,9 @@ class CommunityDirectoryApiTests(TestCase):
 
         response = self.client.get(self.list_url, {"q": "hopper"})
         self.assertEqual(response.data["count"], 1)
+        self.assertEqual(self.client.get(self.list_url, {"q": "bletchley"}).data["count"], 1)
+        self.assertEqual(self.client.get(self.list_url, {"q": "MILTON KEYNES"}).data["count"], 1)
+        self.assertEqual(self.client.get(self.list_url, {"q": "not-a-location"}).data["count"], 0)
         response = self.client.get(self.list_url, {"q": ""})
         self.assertEqual(response.data["count"], 2)
         response = self.client.get(self.list_url, {"page_size": 1})
