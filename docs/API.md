@@ -231,6 +231,7 @@ These endpoints are separate from the Staff CRM People API. Join, industry looku
 | `GET` | `/api/v1/community/account/` | Authenticated eligible Community member |
 | `POST` | `/api/v1/community/account/password/` | Authenticated eligible Community member; CSRF; scoped throttle |
 | `PATCH` | `/api/v1/community/account/mobile/` | Authenticated eligible Community member; CSRF; scoped throttle |
+| `PATCH` | `/api/v1/community/account/marketing-preference/` | Authenticated eligible Community member; CSRF; scoped throttle |
 | `GET` | `/api/v1/community/profile/` | Authenticated eligible Community member |
 | `PATCH` | `/api/v1/community/profile/` | Authenticated eligible Community member; CSRF |
 | `GET` | `/api/v1/community/profile/options/` | Authenticated eligible Community member |
@@ -264,6 +265,22 @@ add/change/remove operations audit the Person change and enqueue the coalesced
 `PERSON_PROFILE` synchronization path; no-ops do neither. The scope is
 `community_account_mobile`, default `10/hour`, configurable with
 `COMMUNITY_ACCOUNT_MOBILE_THROTTLE_RATE`.
+
+`PATCH /api/v1/community/account/marketing-preference/` accepts only
+`{"email_marketing": true}` or `{"email_marketing": false}`. It requires an
+authenticated eligible Community member and CSRF, and returns `200 OK` with
+the refreshed Account summary. Validation failures return
+`MARKETING_PREFERENCE_VALIDATION_ERROR` with a `fields` object. The endpoint
+records explicit EMAIL opt-in/opt-out decisions through the canonical
+marketing-preference service with source `COMMUNITY_SELF_SERVICE`, preserving
+append-only history and enqueueing the durable asynchronous
+`EMAIL_MARKETING_PREFERENCE` provider sync when the effective recording
+changes. `UNKNOWN` is represented by no preference row and is never converted
+merely by reading the Account page. The scope is
+`community_account_marketing`, default `10/hour`, configurable with
+`COMMUNITY_ACCOUNT_MARKETING_THROTTLE_RATE`. Marketing preference changes do
+not alter Person contact fields, Membership, CommunityProfile, Connect
+privacy, password state, or the `PERSON_PROFILE` sync path.
 
 ### API documentation endpoints
 

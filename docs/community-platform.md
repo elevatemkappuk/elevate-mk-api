@@ -325,6 +325,33 @@ with `COMMUNITY_ACCOUNT_MOBILE_THROTTLE_RATE`. Mobile editing does not alter
 `directory_visible`, `email_visible`, `mobile_visible`, membership, marketing
 preferences, account credentials, or identity ownership.
 
+## 8.3 Authenticated email marketing preference
+
+Eligible authenticated Community members can explicitly manage email updates
+from Account & Preferences with `PATCH
+/api/v1/community/account/marketing-preference/` and the deliberate-action DTO
+`{"email_marketing": true}` or `{"email_marketing": false}`. Raw internal
+states are not accepted. The refreshed Account summary remains authoritative
+and exposes the effective three-state model: `UNKNOWN`, `OPTED_IN`, or
+`OPTED_OUT`.
+
+`UNKNOWN` is represented by the absence of an explicit preference row. Reading
+the Account page does not create a preference, history, audit event, or provider
+job. A member choosing `true` records EMAIL/`OPTED_IN`; choosing `false` records
+EMAIL/`OPTED_OUT`. Both use source `COMMUNITY_SELF_SERVICE`, actor attribution
+to the authenticated User, the existing append-only history and audit actions,
+and the existing transactional/locking service semantics. Repeating the same
+state with the same source and actor is an idempotent no-op; changing state
+creates a new history record.
+
+Genuine changes enqueue the existing durable asynchronous
+`EMAIL_MARKETING_PREFERENCE` synchronization path. No synchronous Brevo call
+is made and no `PERSON_PROFILE` job is created for a marketing-only change.
+The dedicated `community_account_marketing` throttle defaults to `10/hour` and
+is configurable with `COMMUNITY_ACCOUNT_MARKETING_THROTTLE_RATE`. Email
+marketing preference is independent from Connect contact visibility
+(`directory_visible`, `email_visible`, and `mobile_visible`).
+
 ## 9. Community frontend state
 
 Current Angular routes and behavior:
@@ -427,7 +454,7 @@ Authenticated eligible members can update only:
 - CommunityProfile: `bio`;
 - relationships: `skills` and `interests`.
 
-Email, mobile, demographics, membership state, marketing preferences, tags,
+Email, mobile, demographics, membership state, tags,
 notes, staff roles, account state, provider state, and review provenance are
 outside the self-service mutation boundary. Skills and interests use active
 canonical slugs with replacement semantics: omitted means unchanged and `[]`

@@ -42,6 +42,7 @@ from community.serializers import (
     CommunityActivationSerializer,
     CommunityCurrentUserSerializer,
     CommunityAccountSerializer,
+    CommunityAccountMarketingPreferenceSerializer,
     CommunityPasswordChangeSerializer,
     CommunityMobileUpdateSerializer,
     CommunityProfileSerializer,
@@ -77,6 +78,7 @@ from community.services import (
     CommunityPasswordChangeError,
     CommunityMobileConflictError,
     update_community_mobile,
+    update_community_email_marketing_preference,
 )
 from community.directory import (
     CommunityDirectoryPagination,
@@ -887,5 +889,40 @@ class CommunityAccountMobileView(APIView):
             )
         return Response(
             CommunityAccountSerializer(build_community_account_summary_projection(user=person.user)).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+@method_decorator(csrf_protect, name="dispatch")
+class CommunityAccountMarketingPreferenceView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "community_account_marketing"
+
+    @extend_schema(
+        operation_id="community_account_marketing_preference_update",
+        summary="Update the authenticated Community member's email-marketing preference",
+        request=CommunityAccountMarketingPreferenceSerializer,
+        responses={200: CommunityAccountSerializer, 400: OpenApiResponse(description="Marketing preference validation failed."), 403: OpenApiResponse(description="Community access is unavailable."), 429: OpenApiResponse(description="Too many preference changes.")},
+        tags=["Community"],
+    )
+    def patch(self, request):
+        if not is_community_eligible_user(request.user):
+            return Response(
+                {"code": COMMUNITY_ACCESS_UNAVAILABLE_CODE, "detail": COMMUNITY_ACCESS_UNAVAILABLE_DETAIL},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        serializer = CommunityAccountMarketingPreferenceSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {"code": "MARKETING_PREFERENCE_VALIDATION_ERROR", "detail": "Please choose an email marketing preference.", "fields": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        update_community_email_marketing_preference(
+            user=request.user,
+            email_marketing=serializer.validated_data["email_marketing"],
+        )
+        return Response(
+            CommunityAccountSerializer(build_community_account_summary_projection(user=request.user)).data,
             status=status.HTTP_200_OK,
         )

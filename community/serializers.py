@@ -108,6 +108,18 @@ class CommunityAccountMobileSerializer(serializers.Serializer):
     masked = serializers.CharField(allow_null=True)
 
 
+class CommunityAccountMarketingPreferenceSerializer(serializers.Serializer):
+    email_marketing = serializers.BooleanField(required=True)
+
+    def validate(self, attrs):
+        unknown_fields = set(self.initial_data.keys()) - set(self.fields.keys())
+        if unknown_fields:
+            raise serializers.ValidationError({field: ["This field is not allowed."] for field in sorted(unknown_fields)})
+        if not isinstance(self.initial_data.get("email_marketing"), bool):
+            raise serializers.ValidationError({"email_marketing": ["This field must be a boolean."]})
+        return attrs
+
+
 class CommunityAccountMarketingSerializer(serializers.Serializer):
     state = serializers.ChoiceField(choices=("UNKNOWN", "OPTED_IN", "OPTED_OUT"))
 

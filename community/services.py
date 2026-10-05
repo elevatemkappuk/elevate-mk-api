@@ -15,7 +15,7 @@ from audit.models import AuditEvent
 from audit.services import record_audit_event
 from memberships.models import Membership
 from marketing_preferences.models import MarketingPreference
-from marketing_preferences.services import get_effective_marketing_preference, record_opt_in
+from marketing_preferences.services import get_effective_marketing_preference, record_opt_in, record_opt_out
 from people.models import Person
 from people.services import normalize_email, normalize_mobile, normalize_phone_for_community, normalize_phone_for_provider, PhoneNormalizationStatus
 from professional_profiles.models import Industry, ProfessionalProfile
@@ -98,6 +98,16 @@ def build_community_account_summary_projection(*, user):
         "email_marketing": {"state": preference.state},
         "password": {"configured": user.has_usable_password()},
     }
+
+
+def update_community_email_marketing_preference(*, user, email_marketing):
+    """Record an explicit member email-marketing decision through the canonical domain."""
+    recorder = record_opt_in if email_marketing else record_opt_out
+    return recorder(
+        person=user.person,
+        source=MarketingPreference.Source.COMMUNITY_SELF_SERVICE,
+        actor_user=user,
+    )
 
 
 def change_community_password(*, user, current_password, new_password, request):
