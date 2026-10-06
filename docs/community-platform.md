@@ -399,8 +399,8 @@ The verification endpoint never auto-logs in and logs out the current session
 when it belongs to the changed account. It does not change passwords,
 Membership, Profile, mobile, marketing preferences, or Connect state.
 
-The security email template is deliberately unset until approved. The required
-template name is `Elevate MK — Your Email Address Was Changed`, subject
+The security email uses configured template ID `30`. The required template
+name is `Elevate MK — Your Email Address Was Changed`, subject
 `Your Elevate MK account email was changed`, with only `first_name` as a dynamic
 parameter. It contains no active credential or verification URL.
 

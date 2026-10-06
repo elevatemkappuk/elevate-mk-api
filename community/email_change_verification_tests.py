@@ -17,7 +17,7 @@ from notifications.models import TransactionalEmailJob
 from people.models import Person
 
 
-@override_settings(BREVO_COMMUNITY_EMAIL_CHANGE_SECURITY_TEMPLATE_ID="security-template")
+@override_settings(BREVO_COMMUNITY_EMAIL_CHANGE_SECURITY_TEMPLATE_ID="30")
 class CommunityEmailChangeVerificationApiTests(TestCase):
     url = "/api/v1/community/account/email-change/verify/"
     password = "Current-password-123!"
@@ -79,7 +79,7 @@ class CommunityEmailChangeVerificationApiTests(TestCase):
         self.assertEqual(TransactionalEmailJob.objects.filter(email_change_request=self.change_request).count(), 2)
         self.assertEqual(verification_job.job_type, TransactionalEmailJob.JobType.COMMUNITY_EMAIL_CHANGE)
         self.assertEqual(security_job.recipient_email, "current@example.com")
-        self.assertEqual(security_job.template_id, "security-template")
+        self.assertEqual(security_job.template_id, "30")
         audit = AuditEvent.objects.get(action=AuditEvent.Action.COMMUNITY_EMAIL_CHANGED)
         self.assertEqual(audit.metadata["source"], "COMMUNITY_SELF_SERVICE")
         self.assertEqual(audit.actor_user_id, self.user.id)
@@ -172,5 +172,5 @@ class CommunityEmailChangeVerificationApiTests(TestCase):
         self.assertEqual(result.status, TransactionalEmailJob.Status.SENT)
         kwargs = send.call_args.kwargs
         self.assertEqual(kwargs["recipient_email"], "current@example.com")
-        self.assertEqual(kwargs["template_id"], "security-template")
+        self.assertEqual(kwargs["template_id"], "30")
         self.assertEqual(kwargs["template_params"], {"first_name": "Amina"})

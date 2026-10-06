@@ -335,8 +335,7 @@ ineligible, stale-snapshot, and collision cases share the generic
 `EMAIL_CHANGE_VERIFICATION_INVALID` response. The endpoint never auto-logs in;
 if the current session belongs to the changed account it is logged out.
 The old-email notification is configured by
-`BREVO_COMMUNITY_EMAIL_CHANGE_SECURITY_TEMPLATE_ID`, intentionally blank until
-its Brevo template is approved. Required template: `Elevate MK — Your Email
+`BREVO_COMMUNITY_EMAIL_CHANGE_SECURITY_TEMPLATE_ID`, default `30`. Required template: `Elevate MK — Your Email
 Address Was Changed`; subject: `Your Elevate MK account email was changed`;
 dynamic parameter: `first_name` only. It must not contain an active
 verification URL/token or password and should not unnecessarily expose the

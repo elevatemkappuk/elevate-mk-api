@@ -62,8 +62,7 @@ then queues the existing `PERSON_EMAIL_MIGRATION` job with immutable previous
 and requested email snapshots. It also queues a separate transactional
 security notification to the previous email address. That notification is
 independent of marketing consent and uses
-`BREVO_COMMUNITY_EMAIL_CHANGE_SECURITY_TEMPLATE_ID`, intentionally blank until
-the approved template exists. The required template is `Elevate MK — Your
+`BREVO_COMMUNITY_EMAIL_CHANGE_SECURITY_TEMPLATE_ID` (default `30`). The required template is `Elevate MK — Your
 Email Address Was Changed`, subject `Your Elevate MK account email was changed`,
 and dynamic parameter `first_name` only. It contains no active verification
 URL/token or password and should not unnecessarily expose the complete new
@@ -223,7 +222,7 @@ Settings are loaded from the backend environment in `config/settings.py`.
 | `BREVO_MARKETING_WEBHOOK_USERNAME` | Inbound webhook Basic Auth username | Empty by default; required to accept webhook traffic | Web process |
 | `BREVO_MARKETING_WEBHOOK_PASSWORD` | Inbound webhook Basic Auth password | Empty by default; required to accept webhook traffic | Web process |
 | `BREVO_COMMUNITY_EMAIL_CHANGE_TEMPLATE_ID` | Brevo transactional template for verified Community email changes | `29` by default; approved template override only | Transactional email worker |
-| `BREVO_COMMUNITY_EMAIL_CHANGE_SECURITY_TEMPLATE_ID` | Brevo transactional security notice sent to the previous email after verified completion | Blank until approved template is configured | Transactional email worker |
+| `BREVO_COMMUNITY_EMAIL_CHANGE_SECURITY_TEMPLATE_ID` | Brevo transactional security notice sent to the previous email after verified completion | `30` by default; approved template override only | Transactional email worker |
 | `BREVO_SYNC_WORKER_POLL_SECONDS` | Idle worker polling interval | Positive value; default `3.0` seconds | Worker |
 | `BREVO_SYNC_WORKER_BATCH_SIZE` | Maximum jobs claimed per polling batch | Positive value; default `20`, capped at `100` by worker validation | Worker |
 
