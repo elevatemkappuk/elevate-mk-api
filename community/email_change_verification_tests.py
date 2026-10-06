@@ -47,6 +47,16 @@ class CommunityEmailChangeVerificationApiTests(TestCase):
         )
 
     def test_valid_logged_out_verification_updates_both_identities_and_queues_durable_work(self):
+        verification_job = TransactionalEmailJob.objects.create(
+            email_change_request=self.change_request,
+            template_id="29",
+            recipient_email="new@example.com",
+            recipient_name="Amina Zulu",
+            first_name="Amina",
+            expires_in_hours=1,
+            expires_in_minutes=60,
+            job_type=TransactionalEmailJob.JobType.COMMUNITY_EMAIL_CHANGE,
+        )
         response = self.client.post(
             self.url,
             {"request_id": str(self.change_request.public_id), "token": self.raw_token},
@@ -65,6 +75,9 @@ class CommunityEmailChangeVerificationApiTests(TestCase):
         self.assertEqual(migration.previous_email, "current@example.com")
         self.assertEqual(migration.requested_email, "new@example.com")
         security_job = TransactionalEmailJob.objects.get(job_type=TransactionalEmailJob.JobType.COMMUNITY_EMAIL_CHANGE_SECURITY)
+        verification_job.refresh_from_db()
+        self.assertEqual(TransactionalEmailJob.objects.filter(email_change_request=self.change_request).count(), 2)
+        self.assertEqual(verification_job.job_type, TransactionalEmailJob.JobType.COMMUNITY_EMAIL_CHANGE)
         self.assertEqual(security_job.recipient_email, "current@example.com")
         self.assertEqual(security_job.template_id, "security-template")
         audit = AuditEvent.objects.get(action=AuditEvent.Action.COMMUNITY_EMAIL_CHANGED)

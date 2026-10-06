@@ -15,7 +15,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='transactionalemailjob',
             name='email_change_request',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='transactional_email_job', to='community.communityemailchangerequest'),
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='transactional_email_jobs', to='community.communityemailchangerequest'),
         ),
         migrations.AlterField(
             model_name='transactionalemailjob',

@@ -30,7 +30,7 @@ class TransactionalEmailJob(models.Model):
         on_delete=models.PROTECT,
         null=True,
         blank=True,
-        related_name="transactional_email_job",
+        related_name="transactional_email_jobs",
     )
     template_id = models.CharField(max_length=100)
     recipient_email = models.EmailField()
