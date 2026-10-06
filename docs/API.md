@@ -230,6 +230,7 @@ These endpoints are separate from the Staff CRM People API. Join, industry looku
 | `GET` | `/api/v1/community/me/` | Authenticated Community session |
 | `GET` | `/api/v1/community/account/` | Authenticated eligible Community member |
 | `POST` | `/api/v1/community/account/password/` | Authenticated eligible Community member; CSRF; scoped throttle |
+| `POST` | `/api/v1/community/account/email-change/` | Authenticated eligible Community member; CSRF; scoped throttle |
 | `PATCH` | `/api/v1/community/account/mobile/` | Authenticated eligible Community member; CSRF; scoped throttle |
 | `PATCH` | `/api/v1/community/account/marketing-preference/` | Authenticated eligible Community member; CSRF; scoped throttle |
 | `GET` | `/api/v1/community/profile/` | Authenticated eligible Community member |
@@ -281,6 +282,36 @@ merely by reading the Account page. The scope is
 `COMMUNITY_ACCOUNT_MARKETING_THROTTLE_RATE`. Marketing preference changes do
 not alter Person contact fields, Membership, CommunityProfile, Connect
 privacy, password state, or the `PERSON_PROFILE` sync path.
+
+`POST /api/v1/community/account/email-change/` starts the A5.1 verified email
+change request flow. It accepts `new_email` and `current_password` and
+requires an authenticated eligible Community member, a matching
+`User.email`/`Person.primary_email` identity, and the current password.
+Comparison is normalized. The current email returns `200 OK` with
+`{"status":"UNCHANGED","detail":"That is already your account email."}`
+and creates no request, job, or audit event. A different available email
+returns `202 Accepted` with:
+
+```json
+{"status":"VERIFICATION_REQUIRED","detail":"Check your new email address for a verification link."}
+```
+
+The response does not change `User.email` or `Person.primary_email`; A5.1 has
+no completion endpoint. Collisions against any other `User.email` or
+`Person.primary_email` receive a generic unavailable response. The dedicated
+`community_account_email_change` throttle defaults to `5/hour` and is
+configured with `COMMUNITY_ACCOUNT_EMAIL_CHANGE_THROTTLE_RATE`.
+
+Each member has one current request; a later request supersedes the previous
+one while historical rows remain. Only a hash of the raw verification token
+is persisted. The worker mints the raw token immediately before delivery and
+sends only to the requested new email. It uses
+`BREVO_COMMUNITY_EMAIL_CHANGE_TEMPLATE_ID`, default `29`, with exactly
+`first_name`, `verification_url`, and `expires_in_minutes` parameters. The
+default expiry is 60 minutes via `COMMUNITY_EMAIL_CHANGE_EXPIRY_MINUTES`.
+This security email is independent of marketing preference and is delivered
+asynchronously; no old-email notification, forced logout, marketing mutation,
+or Brevo marketing sync is performed.
 
 ### API documentation endpoints
 

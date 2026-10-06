@@ -352,6 +352,35 @@ is configurable with `COMMUNITY_ACCOUNT_MARKETING_THROTTLE_RATE`. Email
 marketing preference is independent from Connect contact visibility
 (`directory_visible`, `email_visible`, and `mobile_visible`).
 
+## 8.4 Verified email change request (A5.1)
+
+An eligible authenticated Community member can request a verified email change
+with `POST /api/v1/community/account/email-change/`. The CSRF-protected
+request contains `new_email` and `current_password`. The backend requires the
+current password and refuses to proceed if canonical `User.email` and
+`Person.primary_email` are inconsistent. A normalized submission equal to the
+current email is a `200 OK` no-op; an available different email creates a
+request-only `202 Accepted` lifecycle:
+
+```json
+{"status":"VERIFICATION_REQUIRED","detail":"Check your new email address for a verification link."}
+```
+
+The response never changes either canonical email field. A later request
+supersedes the member's previous current request while historical rows remain.
+Only a SHA-256 token hash is persisted. The transactional worker mints the
+raw token immediately before sending to the requested new address only. The
+configured template is `BREVO_COMMUNITY_EMAIL_CHANGE_TEMPLATE_ID` (default
+Brevo template `29`, “Verify your new email address”) and receives exactly
+`first_name`, `verification_url`, and `expires_in_minutes`. The default link
+expiry is 60 minutes via `COMMUNITY_EMAIL_CHANGE_EXPIRY_MINUTES`.
+
+This security email is independent of marketing consent. A5.1 does not yet
+complete the change, send an old-email notification, force logout, mutate
+marketing preferences, or enqueue a Brevo marketing synchronization job. The
+completion endpoint and old-email security notification are deferred to a
+later milestone.
+
 ## 9. Community frontend state
 
 Current Angular routes and behavior:

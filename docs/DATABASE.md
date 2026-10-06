@@ -198,6 +198,41 @@ Purpose:
 - `is_usable` additionally requires a stored token hash and an expiry later than the current time.
 - Invitation activation does not restore archived Persons or reactivate former Memberships.
 
+## Model: `community.CommunityEmailChangeRequest`
+
+Database table: `community_communityemailchangerequest`
+
+Purpose:
+- Stores the request-only lifecycle for an authenticated member's verified
+  email change. It does not itself change either canonical email field.
+
+### Fields
+| Field | Type | Null / Blank | Default / Automatic | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | `BigAutoField` | not null | auto-created primary key | Internal row identity |
+| `public_id` | `UUIDField` | not null | `uuid.uuid4` | Public verification-request identifier; unique and immutable |
+| `person` | `ForeignKey(people.Person)` | not null | none | Canonical Person; `PROTECT` |
+| `user` | `ForeignKey(accounts.User)` | not null | none | Authenticated Community owner; `PROTECT` |
+| `previous_email` | `EmailField` | not null | none | Normalized email at request time |
+| `requested_email` | `EmailField` | not null | none | Normalized proposed new email |
+| `token_hash` | `CharField(max_length=64)` | null, blank | none | SHA-256 hash; raw token is never persisted |
+| `created_at` / `updated_at` | `DateTimeField` | not null | automatic | Lifecycle timestamps |
+| `expires_at` | `DateTimeField` | not null | none | Default 60-minute validity |
+| `used_at` | `DateTimeField` | null, blank | none | Reserved for later completion flow |
+| `revoked_at` | `DateTimeField` | null, blank | none | Lifecycle invalidation marker |
+| `superseded_at` | `DateTimeField` | null, blank | none | Set when a later request replaces it |
+
+### Constraints and behavior
+
+- A conditional unique constraint permits one current request per Person while
+  `used_at`, `revoked_at`, and `superseded_at` are null.
+- `token_hash` is indexed; raw verification tokens and complete URLs are not
+  stored in the request or audit metadata.
+- A durable `notifications.TransactionalEmailJob` references the request and
+  requires exactly one of an activation invitation or email-change request.
+- A5.1 is request-only: `User.email` and `Person.primary_email` remain
+  unchanged until a future completion endpoint is implemented.
+
 ## Model: `community.CommunityProfile`
 Database table: `community_communityprofile`
 

@@ -49,3 +49,14 @@ def acquire_community_mobile_lock(mobile: str) -> bool:
     with connection.cursor() as cursor:
         cursor.execute("SELECT pg_advisory_xact_lock(%s)", [community_mobile_lock_key(mobile)])
     return True
+
+
+def acquire_community_email_change_lock(email: str) -> bool:
+    """Serialize authenticated email-change collision checks for one email."""
+    if connection.vendor != "postgresql":
+        if settings.DEBUG:
+            return False
+        raise RuntimeError("Community email-change locking requires PostgreSQL.")
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_advisory_xact_lock(%s)", [community_join_email_lock_key(email)])
+    return True

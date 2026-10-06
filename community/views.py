@@ -43,6 +43,7 @@ from community.serializers import (
     CommunityCurrentUserSerializer,
     CommunityAccountSerializer,
     CommunityAccountMarketingPreferenceSerializer,
+    CommunityEmailChangeRequestSerializer,
     CommunityPasswordChangeSerializer,
     CommunityMobileUpdateSerializer,
     CommunityProfileSerializer,
@@ -79,6 +80,8 @@ from community.services import (
     CommunityMobileConflictError,
     update_community_mobile,
     update_community_email_marketing_preference,
+    request_community_email_change,
+    CommunityEmailChangeError,
 )
 from community.directory import (
     CommunityDirectoryPagination,
@@ -848,6 +851,34 @@ class CommunityAccountPasswordView(APIView):
             )
         update_session_auth_hash(request, changed_user)
         return Response({"detail": "Your password has been changed successfully."}, status=status.HTTP_200_OK)
+
+
+@method_decorator(csrf_protect, name="dispatch")
+class CommunityAccountEmailChangeView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "community_account_email_change"
+
+    def post(self, request):
+        if not is_community_eligible_user(request.user):
+            return Response({"code": COMMUNITY_ACCESS_UNAVAILABLE_CODE, "detail": COMMUNITY_ACCESS_UNAVAILABLE_DETAIL}, status=status.HTTP_403_FORBIDDEN)
+        serializer = CommunityEmailChangeRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({"code": "EMAIL_CHANGE_VALIDATION_ERROR", "detail": "Please enter a valid new email and current password.", "fields": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            result = request_community_email_change(
+                user=request.user,
+                new_email=serializer.validated_data["new_email"],
+                current_password=serializer.validated_data["current_password"],
+                request=request,
+            )
+        except CommunityEmailChangeError as error:
+            if error.code == "COMMUNITY_ACCESS_UNAVAILABLE":
+                return Response({"code": COMMUNITY_ACCESS_UNAVAILABLE_CODE, "detail": COMMUNITY_ACCESS_UNAVAILABLE_DETAIL}, status=status.HTTP_403_FORBIDDEN)
+            fields = {error.field: error.messages} if error.field else {}
+            return Response({"code": error.code, "detail": error.messages[0], "fields": fields}, status=status.HTTP_400_BAD_REQUEST)
+        response_status = status.HTTP_200_OK if result["status"] == "UNCHANGED" else status.HTTP_202_ACCEPTED
+        return Response(result, status=response_status)
 
 
 @method_decorator(csrf_protect, name="dispatch")

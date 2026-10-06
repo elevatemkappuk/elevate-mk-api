@@ -25,8 +25,8 @@ from brevo_marketing.jobs import PERSON_PROFILE_SYNC
 from brevo_marketing.routing import BREVO_PROVIDER
 from external_references.services import enqueue_coalesced_person_sync_job
 
-from community.models import CommunityAccountInvitation, CommunityProfile, JoinSubmissionReceipt
-from community.locking import acquire_community_join_email_lock, acquire_community_mobile_lock
+from community.models import CommunityAccountInvitation, CommunityEmailChangeRequest, CommunityProfile, JoinSubmissionReceipt
+from community.locking import acquire_community_email_change_lock, acquire_community_join_email_lock, acquire_community_mobile_lock
 from notifications.models import TransactionalEmailJob
 from django.core.files.base import ContentFile
 
@@ -58,6 +58,14 @@ class CommunityPasswordChangeError(Exception):
 
 class CommunityMobileConflictError(Exception):
     pass
+
+
+class CommunityEmailChangeError(Exception):
+    def __init__(self, *, code, field=None, messages=None):
+        self.code = code
+        self.field = field
+        self.messages = messages or []
+        super().__init__(self.messages[0] if self.messages else code)
 
 
 def is_community_eligible_user(user):
@@ -108,6 +116,55 @@ def update_community_email_marketing_preference(*, user, email_marketing):
         source=MarketingPreference.Source.COMMUNITY_SELF_SERVICE,
         actor_user=user,
     )
+
+
+def build_community_email_change_verification_url(*, request, token):
+    return f"{settings.COMMUNITY_FRONTEND_URL.rstrip('/')}/community/account/verify-email/{request.public_id}/{token}"
+
+
+def request_community_email_change(*, user, new_email, current_password, request):
+    """Create a request-only email change and durable verification delivery work."""
+    user_model = get_user_model()
+    normalized_email = normalize_email(new_email)
+    with transaction.atomic():
+        locked_user = user_model.objects.select_for_update().select_related("person").get(pk=user.pk)
+        person = Person.objects.select_for_update().get(pk=locked_user.person_id)
+        if not is_community_eligible_user(locked_user):
+            raise CommunityEmailChangeError(code="COMMUNITY_ACCESS_UNAVAILABLE", messages=["Community access is not available for this account."])
+        if normalize_email(locked_user.email) != normalize_email(person.primary_email):
+            raise CommunityEmailChangeError(code="EMAIL_CHANGE_SUPPORT_REQUIRED", messages=["Your account email details need support before they can be changed."])
+        if not locked_user.check_password(current_password):
+            raise CommunityEmailChangeError(code="INVALID_CURRENT_PASSWORD", field="current_password", messages=["The current password is incorrect."])
+        if normalized_email == normalize_email(locked_user.email):
+            return {"status": "UNCHANGED", "detail": "That is already your account email."}
+        acquire_community_email_change_lock(normalized_email)
+        if (
+            user_model.objects.filter(email=normalized_email).exclude(pk=locked_user.pk).exists()
+            or Person.objects.filter(primary_email__iexact=normalized_email).exclude(pk=person.pk).exists()
+        ):
+            raise CommunityEmailChangeError(code="EMAIL_CHANGE_UNAVAILABLE", messages=["That email address is unavailable. Please try another email address."])
+        now = timezone.now()
+        CommunityEmailChangeRequest.objects.filter(
+            person=person, used_at__isnull=True, revoked_at__isnull=True, superseded_at__isnull=True,
+        ).update(superseded_at=now, updated_at=now)
+        change_request = CommunityEmailChangeRequest.objects.create(
+            person=person, user=locked_user, previous_email=normalize_email(locked_user.email), requested_email=normalized_email,
+            expires_at=now + timedelta(minutes=settings.COMMUNITY_EMAIL_CHANGE_EXPIRY_MINUTES),
+        )
+        TransactionalEmailJob.objects.create(
+            email_change_request=change_request, template_id=settings.BREVO_COMMUNITY_EMAIL_CHANGE_TEMPLATE_ID,
+            recipient_email=normalized_email, recipient_name=f"{person.first_name} {person.last_name}".strip(),
+            first_name=person.first_name, expires_in_hours=1,
+            expires_in_minutes=settings.COMMUNITY_EMAIL_CHANGE_EXPIRY_MINUTES,
+            job_type=TransactionalEmailJob.JobType.COMMUNITY_EMAIL_CHANGE,
+        )
+        record_audit_event(
+            action=AuditEvent.Action.COMMUNITY_EMAIL_CHANGE_REQUESTED,
+            actor_user=locked_user, entity_type="CommunityEmailChangeRequest", entity_id=change_request.public_id,
+            metadata={"source": "COMMUNITY_SELF_SERVICE", "request_id": str(change_request.public_id)},
+            request_id=getattr(request, "request_id", None),
+        )
+        return {"status": "VERIFICATION_REQUIRED", "detail": "Check your new email address for a verification link."}
 
 
 def change_community_password(*, user, current_password, new_password, request):

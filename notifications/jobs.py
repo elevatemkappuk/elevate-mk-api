@@ -11,8 +11,8 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 
-from community.models import CommunityAccountInvitation
-from community.services import build_community_activation_url
+from community.models import CommunityAccountInvitation, CommunityEmailChangeRequest
+from community.services import build_community_activation_url, build_community_email_change_verification_url
 from notifications.exceptions import TransactionalEmailConfigurationError, TransactionalEmailError
 from notifications.models import TransactionalEmailJob
 from notifications.services import send_transactional_email
@@ -94,11 +94,7 @@ def process_next_transactional_email_job():
             recipient_email=prepared["recipient_email"],
             recipient_name=prepared["recipient_name"],
             template_id=prepared["template_id"],
-            template_params={
-                "first_name": prepared["first_name"],
-                "activation_url": prepared["activation_url"],
-                "expires_in_hours": prepared["expires_in_hours"],
-            },
+            template_params=prepared["template_params"],
         )
     except TransactionalEmailConfigurationError:
         return _record_definitive_failure(job.id, "TRANSACTIONAL_EMAIL_CONFIGURATION")
@@ -118,7 +114,6 @@ def _claim_next_job():
     now = timezone.now()
     stale_before = now - timedelta(seconds=settings.TRANSACTIONAL_EMAIL_JOB_LEASE_SECONDS)
     TransactionalEmailJob.objects.filter(
-        job_type=TransactionalEmailJob.JobType.COMMUNITY_ACTIVATION,
         status=TransactionalEmailJob.Status.PROCESSING,
         locked_at__lt=stale_before,
     ).update(
@@ -131,7 +126,6 @@ def _claim_next_job():
     job = (
         TransactionalEmailJob.objects.select_for_update(skip_locked=True)
         .filter(
-            job_type=TransactionalEmailJob.JobType.COMMUNITY_ACTIVATION,
             status=TransactionalEmailJob.Status.PENDING,
             available_at__lte=now,
         )
@@ -151,9 +145,11 @@ def _claim_next_job():
 
 @transaction.atomic
 def _prepare_send(job_id):
-    invitation_id = TransactionalEmailJob.objects.values_list("invitation_id", flat=True).get(pk=job_id)
+    job = TransactionalEmailJob.objects.select_for_update().get(pk=job_id)
+    if job.job_type == TransactionalEmailJob.JobType.COMMUNITY_EMAIL_CHANGE:
+        return _prepare_email_change_send(job)
+    invitation_id = job.invitation_id
     invitation = CommunityAccountInvitation.objects.select_for_update().get(pk=invitation_id)
-    job = TransactionalEmailJob.objects.select_for_update().select_related("invitation__person").get(pk=job_id)
     person = Person.objects.select_for_update().get(pk=invitation.person_id)
     user = get_user_model().objects.select_for_update().filter(person_id=person.id).first()
 
@@ -172,7 +168,34 @@ def _prepare_send(job_id):
         "first_name": job.first_name,
         "template_id": job.template_id,
         "expires_in_hours": job.expires_in_hours,
-        "activation_url": build_community_activation_url(invitation=invitation, token=raw_token),
+        "template_params": {
+            "first_name": job.first_name,
+            "activation_url": build_community_activation_url(invitation=invitation, token=raw_token),
+            "expires_in_hours": job.expires_in_hours,
+        },
+    }
+
+
+def _prepare_email_change_send(job):
+    change_request = CommunityEmailChangeRequest.objects.select_for_update().select_related("person", "user").get(pk=job.email_change_request_id)
+    if not change_request.is_current or change_request.expires_at <= timezone.now():
+        _cancel_job(job, "EMAIL_CHANGE_NOT_CURRENT")
+        return None
+    if not change_request.user.is_active or not change_request.user.has_usable_password():
+        _cancel_job(job, "EMAIL_CHANGE_NOT_ELIGIBLE")
+        return None
+    raw_token = secrets.token_urlsafe(32)
+    change_request.token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+    change_request.save(update_fields=["token_hash", "updated_at"])
+    return {
+        "recipient_email": job.recipient_email,
+        "recipient_name": job.recipient_name,
+        "template_id": job.template_id,
+        "template_params": {
+            "first_name": job.first_name,
+            "verification_url": build_community_email_change_verification_url(request=change_request, token=raw_token),
+            "expires_in_minutes": job.expires_in_minutes or 60,
+        },
     }
 
 

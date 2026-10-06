@@ -144,6 +144,24 @@ class CommunityPasswordChangeSerializer(serializers.Serializer):
         return attrs
 
 
+class CommunityEmailChangeRequestSerializer(serializers.Serializer):
+    new_email = serializers.EmailField(write_only=True)
+    current_password = serializers.CharField(write_only=True, trim_whitespace=False)
+
+    def to_internal_value(self, data):
+        data = dict(data)
+        if isinstance(data.get("new_email"), str):
+            data["new_email"] = data["new_email"].strip()
+        return super().to_internal_value(data)
+
+    def validate(self, attrs):
+        unknown_fields = set(self.initial_data.keys()) - set(self.fields.keys())
+        if unknown_fields:
+            raise serializers.ValidationError({field: ["This field is not allowed."] for field in sorted(unknown_fields)})
+        attrs["new_email"] = attrs["new_email"].strip().lower()
+        return attrs
+
+
 class CommunityMobileUpdateSerializer(serializers.Serializer):
     mobile = serializers.CharField(max_length=50, allow_blank=True)
     phone_region = serializers.CharField(max_length=2, required=False, allow_blank=True)

@@ -47,7 +47,15 @@ python manage.py process_brevo_sync_jobs --watch
 ```
 
 Brevo transactional email, implemented under `notifications/`, is logically
-separate from marketing contact synchronization and remains unchanged.
+separate from marketing contact synchronization. Community activation and the
+A5.1 verified email-change request use the durable transactional queue and do
+not require marketing consent. The verified email-change email is sent only
+to the requested new address using template ID `29` by default, configured as
+`BREVO_COMMUNITY_EMAIL_CHANGE_TEMPLATE_ID`. Its exact template parameters are
+`first_name`, `verification_url`, and `expires_in_minutes`. The worker mints
+the raw token immediately before delivery; only its hash is persisted. No
+synchronous Brevo call is made by the account endpoint, and A5.1 does not
+change the canonical Person/User email or create a marketing sync job.
 
 Mailchimp is frozen as a rollback/reference provider. `MAILCHIMP` jobs and
 references are not consumed by the automatic Brevo worker, and no new
@@ -202,6 +210,7 @@ Settings are loaded from the backend environment in `config/settings.py`.
 | `MARKETING_SYNC_PROVIDER` | Active marketing provider selector | `BREVO`; unsupported values fail checks/runtime | Web and worker |
 | `BREVO_MARKETING_WEBHOOK_USERNAME` | Inbound webhook Basic Auth username | Empty by default; required to accept webhook traffic | Web process |
 | `BREVO_MARKETING_WEBHOOK_PASSWORD` | Inbound webhook Basic Auth password | Empty by default; required to accept webhook traffic | Web process |
+| `BREVO_COMMUNITY_EMAIL_CHANGE_TEMPLATE_ID` | Brevo transactional template for verified Community email changes | `29` by default; approved template override only | Transactional email worker |
 | `BREVO_SYNC_WORKER_POLL_SECONDS` | Idle worker polling interval | Positive value; default `3.0` seconds | Worker |
 | `BREVO_SYNC_WORKER_BATCH_SIZE` | Maximum jobs claimed per polling batch | Positive value; default `20`, capped at `100` by worker validation | Worker |
 

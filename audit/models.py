@@ -51,6 +51,7 @@ class AuditEvent(models.Model):
         ACCOUNT_REENABLED = "ACCOUNT_REENABLED", "Account reenabled"
         PASSWORD_CHANGED = "PASSWORD_CHANGED", "Password changed"
         PASSWORD_RESET = "PASSWORD_RESET", "Password reset"
+        COMMUNITY_EMAIL_CHANGE_REQUESTED = "COMMUNITY_EMAIL_CHANGE_REQUESTED", "Community email change requested"
         COMMUNITY_ACCOUNT_ACTIVATED = "COMMUNITY_ACCOUNT_ACTIVATED", "Community account activated"
         CONNECTION_REQUESTED = "CONNECTION_REQUESTED", "Connection requested"
         CONNECTION_ACCEPTED = "CONNECTION_ACCEPTED", "Connection accepted"

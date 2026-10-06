@@ -183,6 +183,9 @@ follows:
 | `COMMUNITY_ACTIVATION_THROTTLE_RATE` | `10/hour` | `10/hour` |
 | `COMMUNITY_LOGIN_THROTTLE_RATE` | `10/hour` | `10/hour` |
 | `BREVO_COMMUNITY_ACTIVATION_TEMPLATE_ID` | Approved transactional activation template ID | Approved staging transactional activation template ID |
+| `BREVO_COMMUNITY_EMAIL_CHANGE_TEMPLATE_ID` | Approved “Verify your new email address” transactional template; default implementation value `29` | `29` unless staging uses an approved alternate template |
+| `COMMUNITY_EMAIL_CHANGE_EXPIRY_MINUTES` | Verified email-change link lifetime | `60` |
+| `COMMUNITY_ACCOUNT_EMAIL_CHANGE_THROTTLE_RATE` | Authenticated email-change request throttle | `5/hour` |
 | `TRANSACTIONAL_EMAIL_WORKER_POLL_SECONDS` | `3` | `3` |
 | `TRANSACTIONAL_EMAIL_WORKER_BATCH_SIZE` | `20` | `20` |
 | `TRANSACTIONAL_EMAIL_JOB_LEASE_SECONDS` | `900` | `900` |
@@ -254,7 +257,7 @@ python manage.py process_background_jobs --watch
 This one process services both durable queues while keeping their models,
 processors, retry semantics, and lifecycle independent:
 
-- `TransactionalEmailJob` for Community activation email;
+- `TransactionalEmailJob` for Community activation and verified email-change email;
 - `ExternalPersonSyncJob` for Brevo marketing synchronization.
 
 The existing domain-specific commands remain available for diagnostics and

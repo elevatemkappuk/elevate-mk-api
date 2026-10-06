@@ -185,3 +185,45 @@ class CommunityAccountInvitation(models.Model):
 
     def __str__(self):
         return f"Community activation for Person {self.person_id} ({self.intended_email})"
+
+
+class CommunityEmailChangeRequest(models.Model):
+    """Pending, request-only lifecycle for a member email change."""
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    person = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="community_email_change_requests")
+    user = models.ForeignKey("accounts.User", on_delete=models.PROTECT, related_name="community_email_change_requests")
+    previous_email = models.EmailField()
+    requested_email = models.EmailField()
+    token_hash = models.CharField(max_length=64, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    superseded_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["token_hash"], name="comm_email_change_token_idx"),
+            models.Index(fields=["person", "expires_at", "used_at", "revoked_at", "superseded_at"], name="comm_email_change_state_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["person"],
+                condition=models.Q(used_at__isnull=True, revoked_at__isnull=True, superseded_at__isnull=True),
+                name="community_one_current_email_change",
+            ),
+        ]
+
+    @property
+    def is_current(self):
+        return self.used_at is None and self.revoked_at is None and self.superseded_at is None
+
+    @property
+    def is_usable(self):
+        return self.is_current and self.token_hash is not None and self.expires_at > timezone.now()
+
+    def __str__(self):
+        return f"Community email change {self.public_id} for Person {self.person_id}"
