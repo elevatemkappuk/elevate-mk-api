@@ -228,10 +228,22 @@ Purpose:
   `used_at`, `revoked_at`, and `superseded_at` are null.
 - `token_hash` is indexed; raw verification tokens and complete URLs are not
   stored in the request or audit metadata.
-- A durable `notifications.TransactionalEmailJob` references the request and
-  requires exactly one of an activation invitation or email-change request.
-- A5.1 is request-only: `User.email` and `Person.primary_email` remain
-  unchanged until a future completion endpoint is implemented.
+- Durable `notifications.TransactionalEmailJob` rows reference the request;
+  one request may have its verification-delivery job and, after completion,
+  its old-email security-notification job. Each job still requires exactly one
+  of an activation invitation or email-change request.
+- A5.1 creates the request without changing canonical emails. A5.2 completion
+  atomically updates both canonical email fields, marks `used_at`, and queues
+  the migration/security work.
+
+### A5.2 completion invariants
+
+- The verification endpoint performs the final snapshot, eligibility, collision,
+  and advisory-lock checks inside one transaction.
+- `used_at` is written only with the canonical identity update. A used request
+  cannot be completed again.
+- The migration job stores immutable previous/requested email snapshots;
+  notification jobs store no token or URL.
 
 ## Model: `community.CommunityProfile`
 Database table: `community_communityprofile`

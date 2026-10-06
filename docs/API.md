@@ -231,6 +231,7 @@ These endpoints are separate from the Staff CRM People API. Join, industry looku
 | `GET` | `/api/v1/community/account/` | Authenticated eligible Community member |
 | `POST` | `/api/v1/community/account/password/` | Authenticated eligible Community member; CSRF; scoped throttle |
 | `POST` | `/api/v1/community/account/email-change/` | Authenticated eligible Community member; CSRF; scoped throttle |
+| `POST` | `/api/v1/community/account/email-change/verify/` | Public-capable; CSRF; scoped throttle; request ID and token required |
 | `PATCH` | `/api/v1/community/account/mobile/` | Authenticated eligible Community member; CSRF; scoped throttle |
 | `PATCH` | `/api/v1/community/account/marketing-preference/` | Authenticated eligible Community member; CSRF; scoped throttle |
 | `GET` | `/api/v1/community/profile/` | Authenticated eligible Community member |
@@ -297,7 +298,7 @@ returns `202 Accepted` with:
 ```
 
 The response does not change `User.email` or `Person.primary_email`; A5.1 has
-no completion endpoint. Collisions against any other `User.email` or
+no completion until the verification endpoint is used. Collisions against any other `User.email` or
 `Person.primary_email` receive a generic unavailable response. The dedicated
 `community_account_email_change` throttle defaults to `5/hour` and is
 configured with `COMMUNITY_ACCOUNT_EMAIL_CHANGE_THROTTLE_RATE`.
@@ -310,8 +311,36 @@ sends only to the requested new email. It uses
 `first_name`, `verification_url`, and `expires_in_minutes` parameters. The
 default expiry is 60 minutes via `COMMUNITY_EMAIL_CHANGE_EXPIRY_MINUTES`.
 This security email is independent of marketing preference and is delivered
-asynchronously; no old-email notification, forced logout, marketing mutation,
-or Brevo marketing sync is performed.
+asynchronously; no old-email notification is sent at request time, and no
+canonical identity, marketing preference, or Brevo marketing state changes at
+request time.
+
+`POST /api/v1/community/account/email-change/verify/` accepts exactly
+`{"request_id": "<public UUID>", "token": "<raw token>"}` and is callable
+without an authenticated session. It is CSRF-protected and rate-limited by
+`community_account_email_change_verify` (default `10/hour`). A valid current
+request atomically updates both `Person.primary_email` and `User.email`, marks
+the request used, records `COMMUNITY_EMAIL_CHANGED`, and queues the existing
+asynchronous `PERSON_EMAIL_MIGRATION` synchronization job. It also queues a
+durable security notification to the previous email address.
+
+The success response is:
+
+```json
+{"status":"EMAIL_UPDATED","detail":"Your email address has been verified and updated."}
+```
+
+Malformed, unknown, wrong, expired, superseded, revoked, used, unprepared,
+ineligible, stale-snapshot, and collision cases share the generic
+`EMAIL_CHANGE_VERIFICATION_INVALID` response. The endpoint never auto-logs in;
+if the current session belongs to the changed account it is logged out.
+The old-email notification is configured by
+`BREVO_COMMUNITY_EMAIL_CHANGE_SECURITY_TEMPLATE_ID`, intentionally blank until
+its Brevo template is approved. Required template: `Elevate MK — Your Email
+Address Was Changed`; subject: `Your Elevate MK account email was changed`;
+dynamic parameter: `first_name` only. It must not contain an active
+verification URL/token or password and should not unnecessarily expose the
+complete new email address.
 
 ### API documentation endpoints
 

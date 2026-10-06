@@ -8,6 +8,7 @@ class TransactionalEmailJob(models.Model):
     class JobType(models.TextChoices):
         COMMUNITY_ACTIVATION = "COMMUNITY_ACTIVATION", "Community activation"
         COMMUNITY_EMAIL_CHANGE = "COMMUNITY_EMAIL_CHANGE", "Community email change verification"
+        COMMUNITY_EMAIL_CHANGE_SECURITY = "COMMUNITY_EMAIL_CHANGE_SECURITY", "Community email change security notification"
 
     class Status(models.TextChoices):
         PENDING = "PENDING", "Pending"
@@ -24,7 +25,7 @@ class TransactionalEmailJob(models.Model):
         blank=True,
         related_name="transactional_email_job",
     )
-    email_change_request = models.OneToOneField(
+    email_change_request = models.ForeignKey(
         "community.CommunityEmailChangeRequest",
         on_delete=models.PROTECT,
         null=True,

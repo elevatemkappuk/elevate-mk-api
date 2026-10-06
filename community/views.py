@@ -1,7 +1,7 @@
 import logging
 
 from django.conf import settings
-from django.contrib.auth import get_user_model, login, password_validation, update_session_auth_hash
+from django.contrib.auth import get_user_model, login, logout, password_validation, update_session_auth_hash
 from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
@@ -44,6 +44,7 @@ from community.serializers import (
     CommunityAccountSerializer,
     CommunityAccountMarketingPreferenceSerializer,
     CommunityEmailChangeRequestSerializer,
+    CommunityEmailChangeVerificationSerializer,
     CommunityPasswordChangeSerializer,
     CommunityMobileUpdateSerializer,
     CommunityProfileSerializer,
@@ -82,6 +83,8 @@ from community.services import (
     update_community_email_marketing_preference,
     request_community_email_change,
     CommunityEmailChangeError,
+    complete_community_email_change,
+    CommunityEmailChangeVerificationError,
 )
 from community.directory import (
     CommunityDirectoryPagination,
@@ -879,6 +882,43 @@ class CommunityAccountEmailChangeView(APIView):
             return Response({"code": error.code, "detail": error.messages[0], "fields": fields}, status=status.HTTP_400_BAD_REQUEST)
         response_status = status.HTTP_200_OK if result["status"] == "UNCHANGED" else status.HTTP_202_ACCEPTED
         return Response(result, status=response_status)
+
+
+@method_decorator(csrf_protect, name="dispatch")
+class CommunityAccountEmailChangeVerificationView(APIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "community_account_email_change_verify"
+
+    @extend_schema(
+        operation_id="community_account_email_change_verify",
+        summary="Verify and complete a Community email change",
+        request=CommunityEmailChangeVerificationSerializer,
+        responses={200: OpenApiResponse(description="Email address updated."), 400: OpenApiResponse(description="Generic invalid verification response."), 429: OpenApiResponse(description="Too many verification attempts.")},
+        auth=[],
+        tags=["Community"],
+    )
+    def post(self, request):
+        serializer = CommunityEmailChangeVerificationSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {"code": "EMAIL_CHANGE_VERIFICATION_INVALID", "detail": "We couldn't verify this email change. The link may be invalid or expired."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            result, changed_user = complete_community_email_change(
+                request_id=serializer.validated_data["request_id"],
+                token=serializer.validated_data["token"],
+                request=request,
+            )
+        except (CommunityEmailChangeVerificationError, User.DoesNotExist, Person.DoesNotExist):
+            return Response(
+                {"code": "EMAIL_CHANGE_VERIFICATION_INVALID", "detail": "We couldn't verify this email change. The link may be invalid or expired."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if getattr(request.user, "is_authenticated", False) and request.user.pk == changed_user.pk:
+            logout(request)
+        return Response(result, status=status.HTTP_200_OK)
 
 
 @method_decorator(csrf_protect, name="dispatch")

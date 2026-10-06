@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import json
 import logging
 from dataclasses import dataclass
@@ -21,9 +22,9 @@ from people.services import normalize_email, normalize_mobile, normalize_phone_f
 from professional_profiles.models import Industry, ProfessionalProfile
 from skills.models import PersonSkill, Skill
 from interests.models import PersonInterest, Interest
-from brevo_marketing.jobs import PERSON_PROFILE_SYNC
+from brevo_marketing.jobs import PERSON_EMAIL_MIGRATION_SYNC, PERSON_PROFILE_SYNC
 from brevo_marketing.routing import BREVO_PROVIDER
-from external_references.services import enqueue_coalesced_person_sync_job
+from external_references.services import enqueue_coalesced_person_sync_job, enqueue_person_sync_job
 
 from community.models import CommunityAccountInvitation, CommunityEmailChangeRequest, CommunityProfile, JoinSubmissionReceipt
 from community.locking import acquire_community_email_change_lock, acquire_community_join_email_lock, acquire_community_mobile_lock
@@ -66,6 +67,10 @@ class CommunityEmailChangeError(Exception):
         self.field = field
         self.messages = messages or []
         super().__init__(self.messages[0] if self.messages else code)
+
+
+class CommunityEmailChangeVerificationError(Exception):
+    """Generic public failure for an unusable or unsafe verification request."""
 
 
 def is_community_eligible_user(user):
@@ -165,6 +170,83 @@ def request_community_email_change(*, user, new_email, current_password, request
             request_id=getattr(request, "request_id", None),
         )
         return {"status": "VERIFICATION_REQUIRED", "detail": "Check your new email address for a verification link."}
+
+
+def complete_community_email_change(*, request_id, token, request):
+    """Verify and atomically complete a Community email change while logged out."""
+    try:
+        request_stub = CommunityEmailChangeRequest.objects.only("id", "person_id", "user_id").get(public_id=request_id)
+    except CommunityEmailChangeRequest.DoesNotExist as error:
+        raise CommunityEmailChangeVerificationError from error
+
+    user_model = get_user_model()
+    supplied_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    try:
+        with transaction.atomic():
+            locked_user = user_model.objects.select_for_update().get(pk=request_stub.user_id)
+            person = Person.objects.select_for_update().get(pk=request_stub.person_id)
+            change_request = CommunityEmailChangeRequest.objects.select_for_update().get(pk=request_stub.pk)
+
+            if (
+                change_request.user_id != locked_user.pk
+                or change_request.person_id != person.pk
+                or not change_request.is_current
+                or change_request.expires_at <= timezone.now()
+                or not change_request.token_hash
+                or not hmac.compare_digest(change_request.token_hash, supplied_hash)
+            ):
+                raise CommunityEmailChangeVerificationError
+            if not is_community_eligible_user(locked_user):
+                raise CommunityEmailChangeVerificationError
+
+            previous_email = normalize_email(change_request.previous_email)
+            if normalize_email(person.primary_email) != previous_email or normalize_email(locked_user.email) != previous_email:
+                raise CommunityEmailChangeVerificationError
+
+            requested_email = normalize_email(change_request.requested_email)
+            acquire_community_email_change_lock(requested_email)
+            if (
+                user_model.objects.filter(email__iexact=requested_email).exclude(pk=locked_user.pk).exists()
+                or Person.objects.filter(primary_email__iexact=requested_email).exclude(pk=person.pk).exists()
+            ):
+                raise CommunityEmailChangeVerificationError
+
+            person.primary_email = requested_email
+            person.save(update_fields=["primary_email", "updated_at"])
+            locked_user.email = requested_email
+            locked_user.save(update_fields=["email"])
+            change_request.used_at = timezone.now()
+            change_request.save(update_fields=["used_at", "updated_at"])
+
+            audit = record_audit_event(
+                action=AuditEvent.Action.COMMUNITY_EMAIL_CHANGED,
+                actor_user=locked_user,
+                entity_type="CommunityEmailChangeRequest",
+                entity_id=change_request.public_id,
+                changes={"fields": ["Person.primary_email", "User.email"]},
+                metadata={"source": "COMMUNITY_SELF_SERVICE", "request_id": str(change_request.public_id)},
+                request_id=getattr(request, "request_id", None),
+            )
+            enqueue_person_sync_job(
+                person=person,
+                provider=BREVO_PROVIDER,
+                job_type=PERSON_EMAIL_MIGRATION_SYNC,
+                source_event_id=audit.id,
+                previous_email=previous_email,
+                requested_email=requested_email,
+            )
+            TransactionalEmailJob.objects.create(
+                email_change_request=change_request,
+                template_id=settings.BREVO_COMMUNITY_EMAIL_CHANGE_SECURITY_TEMPLATE_ID,
+                recipient_email=previous_email,
+                recipient_name=f"{person.first_name} {person.last_name}".strip(),
+                first_name=person.first_name,
+                expires_in_hours=1,
+                job_type=TransactionalEmailJob.JobType.COMMUNITY_EMAIL_CHANGE_SECURITY,
+            )
+    except (CommunityEmailChangeRequest.DoesNotExist, user_model.DoesNotExist, Person.DoesNotExist) as error:
+        raise CommunityEmailChangeVerificationError from error
+    return {"status": "EMAIL_UPDATED", "detail": "Your email address has been verified and updated."}, locked_user
 
 
 def change_community_password(*, user, current_password, new_password, request):

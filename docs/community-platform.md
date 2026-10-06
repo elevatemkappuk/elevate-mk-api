@@ -378,8 +378,31 @@ expiry is 60 minutes via `COMMUNITY_EMAIL_CHANGE_EXPIRY_MINUTES`.
 This security email is independent of marketing consent. A5.1 does not yet
 complete the change, send an old-email notification, force logout, mutate
 marketing preferences, or enqueue a Brevo marketing synchronization job. The
-completion endpoint and old-email security notification are deferred to a
-later milestone.
+completion step is implemented separately below; the old-email security
+notification is queued only after successful completion.
+
+## 8.5 Verified email change completion (A5.2)
+
+`POST /api/v1/community/account/email-change/verify/` accepts the public
+request UUID and raw token without requiring login, while retaining CSRF
+protection and a dedicated `10/hour` throttle. The token is SHA-256 hashed and
+compared with constant-time comparison. All malformed or unsafe states return
+the same generic invalid response; the service rechecks eligibility, the
+request's current-email snapshot, final collisions, and the deterministic
+advisory lock before changing identity data.
+
+Completion atomically updates `Person.primary_email` and `User.email`, marks
+the request used, records `COMMUNITY_EMAIL_CHANGED` with source
+`COMMUNITY_SELF_SERVICE`, queues the durable `PERSON_EMAIL_MIGRATION` job, and
+queues an old-email security notification. Provider calls remain asynchronous.
+The verification endpoint never auto-logs in and logs out the current session
+when it belongs to the changed account. It does not change passwords,
+Membership, Profile, mobile, marketing preferences, or Connect state.
+
+The security email template is deliberately unset until approved. The required
+template name is `Elevate MK — Your Email Address Was Changed`, subject
+`Your Elevate MK account email was changed`, with only `first_name` as a dynamic
+parameter. It contains no active credential or verification URL.
 
 ## 9. Community frontend state
 

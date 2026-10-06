@@ -162,6 +162,17 @@ class CommunityEmailChangeRequestSerializer(serializers.Serializer):
         return attrs
 
 
+class CommunityEmailChangeVerificationSerializer(serializers.Serializer):
+    request_id = serializers.UUIDField(write_only=True)
+    token = serializers.CharField(write_only=True, trim_whitespace=False, allow_blank=False)
+
+    def validate(self, attrs):
+        unknown_fields = set(self.initial_data.keys()) - set(self.fields.keys())
+        if unknown_fields:
+            raise serializers.ValidationError({field: ["This field is not allowed."] for field in sorted(unknown_fields)})
+        return attrs
+
+
 class CommunityMobileUpdateSerializer(serializers.Serializer):
     mobile = serializers.CharField(max_length=50, allow_blank=True)
     phone_region = serializers.CharField(max_length=2, required=False, allow_blank=True)

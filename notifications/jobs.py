@@ -148,6 +148,8 @@ def _prepare_send(job_id):
     job = TransactionalEmailJob.objects.select_for_update().get(pk=job_id)
     if job.job_type == TransactionalEmailJob.JobType.COMMUNITY_EMAIL_CHANGE:
         return _prepare_email_change_send(job)
+    if job.job_type == TransactionalEmailJob.JobType.COMMUNITY_EMAIL_CHANGE_SECURITY:
+        return _prepare_email_change_security_send(job)
     invitation_id = job.invitation_id
     invitation = CommunityAccountInvitation.objects.select_for_update().get(pk=invitation_id)
     person = Person.objects.select_for_update().get(pk=invitation.person_id)
@@ -196,6 +198,19 @@ def _prepare_email_change_send(job):
             "verification_url": build_community_email_change_verification_url(request=change_request, token=raw_token),
             "expires_in_minutes": job.expires_in_minutes or 60,
         },
+    }
+
+
+def _prepare_email_change_security_send(job):
+    change_request = CommunityEmailChangeRequest.objects.select_for_update().select_related("person", "user").get(pk=job.email_change_request_id)
+    if change_request.used_at is None:
+        _cancel_job(job, "EMAIL_CHANGE_NOT_COMPLETED")
+        return None
+    return {
+        "recipient_email": job.recipient_email,
+        "recipient_name": job.recipient_name,
+        "template_id": job.template_id,
+        "template_params": {"first_name": job.first_name},
     }
 
 
@@ -262,7 +277,7 @@ def _cancel_job(job, error_code):
     job.completed_at = timezone.now()
     job.locked_at = None
     job.last_error_code = error_code
-    job.last_error_message = "Activation invitation is no longer eligible for delivery."
+    job.last_error_message = "Transactional email job is no longer eligible for delivery."
     job.save(update_fields=["status", "completed_at", "locked_at", "last_error_code", "last_error_message", "updated_at"])
 
 

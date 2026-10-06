@@ -1,6 +1,6 @@
 from django.urls import path
 
-from community.views import CommunityAccountEmailChangeView, CommunityAccountMarketingPreferenceView, CommunityAccountMobileView, CommunityAccountPasswordView, CommunityAccountView, CommunityActivationView, CommunityConnectionActionView, CommunityConnectionListView, CommunityConnectionRequestListView, CommunityDirectoryDetailView, CommunityDirectoryListView, CommunityIndustryListView, CommunityJoinView, CommunityLoginView, CommunityMeView, CommunityPasswordResetConfirmView, CommunityPasswordResetRequestView, CommunityProfileView, CommunityProfileOptionsView, CommunityProfilePhotoView, CommunityProfileReviewAcknowledgementView
+from community.views import CommunityAccountEmailChangeVerificationView, CommunityAccountEmailChangeView, CommunityAccountMarketingPreferenceView, CommunityAccountMobileView, CommunityAccountPasswordView, CommunityAccountView, CommunityActivationView, CommunityConnectionActionView, CommunityConnectionListView, CommunityConnectionRequestListView, CommunityDirectoryDetailView, CommunityDirectoryListView, CommunityIndustryListView, CommunityJoinView, CommunityLoginView, CommunityMeView, CommunityPasswordResetConfirmView, CommunityPasswordResetRequestView, CommunityProfileView, CommunityProfileOptionsView, CommunityProfilePhotoView, CommunityProfileReviewAcknowledgementView
 
 
 urlpatterns = [
@@ -14,6 +14,7 @@ urlpatterns = [
     path("community/account/", CommunityAccountView.as_view(), name="community-account"),
     path("community/account/password/", CommunityAccountPasswordView.as_view(), name="community-account-password"),
     path("community/account/email-change/", CommunityAccountEmailChangeView.as_view(), name="community-account-email-change"),
+    path("community/account/email-change/verify/", CommunityAccountEmailChangeVerificationView.as_view(), name="community-account-email-change-verify"),
     path("community/account/mobile/", CommunityAccountMobileView.as_view(), name="community-account-mobile"),
     path("community/account/marketing-preference/", CommunityAccountMarketingPreferenceView.as_view(), name="community-account-marketing-preference"),
     path("community/profile/", CommunityProfileView.as_view(), name="community-profile"),
