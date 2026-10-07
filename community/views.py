@@ -62,6 +62,7 @@ from community.serializers import (
     CommunityConnectionRequestQuerySerializer,
     CommunityPostQuerySerializer,
     CommunityPostCreateSerializer,
+    CommunityPostUpdateSerializer,
     CommunityPostSerializer,
     CommunityReplyCreateSerializer,
     CommunityReplyUpdateSerializer,
@@ -120,9 +121,13 @@ from community.connections import (
 from community.models import CommunityConnection
 from community.models import CommunityContentReport, CommunityPostReply
 from community.feed import (
+    CommunityPostConversationLocked,
     CommunityPostIdempotencyConflict,
+    CommunityPostUnavailable,
     build_community_post_projection,
     create_community_post,
+    delete_community_post,
+    edit_community_post,
     visible_community_posts,
 )
 from community.replies import (
@@ -573,6 +578,50 @@ class CommunityPostDetailView(APIView):
             ).data,
             status=status.HTTP_200_OK,
         )
+
+    @extend_schema(
+        operation_id="community_posts_update",
+        summary="Edit the authenticated member's Community post",
+        request=CommunityPostUpdateSerializer,
+        responses={200: CommunityPostSerializer, 400: OpenApiResponse(description="Invalid post or locked conversation fields."), 403: OpenApiResponse(description="Community access is unavailable."), 404: OpenApiResponse(description="Post not found.")},
+        tags=["Community"],
+    )
+    @method_decorator(csrf_protect)
+    def patch(self, request, public_id):
+        if not is_community_eligible_user(request.user):
+            return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
+        serializer = CommunityPostUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            edit_community_post(user=request.user, public_id=public_id, data=serializer.validated_data, request=request)
+        except CommunityPostConversationLocked:
+            return Response(
+                {"purpose": ["Purpose and audience cannot be changed after the conversation begins."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except CommunityPostUnavailable:
+            raise Http404
+        post = visible_community_posts(viewer=request.user).filter(public_id=public_id).first()
+        if post is None:
+            raise Http404
+        return Response(
+            CommunityPostSerializer(build_community_post_projection(post, viewer_person_id=request.user.person_id)).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @extend_schema(
+        operation_id="community_posts_delete",
+        summary="Remove the authenticated member's Community post",
+        responses={204: None, 403: OpenApiResponse(description="Community access is unavailable."), 404: OpenApiResponse(description="Post not found.")},
+        tags=["Community"],
+    )
+    @method_decorator(csrf_protect)
+    def delete(self, request, public_id):
+        try:
+            delete_community_post(user=request.user, public_id=public_id, request=request)
+        except CommunityPostUnavailable:
+            raise Http404
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @method_decorator(csrf_protect, name="dispatch")

@@ -59,6 +59,8 @@ class AuditEvent(models.Model):
         CONNECTION_DECLINED = "CONNECTION_DECLINED", "Connection declined"
         CONNECTION_REMOVED = "CONNECTION_REMOVED", "Connection removed"
         COMMUNITY_POST_CREATED = "COMMUNITY_POST_CREATED", "Community post created"
+        COMMUNITY_POST_EDITED = "COMMUNITY_POST_EDITED", "Community post edited"
+        COMMUNITY_POST_DELETED = "COMMUNITY_POST_DELETED", "Community post deleted"
         COMMUNITY_REPLY_CREATED = "COMMUNITY_REPLY_CREATED", "Community reply created"
         COMMUNITY_REPLY_EDITED = "COMMUNITY_REPLY_EDITED", "Community reply edited"
         COMMUNITY_REPLY_DELETED = "COMMUNITY_REPLY_DELETED", "Community reply deleted"

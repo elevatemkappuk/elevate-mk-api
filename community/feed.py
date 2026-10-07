@@ -36,6 +36,7 @@ def visible_community_posts(*, viewer, purpose=None):
         Q(person_low_id=viewer_person_id, person_high_id=OuterRef("author_id"))
         | Q(person_high_id=viewer_person_id, person_low_id=OuterRef("author_id"))
     )
+    reply_history = CommunityPostReply.objects.filter(post_id=OuterRef("pk"))
 
     queryset = CommunityPost.objects.filter(
         status=CommunityPost.Status.ACTIVE,
@@ -55,7 +56,8 @@ def visible_community_posts(*, viewer, purpose=None):
         active_reply_count=Count(
             "replies",
             filter=Q(replies__status=CommunityPostReply.Status.ACTIVE),
-        )
+        ),
+        has_reply_history=Exists(reply_history),
     ).order_by("-created_at", "-id")
 
     if purpose is not None:
@@ -82,6 +84,12 @@ def build_community_post_author_projection(person):
 
 
 def build_community_post_projection(post, *, viewer_person_id):
+    is_own_post = post.author_id == viewer_person_id
+    is_active = post.status == CommunityPost.Status.ACTIVE
+    has_reply_history = getattr(post, "has_reply_history", None)
+    if has_reply_history is None:
+        has_reply_history = CommunityPostReply.objects.filter(post_id=post.pk).exists()
+    has_reply_history = bool(has_reply_history)
     return {
         "public_id": post.public_id,
         "purpose": post.purpose,
@@ -93,7 +101,13 @@ def build_community_post_projection(post, *, viewer_person_id):
         "updated_at": post.updated_at,
         "edited_at": post.edited_at,
         "reply_count": getattr(post, "active_reply_count", 0),
-        "is_own_post": post.author_id == viewer_person_id,
+        "is_own_post": is_own_post,
+        "capabilities": {
+            "can_edit": is_own_post and is_active,
+            "can_delete": is_own_post and is_active,
+            "can_edit_purpose": is_own_post and is_active and not has_reply_history,
+            "can_edit_audience": is_own_post and is_active and not has_reply_history,
+        },
     }
 
 
@@ -168,3 +182,80 @@ def create_community_post(*, user, data, idempotency_key=None, request=None):
             ip_address=request.META.get("REMOTE_ADDR") if request else None,
         )
         return post, False
+
+
+class CommunityPostUnavailable(Exception):
+    pass
+
+
+class CommunityPostConversationLocked(Exception):
+    pass
+
+
+def _locked_owned_post(*, user, public_id):
+    """Lock an eligible author's active post before mutation or history checks."""
+    if not is_community_eligible_user(user):
+        raise CommunityPostUnavailable
+    post = CommunityPost.objects.select_for_update().filter(public_id=public_id).first()
+    if post is None or post.status != CommunityPost.Status.ACTIVE or post.author_id != user.person_id:
+        raise CommunityPostUnavailable
+    return post
+
+
+def edit_community_post(*, user, public_id, data, request=None):
+    """Edit an active owned post, permanently locking purpose/audience after a reply."""
+    with transaction.atomic():
+        post = _locked_owned_post(user=user, public_id=public_id)
+        has_reply_history = CommunityPostReply.objects.filter(post_id=post.pk).exists()
+        current = {
+            "headline": post.headline,
+            "body": post.body,
+            "purpose": post.purpose,
+            "audience": post.audience,
+        }
+        values = {field: data.get(field, current[field]) for field in current}
+        if has_reply_history and (
+            values["purpose"] != current["purpose"] or values["audience"] != current["audience"]
+        ):
+            raise CommunityPostConversationLocked
+        changed_fields = [field for field in current if values[field] != current[field]]
+        if not changed_fields:
+            return post, False
+        for field in changed_fields:
+            setattr(post, field, values[field])
+        post.edited_at = timezone.now()
+        post.save(update_fields=[*changed_fields, "edited_at", "updated_at"])
+        record_audit_event(
+            action=AuditEvent.Action.COMMUNITY_POST_EDITED,
+            actor_user=user,
+            entity_type="CommunityPost",
+            entity_id=post.public_id,
+            metadata={
+                "public_id": str(post.public_id),
+                "changed_fields": changed_fields,
+                "purpose": post.purpose,
+                "audience": post.audience,
+            },
+            request_id=getattr(request, "request_id", None),
+            ip_address=request.META.get("REMOTE_ADDR") if request else None,
+        )
+        return post, True
+
+
+def delete_community_post(*, user, public_id, request=None):
+    """Soft-delete an active owned post while retaining replies and reports."""
+    with transaction.atomic():
+        post = _locked_owned_post(user=user, public_id=public_id)
+        post.status = CommunityPost.Status.AUTHOR_DELETED
+        post.deleted_at = timezone.now()
+        post.save(update_fields=["status", "deleted_at", "updated_at"])
+        record_audit_event(
+            action=AuditEvent.Action.COMMUNITY_POST_DELETED,
+            actor_user=user,
+            entity_type="CommunityPost",
+            entity_id=post.public_id,
+            metadata={"public_id": str(post.public_id)},
+            request_id=getattr(request, "request_id", None),
+            ip_address=request.META.get("REMOTE_ADDR") if request else None,
+        )
+        return post

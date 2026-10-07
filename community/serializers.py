@@ -482,6 +482,32 @@ class CommunityPostCreateSerializer(serializers.Serializer):
         return attrs
 
 
+class CommunityPostUpdateSerializer(serializers.Serializer):
+    purpose = serializers.ChoiceField(choices=CommunityPost.Purpose.choices, required=False)
+    headline = serializers.CharField(max_length=120, allow_blank=False, trim_whitespace=True, required=False)
+    body = serializers.CharField(max_length=2000, allow_blank=False, trim_whitespace=True, required=False)
+    audience = serializers.ChoiceField(choices=CommunityPost.Audience.choices, required=False)
+
+    def validate(self, attrs):
+        unknown_fields = set(self.initial_data.keys()) - set(self.fields.keys())
+        if unknown_fields:
+            raise serializers.ValidationError(
+                {field: ["This field is not allowed."] for field in sorted(unknown_fields)}
+            )
+        if "headline" in attrs:
+            attrs["headline"] = attrs["headline"].strip()
+        if "body" in attrs:
+            attrs["body"] = attrs["body"].strip()
+        return attrs
+
+
+class CommunityPostCapabilitiesSerializer(serializers.Serializer):
+    can_edit = serializers.BooleanField()
+    can_delete = serializers.BooleanField()
+    can_edit_purpose = serializers.BooleanField()
+    can_edit_audience = serializers.BooleanField()
+
+
 class CommunityPostAuthorProfessionalSerializer(serializers.Serializer):
     job_title = serializers.CharField()
     industry = CommunityDirectoryIndustrySerializer(allow_null=True)
@@ -508,6 +534,7 @@ class CommunityPostSerializer(serializers.Serializer):
     edited_at = serializers.DateTimeField(allow_null=True)
     reply_count = serializers.IntegerField()
     is_own_post = serializers.BooleanField()
+    capabilities = CommunityPostCapabilitiesSerializer()
 
 
 class CommunityReplyCreateSerializer(serializers.Serializer):
