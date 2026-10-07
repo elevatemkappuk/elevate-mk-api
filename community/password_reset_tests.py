@@ -190,6 +190,21 @@ class CommunityPasswordResetConfirmTests(TestCase):
         self.user.refresh_from_db()
         self.assertTrue(self.user.check_password("New-password-123!"))
 
+    def test_successful_reset_invalidates_the_current_authenticated_session(self):
+        login = self.client.post(
+            "/api/v1/community/login/",
+            {"email": self.user.email, "password": "Old-password-123!"},
+            format="json",
+        )
+        self.assertEqual(login.status_code, 200)
+        self.assertEqual(self.client.get("/api/v1/community/me/").status_code, 200)
+        self.user.refresh_from_db()
+
+        response = self.post()
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(self.client.get("/api/v1/community/me/").status_code, 401)
+
     def test_former_membership_after_issuance_fails_generically_without_mutation(self):
         payload = self.token_payload()
         self.membership.status = Membership.Status.FORMER
