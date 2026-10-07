@@ -730,6 +730,27 @@ and removal use the existing
 credentials, or original filenames. Profile Photo does not change completion,
 identity, membership, consent, Brevo, or Directory behavior.
 
+### Community Feed V1
+
+Community Feed is a purpose-led, chronological member conversation space for
+asks, offers, opportunities and relevant updates. It is available only to
+currently eligible authenticated Community members. Community-wide posts are
+not internet-public; `CONNECTIONS` posts additionally require an accepted
+connection and current eligibility for both author and viewer.
+
+Posts support create, read, edit and soft-delete. Headline and body are at most
+120 and 2,000 characters respectively. After any historical reply exists,
+purpose and audience are permanently locked; headline and body remain
+editable. Replies are a flat oldest-first paginated conversation, support
+same-post reply context, and allow body edit or soft-delete by the author.
+Deleted or unavailable replies remain represented by safe placeholders.
+
+Post creation is throttled by `COMMUNITY_POST_CREATE_THROTTLE_RATE` (default
+`10/hour`) and reply creation by `COMMUNITY_REPLY_CREATE_THROTTLE_RATE`
+(default `30/hour`). Both creation paths use scoped idempotency keys. Feed
+projections exclude contact data, internal identity/membership identifiers,
+CRM metadata, marketing/provider state, audit data and reporting metadata.
+
 ### Feed reporting and moderation (F4)
 
 Members may report only currently visible active posts or replies. Reports are

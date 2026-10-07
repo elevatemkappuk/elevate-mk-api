@@ -240,8 +240,54 @@ These endpoints are separate from the Staff CRM People API. Join, industry looku
 | `POST` | `/api/v1/community/profile/photo/` | Authenticated eligible Community member; multipart; CSRF |
 | `DELETE` | `/api/v1/community/profile/photo/` | Authenticated eligible Community member; CSRF |
 | `POST` | `/api/v1/community/profile/review-acknowledgement/` | Authenticated eligible Community member; CSRF |
+| `GET` | `/api/v1/community/posts/` | Authenticated eligible Community member; chronological, optional purpose filter |
+| `POST` | `/api/v1/community/posts/` | Authenticated eligible Community member; CSRF, scoped throttle, `Idempotency-Key` |
+| `GET` | `/api/v1/community/posts/{public_id}/` | Authenticated eligible Community member with visibility to the post |
+| `PATCH` | `/api/v1/community/posts/{public_id}/` | Authenticated owner; CSRF |
+| `DELETE` | `/api/v1/community/posts/{public_id}/` | Authenticated owner; CSRF |
+| `GET` | `/api/v1/community/posts/{post_id}/replies/` | Authenticated eligible member with visibility to the post |
+| `POST` | `/api/v1/community/posts/{post_id}/replies/` | Authenticated eligible member with visibility to the post; CSRF, scoped throttle, `Idempotency-Key` |
+| `PATCH` | `/api/v1/community/posts/{post_id}/replies/{reply_id}/` | Authenticated reply owner; CSRF |
+| `DELETE` | `/api/v1/community/posts/{post_id}/replies/{reply_id}/` | Authenticated reply owner; CSRF |
 
 Community Join returns the generic `202 Accepted` representation documented in [Community Platform](community-platform.md). It does not expose CRM identity evidence or create a User account. Successful activation creates the Community User account and establishes the authenticated Community session; activation and password-reset failures remain enumeration-safe.
+
+### Community Feed V1
+
+Feed reads and mutations are available only to an authenticated, currently
+eligible Community member. Community-wide posts are visible to eligible
+members; `CONNECTIONS` posts additionally require an accepted connection
+between the author and viewer, with both members still eligible. Known post or
+reply UUIDs do not bypass these checks.
+
+`GET /api/v1/community/posts/` is chronological and accepts the optional
+`purpose` filter: `ASK`, `OFFER`, `OPPORTUNITY`, or `UPDATE`. The response is
+paginated as `count`, `next`, `previous`, and `results`.
+
+Post creation accepts `purpose`, `headline` (maximum 120 characters), `body`
+(maximum 2,000 characters), and `audience` (`ELEVATE_COMMUNITY` or
+`CONNECTIONS`). It requires `Idempotency-Key` and uses the
+`community_post_create` throttle, default `10/hour`, configured through
+`COMMUNITY_POST_CREATE_THROTTLE_RATE`.
+
+Post PATCH follows the returned capability projection. Headline and body remain
+editable after a conversation starts; purpose and audience become permanently
+locked after any historical reply, including a deleted or moderator-removed
+reply. Post DELETE is a soft author deletion and cannot be restored through
+moderation.
+
+Replies are a flat, paginated, oldest-first conversation. `reply_to_id` may
+reference another reply on the same post, but the API does not return a nested
+reply tree. Reply creation accepts `body` (maximum 1,000 characters) and an
+optional same-post `reply_to_id`; it requires `Idempotency-Key` and uses
+`community_reply_create`, default `30/hour`, configured through
+`COMMUNITY_REPLY_CREATE_THROTTLE_RATE`. Reply edits change body only. Reply
+DELETE is a soft deletion and remains represented by a safe placeholder.
+
+Member post/reply projections expose only safe author identity, photo,
+professional context, location, timestamps, capability information and reply
+counts. They do not expose email, mobile, Person or Membership internals, CRM
+notes/tags, marketing state, provider data, report data, or audit data.
 
 `GET /api/v1/community/account/` returns the A1 member-safe account summary. The
 password projection contains only `password.configured`; it does not expose a
