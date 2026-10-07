@@ -63,6 +63,9 @@ from community.serializers import (
     CommunityPostQuerySerializer,
     CommunityPostCreateSerializer,
     CommunityPostSerializer,
+    CommunityReplyCreateSerializer,
+    CommunityReplyUpdateSerializer,
+    CommunityReplySerializer,
 )
 from community.photo_serializers import CommunityProfilePhotoUploadSerializer
 from community.photos import ProfilePhotoValidationError
@@ -116,6 +119,16 @@ from community.feed import (
     build_community_post_projection,
     create_community_post,
     visible_community_posts,
+)
+from community.replies import (
+    CommunityReplyIdempotencyConflict,
+    CommunityReplyUnavailable,
+    build_reply_projection,
+    create_community_reply,
+    delete_community_reply,
+    edit_community_reply,
+    eligible_reply_author_ids,
+    visible_replies_for_post,
 )
 from notifications.exceptions import TransactionalEmailError
 from notifications.services import send_transactional_email
@@ -600,6 +613,147 @@ class CommunityPostCreateView(CommunityPostListView):
             ).data,
             status=status.HTTP_200_OK if replayed else status.HTTP_201_CREATED,
         )
+
+
+class CommunityReplyListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "community_reply_create"
+
+    def get_throttles(self):
+        if self.request.method == "GET":
+            return []
+        return super().get_throttles()
+
+    @extend_schema(
+        operation_id="community_post_replies_list",
+        summary="List replies for a visible Community post",
+        responses={200: CommunityReplySerializer(many=True), 403: OpenApiResponse(description="Community access is unavailable."), 404: OpenApiResponse(description="Post not found.")},
+        tags=["Community"],
+    )
+    def get(self, request, post_id):
+        if not is_community_eligible_user(request.user):
+            return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
+        post = visible_community_posts(viewer=request.user).filter(public_id=post_id).first()
+        if post is None:
+            raise Http404
+        paginator = CommunityDirectoryPagination()
+        page = paginator.paginate_queryset(visible_replies_for_post(post), request, view=self)
+        eligible_author_ids = eligible_reply_author_ids()
+        data = [
+            build_reply_projection(
+                reply,
+                viewer_person_id=request.user.person_id,
+                eligible_author_ids=eligible_author_ids,
+            )
+            for reply in page
+        ]
+        return paginator.get_paginated_response(CommunityReplySerializer(data, many=True).data)
+
+    @method_decorator(csrf_protect)
+    @extend_schema(
+        operation_id="community_post_replies_create",
+        summary="Create a reply to a visible Community post",
+        request=CommunityReplyCreateSerializer,
+        responses={201: CommunityReplySerializer, 400: OpenApiResponse(description="Invalid reply."), 403: OpenApiResponse(description="Community access is unavailable."), 404: OpenApiResponse(description="Post or reply target not found."), 409: OpenApiResponse(description="Idempotency conflict."), 429: OpenApiResponse(description="Too many reply creations.")},
+        tags=["Community"],
+    )
+    def post(self, request, post_id):
+        if not is_community_eligible_user(request.user):
+            return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
+        parent = visible_community_posts(viewer=request.user).filter(public_id=post_id).first()
+        if parent is None:
+            raise Http404
+        serializer = CommunityReplyCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        idempotency_key = (request.headers.get("Idempotency-Key") or "").strip() or None
+        try:
+            reply, replayed = create_community_reply(
+                user=request.user,
+                post_id=parent.pk,
+                body=serializer.validated_data["body"],
+                reply_to_id=serializer.validated_data.get("reply_to_id"),
+                idempotency_key=idempotency_key,
+                request=request,
+            )
+        except CommunityReplyIdempotencyConflict:
+            return Response(
+                {"code": "IDEMPOTENCY_CONFLICT", "detail": "Idempotency-Key was already used with a different request."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        except CommunityReplyUnavailable:
+            raise Http404
+        return Response(
+            CommunityReplySerializer(
+                build_reply_projection(reply, viewer_person_id=request.user.person_id)
+            ).data,
+            status=status.HTTP_200_OK if replayed else status.HTTP_201_CREATED,
+        )
+
+
+class CommunityReplyDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def _visible_parent(self, request, post_id):
+        if not is_community_eligible_user(request.user):
+            return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
+        post = visible_community_posts(viewer=request.user).filter(public_id=post_id).first()
+        if post is None:
+            raise Http404
+        return post
+
+    @extend_schema(
+        operation_id="community_post_reply_update",
+        summary="Edit the authenticated member's Community reply",
+        request=CommunityReplyUpdateSerializer,
+        responses={200: CommunityReplySerializer, 400: OpenApiResponse(description="Invalid reply."), 403: OpenApiResponse(description="Community access is unavailable."), 404: OpenApiResponse(description="Reply not found.")},
+        tags=["Community"],
+    )
+    @method_decorator(csrf_protect)
+    def patch(self, request, post_id, reply_id):
+        parent = self._visible_parent(request, post_id)
+        if isinstance(parent, Response):
+            return parent
+        serializer = CommunityReplyUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            reply, _changed = edit_community_reply(
+                user=request.user,
+                post_id=parent.pk,
+                reply_id=reply_id,
+                body=serializer.validated_data["body"],
+                request=request,
+            )
+        except CommunityReplyUnavailable:
+            raise Http404
+        return Response(
+            CommunityReplySerializer(
+                build_reply_projection(reply, viewer_person_id=request.user.person_id)
+            ).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @extend_schema(
+        operation_id="community_post_reply_delete",
+        summary="Remove the authenticated member's Community reply",
+        responses={204: None, 403: OpenApiResponse(description="Community access unavailable."), 404: OpenApiResponse(description="Reply not found.")},
+        tags=["Community"],
+    )
+    @method_decorator(csrf_protect)
+    def delete(self, request, post_id, reply_id):
+        parent = self._visible_parent(request, post_id)
+        if isinstance(parent, Response):
+            return parent
+        try:
+            delete_community_reply(
+                user=request.user,
+                post_id=parent.pk,
+                reply_id=reply_id,
+                request=request,
+            )
+        except CommunityReplyUnavailable:
+            raise Http404
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class CommunityDirectoryListView(APIView):

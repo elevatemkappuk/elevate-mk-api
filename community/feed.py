@@ -4,12 +4,12 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Exists, OuterRef, Q
+from django.db.models import Count, Exists, OuterRef, Q
 from django.utils import timezone
 
 from audit.models import AuditEvent
 from audit.services import record_audit_event
-from community.models import CommunityConnection, CommunityPost
+from community.models import CommunityConnection, CommunityPost, CommunityPostReply
 from community.models import CommunityPostIdempotencyReceipt
 from community.services import community_eligible_person_queryset, is_community_eligible_user
 from people.models import Person
@@ -51,6 +51,11 @@ def visible_community_posts(*, viewer, purpose=None):
         "author__community_profile",
         "author__professional_profile",
         "author__professional_profile__industry",
+    ).annotate(
+        active_reply_count=Count(
+            "replies",
+            filter=Q(replies__status=CommunityPostReply.Status.ACTIVE),
+        )
     ).order_by("-created_at", "-id")
 
     if purpose is not None:
@@ -87,7 +92,7 @@ def build_community_post_projection(post, *, viewer_person_id):
         "created_at": post.created_at,
         "updated_at": post.updated_at,
         "edited_at": post.edited_at,
-        "reply_count": 0,
+        "reply_count": getattr(post, "active_reply_count", 0),
         "is_own_post": post.author_id == viewer_person_id,
     }
 

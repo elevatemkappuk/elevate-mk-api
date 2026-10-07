@@ -1,6 +1,6 @@
 from django.urls import path
 
-from community.views import CommunityAccountEmailChangeVerificationView, CommunityAccountEmailChangeView, CommunityAccountMarketingPreferenceView, CommunityAccountMobileView, CommunityAccountPasswordView, CommunityAccountView, CommunityActivationView, CommunityConnectionActionView, CommunityConnectionListView, CommunityConnectionRequestListView, CommunityDirectoryDetailView, CommunityDirectoryListView, CommunityIndustryListView, CommunityJoinView, CommunityLoginView, CommunityMeView, CommunityPasswordResetConfirmView, CommunityPasswordResetRequestView, CommunityPostCreateView, CommunityPostDetailView, CommunityProfileView, CommunityProfileOptionsView, CommunityProfilePhotoView, CommunityProfileReviewAcknowledgementView
+from community.views import CommunityAccountEmailChangeVerificationView, CommunityAccountEmailChangeView, CommunityAccountMarketingPreferenceView, CommunityAccountMobileView, CommunityAccountPasswordView, CommunityAccountView, CommunityActivationView, CommunityConnectionActionView, CommunityConnectionListView, CommunityConnectionRequestListView, CommunityDirectoryDetailView, CommunityDirectoryListView, CommunityIndustryListView, CommunityJoinView, CommunityLoginView, CommunityMeView, CommunityPasswordResetConfirmView, CommunityPasswordResetRequestView, CommunityPostCreateView, CommunityPostDetailView, CommunityProfileView, CommunityProfileOptionsView, CommunityProfilePhotoView, CommunityProfileReviewAcknowledgementView, CommunityReplyDetailView, CommunityReplyListCreateView
 
 
 urlpatterns = [
@@ -30,4 +30,6 @@ urlpatterns = [
     path("community/connections/<uuid:public_id>/", CommunityConnectionActionView.as_view(), name="community-connection-remove"),
     path("community/posts/", CommunityPostCreateView.as_view(), name="community-post-list"),
     path("community/posts/<uuid:public_id>/", CommunityPostDetailView.as_view(), name="community-post-detail"),
+    path("community/posts/<uuid:post_id>/replies/", CommunityReplyListCreateView.as_view(), name="community-post-replies"),
+    path("community/posts/<uuid:post_id>/replies/<uuid:reply_id>/", CommunityReplyDetailView.as_view(), name="community-post-reply-detail"),
 ]

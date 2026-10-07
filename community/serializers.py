@@ -508,3 +508,52 @@ class CommunityPostSerializer(serializers.Serializer):
     edited_at = serializers.DateTimeField(allow_null=True)
     reply_count = serializers.IntegerField()
     is_own_post = serializers.BooleanField()
+
+
+class CommunityReplyCreateSerializer(serializers.Serializer):
+    body = serializers.CharField(max_length=1000, allow_blank=False, trim_whitespace=True)
+    reply_to_id = serializers.UUIDField(required=False, allow_null=True, default=None)
+
+    def validate(self, attrs):
+        unknown_fields = set(self.initial_data.keys()) - set(self.fields.keys())
+        if unknown_fields:
+            raise serializers.ValidationError(
+                {field: ["This field is not allowed."] for field in sorted(unknown_fields)}
+            )
+        attrs["body"] = attrs["body"].strip()
+        return attrs
+
+
+class CommunityReplyUpdateSerializer(serializers.Serializer):
+    body = serializers.CharField(max_length=1000, allow_blank=False, trim_whitespace=True)
+
+    def validate(self, attrs):
+        unknown_fields = set(self.initial_data.keys()) - set(self.fields.keys())
+        if unknown_fields:
+            raise serializers.ValidationError(
+                {field: ["This field is not allowed."] for field in sorted(unknown_fields)}
+            )
+        attrs["body"] = attrs["body"].strip()
+        return attrs
+
+
+class CommunityReplyingToAuthorSerializer(serializers.Serializer):
+    directory_id = serializers.UUIDField(allow_null=True)
+    first_name = serializers.CharField()
+    last_name = serializers.CharField()
+
+
+class CommunityReplyingToSerializer(serializers.Serializer):
+    reply_id = serializers.UUIDField()
+    author = CommunityReplyingToAuthorSerializer(allow_null=True)
+
+
+class CommunityReplySerializer(serializers.Serializer):
+    public_id = serializers.UUIDField()
+    body = serializers.CharField()
+    author = CommunityPostAuthorSerializer(allow_null=True)
+    created_at = serializers.DateTimeField()
+    updated_at = serializers.DateTimeField()
+    edited_at = serializers.DateTimeField(allow_null=True)
+    is_own_reply = serializers.BooleanField()
+    replying_to = CommunityReplyingToSerializer(allow_null=True)

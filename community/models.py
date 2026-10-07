@@ -245,6 +245,106 @@ class CommunityPostIdempotencyReceipt(models.Model):
         ]
 
 
+class CommunityPostReply(models.Model):
+    """A flat conversational reply belonging to one Community post."""
+
+    class Status(models.TextChoices):
+        ACTIVE = "ACTIVE", "Active"
+        AUTHOR_DELETED = "AUTHOR_DELETED", "Author deleted"
+        MODERATOR_REMOVED = "MODERATOR_REMOVED", "Moderator removed"
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    post = models.ForeignKey(
+        CommunityPost,
+        on_delete=models.PROTECT,
+        related_name="replies",
+    )
+    author = models.ForeignKey(
+        Person,
+        on_delete=models.PROTECT,
+        related_name="community_post_replies",
+    )
+    reply_to = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="child_replies",
+    )
+    body = models.TextField(
+        max_length=1000,
+        validators=[validate_non_empty_text, MaxLengthValidator(1000)],
+    )
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
+    edited_at = models.DateTimeField(null=True, blank=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    removed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        indexes = [
+            models.Index(fields=["post", "status", "created_at", "id"], name="cpreply_post_status_idx"),
+            models.Index(fields=["author", "status", "created_at", "id"], name="cpreply_author_status_idx"),
+        ]
+
+    def clean(self):
+        errors = {}
+        if self.author_id and getattr(self.author, "record_type", None) != Person.RecordType.BUSINESS:
+            errors["author"] = "Community replies must be authored by a BUSINESS Person."
+        if self.post_id and self.reply_to_id:
+            if self.reply_to.post_id != self.post_id:
+                errors["reply_to"] = "The reply target must belong to the same post."
+            elif self._state.adding and self.reply_to.status != self.Status.ACTIVE:
+                errors["reply_to"] = "The reply target is no longer available."
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Community reply {self.public_id}"
+
+
+class CommunityPostReplyIdempotencyReceipt(models.Model):
+    """Bounded replay record for one member's reply creation on one post."""
+
+    author = models.ForeignKey(
+        Person,
+        on_delete=models.PROTECT,
+        related_name="community_post_reply_idempotency_receipts",
+    )
+    post = models.ForeignKey(
+        CommunityPost,
+        on_delete=models.PROTECT,
+        related_name="reply_idempotency_receipts",
+    )
+    key_hash = models.CharField(max_length=64)
+    request_digest = models.CharField(max_length=64)
+    reply = models.OneToOneField(
+        CommunityPostReply,
+        on_delete=models.PROTECT,
+        related_name="idempotency_receipt",
+    )
+    expires_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["author", "post", "key_hash"],
+                name="community_reply_idempotency_unique",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["author", "post", "expires_at"], name="cpreply_receipt_expiry_idx"),
+        ]
+
+
 class CommunityAccountInvitation(models.Model):
     """Single Community account-activation lifecycle for one Person."""
 
