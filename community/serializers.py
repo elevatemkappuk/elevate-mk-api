@@ -3,6 +3,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from people.models import Person
+from community.models import CommunityPost
 from community.normalization import normalize_community_name
 from people.services import (
     is_plausible_crm_mobile,
@@ -457,3 +458,53 @@ class CommunityDirectoryQuerySerializer(serializers.Serializer):
 
     def validate_interest(self, value):
         return self._validate_active_slug(value, Interest, "interest")
+
+
+class CommunityPostQuerySerializer(serializers.Serializer):
+    purpose = serializers.ChoiceField(choices=CommunityPost.Purpose.choices, required=False)
+    page_size = serializers.IntegerField(required=False, min_value=1, max_value=100)
+
+
+class CommunityPostCreateSerializer(serializers.Serializer):
+    purpose = serializers.ChoiceField(choices=CommunityPost.Purpose.choices)
+    headline = serializers.CharField(max_length=120, allow_blank=False, trim_whitespace=True)
+    body = serializers.CharField(max_length=2000, allow_blank=False, trim_whitespace=True)
+    audience = serializers.ChoiceField(choices=CommunityPost.Audience.choices)
+
+    def validate(self, attrs):
+        unknown_fields = set(self.initial_data.keys()) - set(self.fields.keys())
+        if unknown_fields:
+            raise serializers.ValidationError(
+                {field: ["This field is not allowed."] for field in sorted(unknown_fields)}
+            )
+        attrs["headline"] = attrs["headline"].strip()
+        attrs["body"] = attrs["body"].strip()
+        return attrs
+
+
+class CommunityPostAuthorProfessionalSerializer(serializers.Serializer):
+    job_title = serializers.CharField()
+    industry = CommunityDirectoryIndustrySerializer(allow_null=True)
+
+
+class CommunityPostAuthorSerializer(serializers.Serializer):
+    directory_id = serializers.UUIDField(allow_null=True)
+    first_name = serializers.CharField()
+    last_name = serializers.CharField()
+    photo_url = serializers.URLField(allow_null=True)
+    professional = CommunityPostAuthorProfessionalSerializer()
+    location = serializers.CharField()
+
+
+class CommunityPostSerializer(serializers.Serializer):
+    public_id = serializers.UUIDField()
+    purpose = serializers.ChoiceField(choices=CommunityPost.Purpose.choices)
+    headline = serializers.CharField()
+    body = serializers.CharField()
+    audience = serializers.ChoiceField(choices=CommunityPost.Audience.choices)
+    author = CommunityPostAuthorSerializer()
+    created_at = serializers.DateTimeField()
+    updated_at = serializers.DateTimeField()
+    edited_at = serializers.DateTimeField(allow_null=True)
+    reply_count = serializers.IntegerField()
+    is_own_post = serializers.BooleanField()

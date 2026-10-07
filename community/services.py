@@ -86,6 +86,19 @@ def is_community_eligible_user(user):
     )
 
 
+def community_eligible_person_queryset(*, require_community_profile=False):
+    """Return the current member eligibility queryset used by Community features."""
+    queryset = Person.objects.filter(
+        record_type=Person.RecordType.BUSINESS,
+        archived_at__isnull=True,
+        membership__status=Membership.Status.ACTIVE,
+        user__is_active=True,
+    )
+    if require_community_profile:
+        queryset = queryset.filter(community_profile__isnull=False)
+    return queryset
+
+
 def mask_community_mobile(value):
     """Return a stable, non-sensitive display value for a member's mobile."""
     normalized = normalize_mobile(value or "")

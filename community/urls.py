@@ -1,6 +1,6 @@
 from django.urls import path
 
-from community.views import CommunityAccountEmailChangeVerificationView, CommunityAccountEmailChangeView, CommunityAccountMarketingPreferenceView, CommunityAccountMobileView, CommunityAccountPasswordView, CommunityAccountView, CommunityActivationView, CommunityConnectionActionView, CommunityConnectionListView, CommunityConnectionRequestListView, CommunityDirectoryDetailView, CommunityDirectoryListView, CommunityIndustryListView, CommunityJoinView, CommunityLoginView, CommunityMeView, CommunityPasswordResetConfirmView, CommunityPasswordResetRequestView, CommunityProfileView, CommunityProfileOptionsView, CommunityProfilePhotoView, CommunityProfileReviewAcknowledgementView
+from community.views import CommunityAccountEmailChangeVerificationView, CommunityAccountEmailChangeView, CommunityAccountMarketingPreferenceView, CommunityAccountMobileView, CommunityAccountPasswordView, CommunityAccountView, CommunityActivationView, CommunityConnectionActionView, CommunityConnectionListView, CommunityConnectionRequestListView, CommunityDirectoryDetailView, CommunityDirectoryListView, CommunityIndustryListView, CommunityJoinView, CommunityLoginView, CommunityMeView, CommunityPasswordResetConfirmView, CommunityPasswordResetRequestView, CommunityPostCreateView, CommunityPostDetailView, CommunityProfileView, CommunityProfileOptionsView, CommunityProfilePhotoView, CommunityProfileReviewAcknowledgementView
 
 
 urlpatterns = [
@@ -28,4 +28,6 @@ urlpatterns = [
     path("community/connections/<uuid:public_id>/accept/", CommunityConnectionActionView.as_view(), {"action": "accept"}, name="community-connection-accept"),
     path("community/connections/<uuid:public_id>/decline/", CommunityConnectionActionView.as_view(), {"action": "decline"}, name="community-connection-decline"),
     path("community/connections/<uuid:public_id>/", CommunityConnectionActionView.as_view(), name="community-connection-remove"),
+    path("community/posts/", CommunityPostCreateView.as_view(), name="community-post-list"),
+    path("community/posts/<uuid:public_id>/", CommunityPostDetailView.as_view(), name="community-post-detail"),
 ]

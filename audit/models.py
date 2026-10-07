@@ -58,6 +58,7 @@ class AuditEvent(models.Model):
         CONNECTION_ACCEPTED = "CONNECTION_ACCEPTED", "Connection accepted"
         CONNECTION_DECLINED = "CONNECTION_DECLINED", "Connection declined"
         CONNECTION_REMOVED = "CONNECTION_REMOVED", "Connection removed"
+        COMMUNITY_POST_CREATED = "COMMUNITY_POST_CREATED", "Community post created"
         IMPORT_RECORD_MATCH_CONFIRMED = "IMPORT_RECORD_MATCH_CONFIRMED", "Import record match confirmed"
         IMPORT_RECORD_CREATE_NEW_CONFIRMED = "IMPORT_RECORD_CREATE_NEW_CONFIRMED", "Import record create-new confirmed"
         IMPORT_BATCH_IMPORTED = "IMPORT_BATCH_IMPORTED", "Import batch imported"

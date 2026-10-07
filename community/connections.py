@@ -7,8 +7,7 @@ from audit.models import AuditEvent
 from audit.services import record_audit_event
 from community.directory import build_directory_projection
 from community.models import CommunityConnection
-from community.services import is_community_eligible_user
-from memberships.models import Membership
+from community.services import community_eligible_person_queryset, is_community_eligible_user
 from people.models import Person
 from interests.models import PersonInterest
 from skills.models import PersonSkill
@@ -68,15 +67,7 @@ def canonical_person_pair(first_person_id, second_person_id):
 
 
 def _eligible_person_queryset(*, require_community_profile=False):
-    queryset = Person.objects.filter(
-        record_type=Person.RecordType.BUSINESS,
-        archived_at__isnull=True,
-        membership__status=Membership.Status.ACTIVE,
-        user__is_active=True,
-    )
-    if require_community_profile:
-        queryset = queryset.filter(community_profile__isnull=False)
-    return queryset
+    return community_eligible_person_queryset(require_community_profile=require_community_profile)
 
 
 def is_community_eligible_person(person_id, *, require_community_profile=False):

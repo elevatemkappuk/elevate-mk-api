@@ -60,6 +60,9 @@ from community.serializers import (
     CommunityConnectionRequestSerializer,
     CommunityConnectionRequestCreateSerializer,
     CommunityConnectionRequestQuerySerializer,
+    CommunityPostQuerySerializer,
+    CommunityPostCreateSerializer,
+    CommunityPostSerializer,
 )
 from community.photo_serializers import CommunityProfilePhotoUploadSerializer
 from community.photos import ProfilePhotoValidationError
@@ -108,6 +111,12 @@ from community.connections import (
     _mutate_connection,
 )
 from community.models import CommunityConnection
+from community.feed import (
+    CommunityPostIdempotencyConflict,
+    build_community_post_projection,
+    create_community_post,
+    visible_community_posts,
+)
 from notifications.exceptions import TransactionalEmailError
 from notifications.services import send_transactional_email
 
@@ -493,6 +502,104 @@ class CommunityProfileView(APIView):
         except DjangoValidationError as error:
             return Response(error.message_dict if hasattr(error, "message_dict") else {"detail": error.messages}, status=status.HTTP_400_BAD_REQUEST)
         return Response(CommunityProfileSerializer(projection).data, status=status.HTTP_200_OK)
+
+
+class CommunityPostListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        operation_id="community_posts_list",
+        summary="List Community posts visible to the authenticated member",
+        parameters=[CommunityPostQuerySerializer],
+        responses={200: CommunityPostSerializer(many=True), 400: OpenApiResponse(description="Invalid post filter."), 403: OpenApiResponse(description="Community access is unavailable.")},
+        tags=["Community"],
+    )
+    def get(self, request):
+        if not is_community_eligible_user(request.user):
+            return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
+        query_serializer = CommunityPostQuerySerializer(data=request.query_params)
+        query_serializer.is_valid(raise_exception=True)
+        queryset = visible_community_posts(
+            viewer=request.user,
+            purpose=query_serializer.validated_data.get("purpose"),
+        )
+        paginator = CommunityDirectoryPagination()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+        data = [
+            build_community_post_projection(post, viewer_person_id=request.user.person_id)
+            for post in page
+        ]
+        return paginator.get_paginated_response(CommunityPostSerializer(data, many=True).data)
+
+
+class CommunityPostDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        operation_id="community_posts_detail",
+        summary="Read a visible Community post",
+        responses={200: CommunityPostSerializer, 403: OpenApiResponse(description="Community access is unavailable."), 404: OpenApiResponse(description="Post not found.")},
+        tags=["Community"],
+    )
+    def get(self, request, public_id):
+        if not is_community_eligible_user(request.user):
+            return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
+        post = visible_community_posts(viewer=request.user).filter(public_id=public_id).first()
+        if post is None:
+            raise Http404
+        return Response(
+            CommunityPostSerializer(
+                build_community_post_projection(post, viewer_person_id=request.user.person_id)
+            ).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+@method_decorator(csrf_protect, name="dispatch")
+class CommunityPostCreateView(CommunityPostListView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "community_post_create"
+
+    def get_throttles(self):
+        if self.request.method == "GET":
+            return []
+        return super().get_throttles()
+
+    @extend_schema(
+        operation_id="community_posts_create",
+        summary="Create a Community post",
+        request=CommunityPostCreateSerializer,
+        responses={201: CommunityPostSerializer, 400: OpenApiResponse(description="Invalid post."), 403: OpenApiResponse(description="Community access is unavailable."), 409: OpenApiResponse(description="Idempotency conflict."), 429: OpenApiResponse(description="Too many post creations.")},
+        tags=["Community"],
+    )
+    def post(self, request):
+        if not is_community_eligible_user(request.user):
+            return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
+        serializer = CommunityPostCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        idempotency_key = (request.headers.get("Idempotency-Key") or "").strip() or None
+        try:
+            post, replayed = create_community_post(
+                user=request.user,
+                data=serializer.validated_data,
+                idempotency_key=idempotency_key,
+                request=request,
+            )
+        except CommunityPostIdempotencyConflict:
+            return Response(
+                {"code": "IDEMPOTENCY_CONFLICT", "detail": "Idempotency-Key was already used with a different request."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        response_post = visible_community_posts(viewer=request.user).filter(pk=post.pk).first()
+        if response_post is None:
+            raise Http404
+        return Response(
+            CommunityPostSerializer(
+                build_community_post_projection(response_post, viewer_person_id=request.user.person_id)
+            ).data,
+            status=status.HTTP_200_OK if replayed else status.HTTP_201_CREATED,
+        )
 
 
 class CommunityDirectoryListView(APIView):

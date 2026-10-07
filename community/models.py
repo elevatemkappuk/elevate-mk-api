@@ -1,5 +1,6 @@
 import uuid
 
+from django.core.exceptions import ValidationError
 from django.core.validators import MaxLengthValidator
 from django.db import models
 from django.utils import timezone
@@ -7,6 +8,11 @@ from django.utils import timezone
 from people.models import Person
 
 from community.photos import community_profile_photo_upload_to
+
+
+def validate_non_empty_text(value):
+    if not value or not value.strip():
+        raise ValidationError("This field cannot be empty.")
 
 
 class JoinSubmissionReceipt(models.Model):
@@ -137,6 +143,106 @@ class CommunityConnection(models.Model):
 
     def __str__(self):
         return f"Community connection {self.public_id} ({self.status})"
+
+
+class CommunityPost(models.Model):
+    """A text-first, member-authored Community publication."""
+
+    class Purpose(models.TextChoices):
+        ASK = "ASK", "Ask"
+        OFFER = "OFFER", "Offer"
+        OPPORTUNITY = "OPPORTUNITY", "Opportunity"
+        UPDATE = "UPDATE", "Update"
+
+    class Audience(models.TextChoices):
+        ELEVATE_COMMUNITY = "ELEVATE_COMMUNITY", "Elevate Community"
+        CONNECTIONS = "CONNECTIONS", "Connections"
+
+    class Status(models.TextChoices):
+        ACTIVE = "ACTIVE", "Active"
+        AUTHOR_DELETED = "AUTHOR_DELETED", "Author deleted"
+        MODERATOR_REMOVED = "MODERATOR_REMOVED", "Moderator removed"
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    author = models.ForeignKey(
+        Person,
+        on_delete=models.PROTECT,
+        related_name="community_posts",
+    )
+    purpose = models.CharField(max_length=20, choices=Purpose.choices)
+    headline = models.CharField(
+        max_length=120,
+        validators=[validate_non_empty_text, MaxLengthValidator(120)],
+    )
+    body = models.TextField(
+        max_length=2000,
+        validators=[validate_non_empty_text, MaxLengthValidator(2000)],
+    )
+    audience = models.CharField(max_length=20, choices=Audience.choices)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
+    edited_at = models.DateTimeField(null=True, blank=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    removed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["status", "-created_at", "-id"], name="cpost_status_created_idx"),
+            models.Index(fields=["purpose", "status", "-created_at", "-id"], name="cpost_purpose_idx"),
+            models.Index(fields=["audience", "status", "-created_at", "-id"], name="cpost_audience_idx"),
+            models.Index(fields=["author", "status", "-created_at", "-id"], name="cpost_author_idx"),
+        ]
+
+    def clean(self):
+        errors = {}
+        if self.author_id and getattr(self.author, "record_type", None) != Person.RecordType.BUSINESS:
+            errors["author"] = "Community posts must be authored by a BUSINESS Person."
+        if isinstance(self.headline, str) and not self.headline.strip():
+            errors["headline"] = "Headline cannot be empty."
+        if isinstance(self.body, str) and not self.body.strip():
+            errors["body"] = "Body cannot be empty."
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Community post {self.public_id}"
+
+
+class CommunityPostIdempotencyReceipt(models.Model):
+    """Bounded replay record for an authenticated Community post creation."""
+
+    author = models.ForeignKey(
+        Person,
+        on_delete=models.PROTECT,
+        related_name="community_post_idempotency_receipts",
+    )
+    key_hash = models.CharField(max_length=64)
+    request_digest = models.CharField(max_length=64)
+    post = models.OneToOneField(
+        CommunityPost,
+        on_delete=models.PROTECT,
+        related_name="idempotency_receipt",
+    )
+    expires_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["author", "key_hash"],
+                name="community_post_idempotency_unique",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["author", "expires_at"], name="cpost_receipt_expiry_idx"),
+        ]
 
 
 class CommunityAccountInvitation(models.Model):
