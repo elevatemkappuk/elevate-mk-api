@@ -2836,6 +2836,45 @@ the old object. Upload and removal are recorded through the existing
 credentials. Profile photos do not affect completion, Brevo synchronization,
 marketing preferences, or anonymous/public profile projections.
 
+### Community content reporting and moderation
+
+Eligible authenticated Community members can report visible active content:
+
+```text
+POST /api/v1/community/posts/{post_id}/report/
+POST /api/v1/community/posts/{post_id}/replies/{reply_id}/report/
+```
+
+Requests accept one reason (`OFF_TOPIC`, `SPAM_OR_EXCESSIVE_PROMOTION`,
+`INAPPROPRIATE_OR_ABUSIVE`, `MISLEADING_OR_SUSPICIOUS`, or `OTHER`) and
+optional details up to 1,000 characters. Members cannot report their own or
+unavailable content. There is one open report per reporter and target;
+repeating a report returns the same safe acknowledgement without another row
+or report audit event. Member feed DTOs never include report fields.
+
+Active `CRM_ADMIN` and `CRM_MANAGER` staff roles alone can use the moderation
+queue:
+
+```text
+GET  /api/v1/community/moderation/reports/
+GET  /api/v1/community/moderation/reports/{report_id}/
+POST /api/v1/community/moderation/reports/{report_id}/dismiss/
+POST /api/v1/community/moderation/reports/{report_id}/remove/
+POST /api/v1/community/moderation/reports/{report_id}/restore/
+```
+
+The queue is newest-open-first and exposes only safe reporter/author identity,
+report reason/details, target content/state, and parent-post context for
+replies. Dismissal leaves content unchanged. Removal changes active content to
+`MODERATOR_REMOVED` and resolves all other open reports for that target.
+Restoration is allowed only for moderator-removed content; author-deleted
+content cannot be restored. Moderation history is retained separately and
+append-only audit metadata contains only opaque target/report identifiers,
+target type, reason, and action information.
+
+Member report POSTs use `community_content_report`, defaulting to `10/hour`
+through `COMMUNITY_CONTENT_REPORT_THROTTLE_RATE`.
+
 ### Profile editor options
 
 `GET /api/v1/community/profile/options/` returns `200 OK` with the active

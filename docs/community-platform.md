@@ -730,6 +730,22 @@ and removal use the existing
 credentials, or original filenames. Profile Photo does not change completion,
 identity, membership, consent, Brevo, or Directory behavior.
 
+### Feed reporting and moderation (F4)
+
+Members may report only currently visible active posts or replies. Reports are
+separate records with bounded details, one open report per reporter/target, and
+safe opaque acknowledgements. They do not change content status and are not
+included in member feed projections. Reporting is limited by
+`COMMUNITY_CONTENT_REPORT_THROTTLE_RATE` (default `10/hour`).
+
+Only active CRM Admin and CRM Manager roles can access the staff moderation
+queue. Staff can dismiss reports, remove active posts/replies, and restore
+content removed by moderation. Removal resolves all open reports for that
+target; author-deleted content cannot be restored. Historical reports remain
+staff-visible even if the author is no longer eligible. Moderation history and
+append-only audit events retain safe action/target references without report
+details or copied content in audit metadata.
+
 ## 14. Deployment configuration checkpoint
 
 The backend reads these Community settings from environment configuration:

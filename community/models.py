@@ -1,5 +1,6 @@
 import uuid
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxLengthValidator
 from django.db import models
@@ -343,6 +344,81 @@ class CommunityPostReplyIdempotencyReceipt(models.Model):
         indexes = [
             models.Index(fields=["author", "post", "expires_at"], name="cpreply_receipt_expiry_idx"),
         ]
+
+
+class CommunityContentReport(models.Model):
+    class Reason(models.TextChoices):
+        OFF_TOPIC = "OFF_TOPIC", "Off topic"
+        SPAM_OR_EXCESSIVE_PROMOTION = "SPAM_OR_EXCESSIVE_PROMOTION", "Spam or excessive promotion"
+        INAPPROPRIATE_OR_ABUSIVE = "INAPPROPRIATE_OR_ABUSIVE", "Inappropriate or abusive"
+        MISLEADING_OR_SUSPICIOUS = "MISLEADING_OR_SUSPICIOUS", "Misleading or suspicious"
+        OTHER = "OTHER", "Other"
+
+    class Status(models.TextChoices):
+        OPEN = "OPEN", "Open"
+        DISMISSED = "DISMISSED", "Dismissed"
+        RESOLVED = "RESOLVED", "Resolved"
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    reporter = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="community_content_reports")
+    post = models.ForeignKey(CommunityPost, null=True, blank=True, on_delete=models.PROTECT, related_name="content_reports")
+    reply = models.ForeignKey(CommunityPostReply, null=True, blank=True, on_delete=models.PROTECT, related_name="content_reports")
+    reason = models.CharField(max_length=40, choices=Reason.choices)
+    details = models.TextField(max_length=1000, blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
+    moderator = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="community_moderated_reports")
+    resolution = models.TextField(max_length=1000, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=(models.Q(post__isnull=False, reply__isnull=True) | models.Q(post__isnull=True, reply__isnull=False)),
+                name="community_report_exactly_one_target",
+            ),
+            models.UniqueConstraint(fields=["reporter", "post"], condition=models.Q(status="OPEN", post__isnull=False), name="community_report_open_post_unique"),
+            models.UniqueConstraint(fields=["reporter", "reply"], condition=models.Q(status="OPEN", reply__isnull=False), name="community_report_open_reply_unique"),
+        ]
+        indexes = [models.Index(fields=["status", "created_at"], name="comm_report_status_created")]
+
+    def clean(self):
+        if bool(self.post_id) == bool(self.reply_id):
+            raise ValidationError("A report must target exactly one piece of content.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+
+class CommunityModerationAction(models.Model):
+    class Action(models.TextChoices):
+        DISMISSED = "DISMISSED", "Report dismissed"
+        CONTENT_REMOVED = "CONTENT_REMOVED", "Content removed"
+        CONTENT_RESTORED = "CONTENT_RESTORED", "Content restored"
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    action = models.CharField(max_length=30, choices=Action.choices)
+    moderator = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="community_moderation_actions")
+    report = models.ForeignKey(CommunityContentReport, null=True, blank=True, on_delete=models.SET_NULL, related_name="moderation_actions")
+    post = models.ForeignKey(CommunityPost, null=True, blank=True, on_delete=models.PROTECT, related_name="moderation_actions")
+    reply = models.ForeignKey(CommunityPostReply, null=True, blank=True, on_delete=models.PROTECT, related_name="moderation_actions")
+    resolution = models.TextField(max_length=1000, blank=True)
+    occurred_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-occurred_at", "-id"]
+        constraints = [models.CheckConstraint(condition=(models.Q(post__isnull=False, reply__isnull=True) | models.Q(post__isnull=True, reply__isnull=False)), name="community_moderation_action_exactly_one_target")]
+
+    def clean(self):
+        if bool(self.post_id) == bool(self.reply_id):
+            raise ValidationError("A moderation action must target exactly one piece of content.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
 
 
 class CommunityAccountInvitation(models.Model):

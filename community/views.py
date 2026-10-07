@@ -66,6 +66,10 @@ from community.serializers import (
     CommunityReplyCreateSerializer,
     CommunityReplyUpdateSerializer,
     CommunityReplySerializer,
+    CommunityContentReportCreateSerializer,
+    CommunityContentReportAcknowledgementSerializer,
+    CommunityModerationActionSerializer,
+    CommunityModerationReportSerializer,
 )
 from community.photo_serializers import CommunityProfilePhotoUploadSerializer
 from community.photos import ProfilePhotoValidationError
@@ -114,6 +118,7 @@ from community.connections import (
     _mutate_connection,
 )
 from community.models import CommunityConnection
+from community.models import CommunityContentReport, CommunityPostReply
 from community.feed import (
     CommunityPostIdempotencyConflict,
     build_community_post_projection,
@@ -130,6 +135,8 @@ from community.replies import (
     eligible_reply_author_ids,
     visible_replies_for_post,
 )
+from community.moderation import ContentModerationError, _report_queryset, create_content_report, get_staff_report, member_visible_reply, moderate_report, staff_report_projection
+from community.permissions import HasCommunityModerationRole
 from notifications.exceptions import TransactionalEmailError
 from notifications.services import send_transactional_email
 
@@ -754,6 +761,116 @@ class CommunityReplyDetailView(APIView):
         except CommunityReplyUnavailable:
             raise Http404
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class CommunityPostReportView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "community_content_report"
+
+    @extend_schema(
+        operation_id="community_post_report_create",
+        summary="Report a visible Community post",
+        request=CommunityContentReportCreateSerializer,
+        responses={201: CommunityContentReportAcknowledgementSerializer, 200: CommunityContentReportAcknowledgementSerializer, 404: OpenApiResponse(description="Content is unavailable.")},
+        tags=["Community"],
+    )
+
+    @method_decorator(csrf_protect)
+    def post(self, request, post_id):
+        serializer = CommunityContentReportCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        post = visible_community_posts(viewer=request.user).filter(public_id=post_id, status="ACTIVE").first()
+        if post is None or post.author_id == request.user.person_id or not is_community_eligible_user(request.user):
+            raise Http404
+        report, replayed = create_content_report(user=request.user, target=post, request=request, **serializer.validated_data)
+        if report is None:
+            raise Http404
+        return Response(CommunityContentReportAcknowledgementSerializer({"report_id": report.public_id, "status": report.status}).data, status=status.HTTP_200_OK if replayed else status.HTTP_201_CREATED)
+
+
+class CommunityReplyReportView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "community_content_report"
+
+    @extend_schema(
+        operation_id="community_reply_report_create",
+        summary="Report a visible Community reply",
+        request=CommunityContentReportCreateSerializer,
+        responses={201: CommunityContentReportAcknowledgementSerializer, 200: CommunityContentReportAcknowledgementSerializer, 404: OpenApiResponse(description="Content is unavailable.")},
+        tags=["Community"],
+    )
+
+    @method_decorator(csrf_protect)
+    def post(self, request, post_id, reply_id):
+        serializer = CommunityContentReportCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        reply = member_visible_reply(request.user, post_id, reply_id)
+        if reply is None or reply.author_id == request.user.person_id or not is_community_eligible_user(request.user):
+            raise Http404
+        report, replayed = create_content_report(user=request.user, target=reply, request=request, **serializer.validated_data)
+        if report is None:
+            raise Http404
+        return Response(CommunityContentReportAcknowledgementSerializer({"report_id": report.public_id, "status": report.status}).data, status=status.HTTP_200_OK if replayed else status.HTTP_201_CREATED)
+
+
+class CommunityModerationReportListView(APIView):
+    permission_classes = [IsAuthenticated, HasCommunityModerationRole]
+
+    @extend_schema(
+        operation_id="community_moderation_reports_list",
+        summary="List open Community content reports",
+        responses={200: CommunityModerationReportSerializer(many=True)},
+        tags=["Community moderation"],
+    )
+
+    def get(self, request):
+        paginator = CommunityDirectoryPagination()
+        page = paginator.paginate_queryset(_report_queryset().filter(status=CommunityContentReport.Status.OPEN), request, view=self)
+        data = [staff_report_projection(report) for report in page]
+        return paginator.get_paginated_response(CommunityModerationReportSerializer(data, many=True).data)
+
+
+class CommunityModerationReportDetailView(APIView):
+    permission_classes = [IsAuthenticated, HasCommunityModerationRole]
+
+    @extend_schema(
+        operation_id="community_moderation_report_detail",
+        summary="Get a Community content report",
+        responses={200: CommunityModerationReportSerializer, 404: OpenApiResponse(description="Report not found.")},
+        tags=["Community moderation"],
+    )
+
+    def get(self, request, report_id):
+        report = get_staff_report(report_id)
+        if not report:
+            raise Http404
+        return Response(CommunityModerationReportSerializer(staff_report_projection(report)).data)
+
+
+class CommunityModerationReportActionView(APIView):
+    permission_classes = [IsAuthenticated, HasCommunityModerationRole]
+
+    @extend_schema(
+        operation_id="community_moderation_report_action",
+        summary="Apply a Community moderation action",
+        request=CommunityModerationActionSerializer,
+        responses={200: CommunityModerationReportSerializer, 404: OpenApiResponse(description="Report not found."), 409: OpenApiResponse(description="Report or content state does not allow this action.")},
+        tags=["Community moderation"],
+    )
+
+    @method_decorator(csrf_protect)
+    def post(self, request, report_id, action):
+        serializer = CommunityModerationActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            report = moderate_report(report_id=report_id, action=action, moderator=request.user, request=request, **serializer.validated_data)
+        except ContentModerationError as error:
+            return Response({"detail": str(error)}, status=status.HTTP_409_CONFLICT)
+        if report is None:
+            raise Http404
+        return Response(CommunityModerationReportSerializer(staff_report_projection(report)).data)
 
 
 class CommunityDirectoryListView(APIView):

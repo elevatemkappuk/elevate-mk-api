@@ -1,6 +1,6 @@
 from django.urls import path
 
-from community.views import CommunityAccountEmailChangeVerificationView, CommunityAccountEmailChangeView, CommunityAccountMarketingPreferenceView, CommunityAccountMobileView, CommunityAccountPasswordView, CommunityAccountView, CommunityActivationView, CommunityConnectionActionView, CommunityConnectionListView, CommunityConnectionRequestListView, CommunityDirectoryDetailView, CommunityDirectoryListView, CommunityIndustryListView, CommunityJoinView, CommunityLoginView, CommunityMeView, CommunityPasswordResetConfirmView, CommunityPasswordResetRequestView, CommunityPostCreateView, CommunityPostDetailView, CommunityProfileView, CommunityProfileOptionsView, CommunityProfilePhotoView, CommunityProfileReviewAcknowledgementView, CommunityReplyDetailView, CommunityReplyListCreateView
+from community.views import CommunityAccountEmailChangeVerificationView, CommunityAccountEmailChangeView, CommunityAccountMarketingPreferenceView, CommunityAccountMobileView, CommunityAccountPasswordView, CommunityAccountView, CommunityActivationView, CommunityConnectionActionView, CommunityConnectionListView, CommunityConnectionRequestListView, CommunityDirectoryDetailView, CommunityDirectoryListView, CommunityIndustryListView, CommunityJoinView, CommunityLoginView, CommunityMeView, CommunityPasswordResetConfirmView, CommunityPasswordResetRequestView, CommunityPostCreateView, CommunityPostDetailView, CommunityPostReportView, CommunityReplyDetailView, CommunityReplyListCreateView, CommunityReplyReportView, CommunityModerationReportActionView, CommunityModerationReportDetailView, CommunityModerationReportListView, CommunityProfileView, CommunityProfileOptionsView, CommunityProfilePhotoView, CommunityProfileReviewAcknowledgementView
 
 
 urlpatterns = [
@@ -30,6 +30,11 @@ urlpatterns = [
     path("community/connections/<uuid:public_id>/", CommunityConnectionActionView.as_view(), name="community-connection-remove"),
     path("community/posts/", CommunityPostCreateView.as_view(), name="community-post-list"),
     path("community/posts/<uuid:public_id>/", CommunityPostDetailView.as_view(), name="community-post-detail"),
+    path("community/posts/<uuid:post_id>/report/", CommunityPostReportView.as_view(), name="community-post-report"),
     path("community/posts/<uuid:post_id>/replies/", CommunityReplyListCreateView.as_view(), name="community-post-replies"),
+    path("community/posts/<uuid:post_id>/replies/<uuid:reply_id>/report/", CommunityReplyReportView.as_view(), name="community-post-reply-report"),
     path("community/posts/<uuid:post_id>/replies/<uuid:reply_id>/", CommunityReplyDetailView.as_view(), name="community-post-reply-detail"),
+    path("community/moderation/reports/", CommunityModerationReportListView.as_view(), name="community-moderation-report-list"),
+    path("community/moderation/reports/<uuid:report_id>/", CommunityModerationReportDetailView.as_view(), name="community-moderation-report-detail"),
+    path("community/moderation/reports/<uuid:report_id>/<str:action>/", CommunityModerationReportActionView.as_view(), name="community-moderation-report-action"),
 ]

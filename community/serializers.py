@@ -3,7 +3,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from people.models import Person
-from community.models import CommunityPost
+from community.models import CommunityContentReport, CommunityPost
 from community.normalization import normalize_community_name
 from people.services import (
     is_plausible_crm_mobile,
@@ -557,3 +557,53 @@ class CommunityReplySerializer(serializers.Serializer):
     edited_at = serializers.DateTimeField(allow_null=True)
     is_own_reply = serializers.BooleanField()
     replying_to = CommunityReplyingToSerializer(allow_null=True)
+
+
+class CommunityContentReportCreateSerializer(serializers.Serializer):
+    reason = serializers.ChoiceField(choices=CommunityContentReport.Reason.choices)
+    details = serializers.CharField(required=False, allow_blank=True, max_length=1000, trim_whitespace=True)
+
+    def validate(self, attrs):
+        unknown = set(self.initial_data) - set(self.fields)
+        if unknown:
+            raise serializers.ValidationError({field: ["This field is not allowed."] for field in sorted(unknown)})
+        attrs["details"] = attrs.get("details", "").strip()
+        return attrs
+
+
+class CommunityContentReportAcknowledgementSerializer(serializers.Serializer):
+    report_id = serializers.UUIDField()
+    status = serializers.ChoiceField(choices=CommunityContentReport.Status.choices)
+
+
+class CommunityModerationActionSerializer(serializers.Serializer):
+    resolution = serializers.CharField(required=False, allow_blank=True, max_length=1000, trim_whitespace=True)
+
+
+class CommunityModerationIdentitySerializer(serializers.Serializer):
+    directory_id = serializers.UUIDField(allow_null=True)
+    first_name = serializers.CharField()
+    last_name = serializers.CharField()
+    location = serializers.CharField()
+    job_title = serializers.CharField()
+
+
+class CommunityModerationTargetSerializer(serializers.Serializer):
+    type = serializers.ChoiceField(choices=("POST", "REPLY"))
+    public_id = serializers.UUIDField()
+    status = serializers.CharField()
+    headline = serializers.CharField(allow_blank=True)
+    body = serializers.CharField()
+    author = CommunityModerationIdentitySerializer()
+    parent_post = serializers.DictField(allow_null=True)
+
+
+class CommunityModerationReportSerializer(serializers.Serializer):
+    report_id = serializers.UUIDField()
+    reason = serializers.ChoiceField(choices=CommunityContentReport.Reason.choices)
+    details = serializers.CharField()
+    status = serializers.ChoiceField(choices=CommunityContentReport.Status.choices)
+    created_at = serializers.DateTimeField()
+    resolved_at = serializers.DateTimeField(allow_null=True)
+    reporter = CommunityModerationIdentitySerializer()
+    target = CommunityModerationTargetSerializer()
