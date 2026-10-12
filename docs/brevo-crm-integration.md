@@ -15,6 +15,13 @@ membership/domain data, and marketing consent. Brevo is a communications and
 delivery provider. Brevo is not a second CRM and does not become authoritative
 for Elevate Person data merely because it contains a contact record.
 
+The native Community Join flow may record only an affirmative EMAIL opt-in.
+Its `email_marketing_opt_in` field is optional; `false` and omission do not
+record an opt-out. Such opt-ins use source `COMMUNITY_JOIN` and enter the same
+durable preference-history-to-Brevo worker path as other CRM preference changes.
+Community Join cannot reverse an existing explicit CRM opt-out or provider
+restriction. SMS marketing preferences remain outside Join V1.
+
 The implemented marketing integration is intentionally asynchronous:
 
 ```mermaid
@@ -40,7 +47,26 @@ python manage.py process_brevo_sync_jobs --watch
 ```
 
 Brevo transactional email, implemented under `notifications/`, is logically
-separate from marketing contact synchronization and remains unchanged.
+separate from marketing contact synchronization. Community activation and the
+A5.1 verified email-change request use the durable transactional queue and do
+not require marketing consent. The verified email-change email is sent only
+to the requested new address using template ID `29` by default, configured as
+`BREVO_COMMUNITY_EMAIL_CHANGE_TEMPLATE_ID`. Its exact template parameters are
+`first_name`, `verification_url`, and `expires_in_minutes`. The worker mints
+the raw token immediately before delivery; only its hash is persisted. No
+synchronous Brevo call is made by the account endpoint, and A5.1 does not
+change the canonical Person/User email or create a marketing sync job.
+
+A5.2 verification completion updates the canonical email fields atomically and
+then queues the existing `PERSON_EMAIL_MIGRATION` job with immutable previous
+and requested email snapshots. It also queues a separate transactional
+security notification to the previous email address. That notification is
+independent of marketing consent and uses
+`BREVO_COMMUNITY_EMAIL_CHANGE_SECURITY_TEMPLATE_ID` (default `30`). The required template is `Elevate MK — Your
+Email Address Was Changed`, subject `Your Elevate MK account email was changed`,
+and dynamic parameter `first_name` only. It contains no active verification
+URL/token or password and should not unnecessarily expose the complete new
+email address. Both operations remain asynchronous.
 
 Mailchimp is frozen as a rollback/reference provider. `MAILCHIMP` jobs and
 references are not consumed by the automatic Brevo worker, and no new
@@ -195,6 +221,8 @@ Settings are loaded from the backend environment in `config/settings.py`.
 | `MARKETING_SYNC_PROVIDER` | Active marketing provider selector | `BREVO`; unsupported values fail checks/runtime | Web and worker |
 | `BREVO_MARKETING_WEBHOOK_USERNAME` | Inbound webhook Basic Auth username | Empty by default; required to accept webhook traffic | Web process |
 | `BREVO_MARKETING_WEBHOOK_PASSWORD` | Inbound webhook Basic Auth password | Empty by default; required to accept webhook traffic | Web process |
+| `BREVO_COMMUNITY_EMAIL_CHANGE_TEMPLATE_ID` | Brevo transactional template for verified Community email changes | `29` by default; approved template override only | Transactional email worker |
+| `BREVO_COMMUNITY_EMAIL_CHANGE_SECURITY_TEMPLATE_ID` | Brevo transactional security notice sent to the previous email after verified completion | `30` by default; approved template override only | Transactional email worker |
 | `BREVO_SYNC_WORKER_POLL_SECONDS` | Idle worker polling interval | Positive value; default `3.0` seconds | Worker |
 | `BREVO_SYNC_WORKER_BATCH_SIZE` | Maximum jobs claimed per polling batch | Positive value; default `20`, capped at `100` by worker validation | Worker |
 
@@ -480,11 +508,13 @@ CRM OPTED_OUT -> new BREVO synchronization job
 
 ## 14. Person profile synchronization
 
-`PERSON_PROFILE` jobs are created in the authoritative `PersonDetailView.patch`
-path after a successful Person update. Changes to `first_name`, `last_name`, or
-`mobile` trigger them. Unrelated changes and identical saves do not. A pending
-profile job for that Person is reused rather than accumulating duplicate pending
-work. Jobs store no profile PII snapshot; the worker reads the current Person.
+`PERSON_PROFILE` jobs are created after successful authoritative Person updates
+from both the Staff CRM `PersonDetailView.patch` path and the authenticated
+Community Profile self-service path. Changes to `first_name`, `last_name`, or
+`mobile` trigger them; Community Profile currently edits only the first two.
+Unrelated changes and identical saves do not. A pending profile job for that
+Person is reused rather than accumulating duplicate pending work. Jobs store no
+profile PII snapshot; the worker reads the current Person.
 
 Profile synchronization requires an active Brevo marketing
 `ExternalPersonReference`. It never creates a contact or reference merely
@@ -501,6 +531,14 @@ state. If Brevo rejects the optional non-empty `SMS` value as an invalid phone,
 the update is retried once without `SMS`; an intentionally empty `SMS` value
 still goes through unchanged to clear stale provider data. Successful updates
 use `UPDATED_PERSON_PROFILE`.
+
+Community self-service name changes enqueue this existing asynchronous,
+coalesced path inside the same database transaction as the canonical update and
+audit event. No synchronous Brevo request is made. Community Profile does not
+currently edit mobile, so a Community bio, professional-field, skills, or
+interests edit does not require a `PERSON_PROFILE` job under the approved
+mapping. Marketing preferences and consent remain an independent domain and
+are not changed by Community Profile edits.
 
 ## 15. Email identity changes and controlled migration
 
@@ -661,20 +699,22 @@ not evidence that a webhook delivery failed.
 
 ## 21. Production and Railway deployment
 
-The intended deployment separates web and worker processes:
+The intended deployment separates web and worker processes. In Elevate V1 the
+single worker process services both the marketing and transactional queues;
+their domain implementations remain separate:
 
 ```text
 Railway WEB service
     -> Django API and Brevo webhook endpoint
 
 Railway WORKER service
-    -> python manage.py process_brevo_sync_jobs --watch
+    -> python manage.py process_background_jobs --watch
 ```
 
-Both use the same application code and database. The worker requires the
+Both use the same application code and database. The combined worker requires the
 Brevo API key, marketing list ID, and `MARKETING_SYNC_PROVIDER=BREVO`. Webhook
 Basic credentials are principally required by the WEB service. The repository
-documents this start command; a separate Railway worker service must still be
+documents this start command; the separate Railway worker service must still be
 created/configured operationally if it does not already exist. This document
 does not claim that deployment infrastructure is automatically provisioned.
 

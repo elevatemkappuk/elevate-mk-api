@@ -69,6 +69,58 @@ Each deployment runs `collectstatic --noinput` before migrations and Gunicorn.
 WhiteNoise serves the collected files from `STATIC_ROOT`, including Django
 Admin CSS, JavaScript, and theme icons.
 
+## Application object storage
+
+The API supports an explicit AWS S3-backed default storage for durable
+application objects. Individual features choose their own object prefixes;
+Community profile-owned assets use the convention
+`community/profiles/<profile-uuid>/<asset-type>/<asset>`. Profile Photo V1
+uses `community/profiles/<profile-uuid>/profile-photos/<photo-uuid>.<ext>` for
+normalized private photo objects; the profile UUID is a stable random,
+non-PII storage namespace and the final asset name is independently random.
+
+Local development remains filesystem-backed and does not require AWS
+credentials. Deployed S3 mode is enabled only when `USE_S3_STORAGE=True`.
+When enabled, the application fails during startup if the bucket, region,
+access key or secret key is missing. It does not silently fall back to local
+storage.
+
+The default S3 objects are private, public-read ACLs are not configured, and
+generated read URLs use query-string authentication. The default signed URL
+expiry is 900 seconds (15 minutes), configurable with
+`AWS_QUERYSTRING_EXPIRE`. Static files remain separate and continue using
+WhiteNoise; `collectstatic` does not place them in the application-assets
+bucket. S3 addressing is explicitly configured as regional virtual-hosted
+(`AWS_S3_ADDRESSING_STYLE=virtual`) so private presigned URLs use the
+regional endpoint and avoid signature mismatches from global-host selection.
+The setting also accepts `path` when required by an environment.
+
+The backend-only configuration contract is:
+
+| Variable | Purpose | Secret? |
+| --- | --- | --- |
+| `USE_S3_STORAGE` | Explicitly select S3 application storage | No |
+| `AWS_STORAGE_BUCKET_NAME` | Environment-specific S3 bucket | No |
+| `AWS_S3_REGION_NAME` | S3 region | No |
+| `AWS_ACCESS_KEY_ID` | S3 access identity | Yes |
+| `AWS_SECRET_ACCESS_KEY` | S3 access secret | Yes |
+| `AWS_QUERYSTRING_EXPIRE` | Signed URL lifetime in seconds; default `900` | No |
+| `AWS_S3_ADDRESSING_STYLE` | S3 URL addressing style; default `virtual` (`virtual` or `path`) | No |
+
+The current environment buckets are:
+
+| Environment | Bucket | Region |
+| --- | --- | --- |
+| Development | `elevate-mk-assets-dev` | `eu-west-2` |
+| Staging | `elevate-mk-assets-staging` | `eu-west-2` |
+| Production | `elevate-mk-assets-production` | `eu-west-2` |
+
+The staging Railway API should use `elevate-mk-assets-staging` with the
+dedicated `elevate-mk-api-staging` IAM identity. Credentials belong only in
+Railway secret configuration and must never be committed or exposed to the
+Angular frontend. S3 CORS is not required for the current browser-to-Django-
+to-S3 flow.
+
 Set the Railway variable `ALLOWED_HOSTS` to the hostnames Django should accept.
 For the production API, use:
 
@@ -82,7 +134,8 @@ The setting accepts a comma-separated list, for example
 Railway terminates HTTPS at its reverse proxy and forwards the original scheme
 in `X-Forwarded-Proto`. Django is configured to trust that header, so the API
 origin does not need to be added to `CSRF_TRUSTED_ORIGINS` as a workaround for
-proxy scheme detection. Keep the CRM frontend origin in `CSRF_TRUSTED_ORIGINS`.
+proxy scheme detection. Keep the CRM and Community frontend origins in
+`CSRF_TRUSTED_ORIGINS`.
 
 Set these Railway variables for production:
 
@@ -94,11 +147,11 @@ SECURE_SSL_REDIRECT=True
 `DJANGO_DEBUG` controls Django's `DEBUG` setting. Secure session and CSRF
 cookies are enabled automatically when `DEBUG=False`.
 
-Configure the separate CRM origin with full schemes for both CORS and CSRF:
+Configure the CRM and Community frontend origins with full schemes for both CORS and CSRF:
 
 ```text
-CORS_ALLOWED_ORIGINS=https://<crm-frontend-domain>
-CSRF_TRUSTED_ORIGINS=https://<crm-frontend-domain>
+CORS_ALLOWED_ORIGINS=https://<crm-frontend-domain>,https://community.elevatemk.org
+CSRF_TRUSTED_ORIGINS=https://<crm-frontend-domain>,https://community.elevatemk.org
 ```
 
 Both settings accept comma-separated origins when more than one frontend is
@@ -116,12 +169,35 @@ follows:
 | Setting / Railway variable | Production | Staging |
 | --- | --- | --- |
 | `ALLOWED_HOSTS` | `elevate-mk-api-production.up.railway.app` | `elevate-mk-api-staging.up.railway.app` |
-| `CORS_ALLOWED_ORIGINS` | `https://<crm-production-domain>` | `https://elevate-mk-crm-staging.up.railway.app` |
-| `CSRF_TRUSTED_ORIGINS` | `https://<crm-production-domain>` | `https://elevate-mk-crm-staging.up.railway.app` |
+| `CORS_ALLOWED_ORIGINS` | `https://<crm-production-domain>,https://community.elevatemk.org` | `https://elevate-mk-crm-staging.up.railway.app` |
+| `CSRF_TRUSTED_ORIGINS` | `https://<crm-production-domain>,https://community.elevatemk.org` | `https://elevate-mk-crm-staging.up.railway.app` |
 | `CRM_FRONTEND_URL` | `https://<crm-production-domain>` | `https://elevate-mk-crm-staging.up.railway.app` |
+| `COMMUNITY_FRONTEND_URL` | `https://community.elevatemk.org` | `http://localhost:4201` or the staging Community origin |
+| `COMMUNITY_PASSWORD_RESET_THROTTLE_RATE` | `5/hour` | `5/hour` |
+| `COMMUNITY_DIRECTORY_THROTTLE_RATE` | `60/hour` | `60/hour` |
+| `COMMUNITY_CONNECTIONS_THROTTLE_RATE` | `60/hour` | `60/hour` |
+| `COMMUNITY_CONNECTION_REQUESTS_THROTTLE_RATE` | `60/hour` | `60/hour` |
+| `COMMUNITY_CONNECTION_CREATE_THROTTLE_RATE` | `10/hour` | `10/hour` |
+| `COMMUNITY_CONNECTION_MUTATIONS_THROTTLE_RATE` | `30/hour` | `30/hour` |
+| `COMMUNITY_POST_CREATE_THROTTLE_RATE` | `10/hour` | `10/hour` |
+| `COMMUNITY_POST_IDEMPOTENCY_RETENTION_HOURS` | `24` | `24` |
+| `COMMUNITY_REPLY_CREATE_THROTTLE_RATE` | `30/hour` | `30/hour` |
+| `COMMUNITY_CONTENT_REPORT_THROTTLE_RATE` | `10/hour` | `10/hour` |
+| `COMMUNITY_ACTIVATION_EXPIRY_HOURS` | `72` | `72` |
+| `COMMUNITY_ACTIVATION_THROTTLE_RATE` | `10/hour` | `10/hour` |
+| `COMMUNITY_LOGIN_THROTTLE_RATE` | `10/hour` | `10/hour` |
+| `BREVO_COMMUNITY_ACTIVATION_TEMPLATE_ID` | Approved transactional activation template ID | Approved staging transactional activation template ID |
+| `BREVO_COMMUNITY_EMAIL_CHANGE_TEMPLATE_ID` | Approved “Verify your new email address” transactional template; default implementation value `29` | `29` unless staging uses an approved alternate template |
+| `COMMUNITY_EMAIL_CHANGE_EXPIRY_MINUTES` | Verified email-change link lifetime | `60` |
+| `COMMUNITY_ACCOUNT_EMAIL_CHANGE_THROTTLE_RATE` | Authenticated email-change request throttle | `5/hour` |
+| `COMMUNITY_ACCOUNT_EMAIL_CHANGE_VERIFY_THROTTLE_RATE` | Anonymous-capable email-change verification throttle | `10/hour` |
+| `BREVO_COMMUNITY_EMAIL_CHANGE_SECURITY_TEMPLATE_ID` | Approved old-email security notification template | `30` by default; approved template override only |
+| `TRANSACTIONAL_EMAIL_WORKER_POLL_SECONDS` | `3` | `3` |
+| `TRANSACTIONAL_EMAIL_WORKER_BATCH_SIZE` | `20` | `20` |
+| `TRANSACTIONAL_EMAIL_JOB_LEASE_SECONDS` | `900` | `900` |
 | `DJANGO_DEBUG` (`DEBUG`) | `False` | `False` |
 | `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` | Production database credentials and host | Staging database credentials and host |
-| `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME`, `BREVO_REPLY_TO_EMAIL`, `BREVO_REPLY_TO_NAME`, `BREVO_PASSWORD_RESET_TEMPLATE_ID`, `BREVO_MARKETING_LIST_ID`, `MARKETING_SYNC_PROVIDER`, `BREVO_MARKETING_WEBHOOK_USERNAME`, `BREVO_MARKETING_WEBHOOK_PASSWORD` | Production Brevo credentials, template ID, approved marketing list ID, `BREVO` provider selection, and webhook Basic credentials | Staging Brevo credentials, template ID, approved marketing list ID, `BREVO` provider selection, and webhook Basic credentials |
+| `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME`, `BREVO_REPLY_TO_EMAIL`, `BREVO_REPLY_TO_NAME`, `BREVO_PASSWORD_RESET_TEMPLATE_ID`, `BREVO_COMMUNITY_PASSWORD_RESET_TEMPLATE_ID`, `BREVO_MARKETING_LIST_ID`, `MARKETING_SYNC_PROVIDER`, `BREVO_MARKETING_WEBHOOK_USERNAME`, `BREVO_MARKETING_WEBHOOK_PASSWORD` | Production Brevo credentials, CRM/general and Community password-reset template IDs, approved marketing list ID, `BREVO` provider selection, and webhook Basic credentials | Staging Brevo credentials, template IDs, approved marketing list ID, `BREVO` provider selection, and webhook Basic credentials |
 | `SECURE_SSL_REDIRECT` | `True` | `True` |
 | `CSRF_COOKIE_SAMESITE` | `None` | `None` |
 | `SESSION_COOKIE_SAMESITE` | `None` | `None` |
@@ -159,6 +235,13 @@ SESSION_COOKIE_SAMESITE=None
 `DJANGO_DEBUG` and therefore become `True` when `DJANGO_DEBUG=False`; they are
 not separate variables to configure.
 
+The Community development frontend runs at `http://localhost:4201`. For local
+development, include both `http://localhost:4200` and
+`http://localhost:4201` in `CORS_ALLOWED_ORIGINS` and
+`CSRF_TRUSTED_ORIGINS`. The production Community frontend is
+`https://community.elevatemk.org` and must be included in both Railway
+variables alongside the existing CRM origin.
+
 `No migrations to apply` is normal: it means the database already has every
 migration included in the deployed code. The command still proceeds to start
 Gunicorn.
@@ -170,10 +253,24 @@ one process applies schema changes before the replicas start.
 
 ## Brevo worker service
 
-Run automatic Brevo marketing synchronization as a separate Railway worker
-process, not inside the web process:
+For Elevate V1, configure one Railway background-worker service, separate from
+the API/web service. It should run:
 
 ```text
+python manage.py process_background_jobs --watch
+```
+
+This one process services both durable queues while keeping their models,
+processors, retry semantics, and lifecycle independent:
+
+- `TransactionalEmailJob` for Community activation and verified email-change email;
+- `ExternalPersonSyncJob` for Brevo marketing synchronization.
+
+The existing domain-specific commands remain available for diagnostics and
+manual recovery:
+
+```text
+python manage.py process_transactional_email_jobs --watch
 python manage.py process_brevo_sync_jobs --watch
 ```
 
@@ -182,5 +279,13 @@ requires the active Brevo marketing settings, including `BREVO_API_KEY`,
 `BREVO_MARKETING_LIST_ID`, and `MARKETING_SYNC_PROVIDER=BREVO`. Configure
 `BREVO_SYNC_WORKER_POLL_SECONDS` (default `3`) and
 `BREVO_SYNC_WORKER_BATCH_SIZE` (default `20`, maximum `100`) when tuning is
-needed. It handles SIGINT/SIGTERM and preserves durable job state. Mailchimp
-jobs are not automatically processed.
+needed. Configure `BACKGROUND_WORKER_POLL_SECONDS` (default `3`) for the
+combined worker. Configure `TRANSACTIONAL_EMAIL_WORKER_BATCH_SIZE` and
+`BREVO_SYNC_WORKER_BATCH_SIZE` independently. The combined worker handles
+SIGINT/SIGTERM, processes transactional jobs first in each bounded iteration,
+and preserves durable job state. Mailchimp jobs are not automatically
+processed.
+
+The repository does not provision or modify Railway services automatically;
+the production Railway worker service must be configured to use the combined
+command above.

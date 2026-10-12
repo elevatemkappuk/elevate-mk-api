@@ -49,8 +49,10 @@ Current behavior:
 Password recovery uses Django's standard stateless password-reset token generator and the Brevo transactional-email service.
 
 - `POST /api/v1/auth/password-reset/` accepts an email address and always returns the same generic response for well-formed input
+- `POST /api/v1/community/password-reset/` provides the same enumeration-resistant recovery request for eligible Community members and builds its link from backend-only `COMMUNITY_FRONTEND_URL`
 - reset delivery is limited to active accounts with usable passwords; inactive and unknown accounts are not disclosed
 - the reset URL is generated from backend-only `CRM_FRONTEND_URL` and has the form `/reset-password/<uid>/<token>`
+- Community reset requests use `/reset-password/<uid>/<token>` on `COMMUNITY_FRONTEND_URL`; both applications reuse the shared confirmation endpoint
 - `POST /api/v1/auth/password-reset/confirm/` validates the token, account status, and Django password validators before changing the password
 - invalid, expired, consumed, malformed, and inactive-account links return the same controlled response
 - a successful recovery writes `PASSWORD_RESET` audit history without passwords, tokens, URLs, email payloads, or provider responses
@@ -63,7 +65,8 @@ The backend uses the Brevo Transactional Email API for server-to-server transact
 
 - `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, and `BREVO_SENDER_NAME` are required only when an application feature sends email
 - `BREVO_REPLY_TO_EMAIL` and `BREVO_REPLY_TO_NAME` are optional sender-reply settings
-- `BREVO_PASSWORD_RESET_TEMPLATE_ID` is reserved for the future password-reset feature and does not enable password recovery by itself
+- `BREVO_PASSWORD_RESET_TEMPLATE_ID` selects the existing CRM/general password-reset template
+- `BREVO_COMMUNITY_PASSWORD_RESET_TEMPLATE_ID` selects the dedicated Community password-reset template; it expects only the `reset_url` parameter
 - `BREVO_MARKETING_LIST_ID` selects the explicitly approved Brevo marketing list for the manual one-Person sync command
 - `MARKETING_SYNC_PROVIDER` selects the active automatic marketing provider and currently must be `BREVO`
 - `BREVO_MARKETING_WEBHOOK_USERNAME` and `BREVO_MARKETING_WEBHOOK_PASSWORD` authenticate inbound Brevo marketing webhooks; they are separate from `BREVO_API_KEY` and must remain backend-only
@@ -79,6 +82,34 @@ Current behavior:
 - `User.is_active` defaults to `True`.
 - Login rejects inactive users.
 - Inactive login failures use the same generic error as other credential failures.
+
+Community Join creates a durable invitation and transactional-email job for an
+eligible Person without a User. Delivery is performed by the transactional
+worker, which issues and hashes a token only immediately before sending. Raw
+activation tokens, full activation URLs, passwords, and marketing consent data
+are not stored in invitation/job records. The activation email is transactional
+and independent of EMAIL marketing opt-in state. Provider-accepted or
+process-crash delivery outcomes are represented as delivery-uncertain rather
+than blindly token-rotated.
+
+Community activation redemption is implemented at
+`POST /api/v1/community/activate/<invitation_uuid>/<token>/`. It uses the
+existing CSRF-protected, credentialed Django session architecture and creates
+the User only after atomically revalidating the invitation, Person, Membership,
+email consistency, and account state. Successful redemption logs the new
+member into a normal HttpOnly session. `GET /api/v1/community/me/` exposes only
+the minimal Community-safe current-user representation and requires an ACTIVE
+Membership. Community Users are not assigned staff roles and do not gain CRM
+authorization. Activation attempts use the dedicated
+`COMMUNITY_ACTIVATION_THROTTLE_RATE` setting, defaulting to `10/hour`.
+
+The combined `process_background_jobs --watch` worker claims pending
+activation jobs using database locks and a configurable lease. It issues the
+activation token only at delivery time, refreshes the configured usable expiry
+from that issuance, and never logs or persists the raw token or URL. Stale
+processing and generic provider failures become terminal
+`DELIVERY_UNCERTAIN`; only definitive pre-acceptance failures are retried. The
+same worker also processes durable Brevo marketing synchronization jobs.
 
 ## Session Authentication
 Elevate's current first-party web authentication strategy is Django server-side sessions/cookies rather than JWT.
@@ -193,6 +224,11 @@ Current implementation relies on Django's normal session framework:
 - Django loads the session before view code runs
 - `sessionid` remains HttpOnly and browser-managed
 - the frontend must not read or manually manage `sessionid`
+
+The anonymous Community join POST is also CSRF-protected. A Community client must
+call `GET /api/v1/auth/csrf/` and send the returned Django CSRF token in the
+`X-CSRFToken` header when posting to `/api/v1/community/join/`. The endpoint does
+not create or establish a login session.
 - the CSRF bootstrap flow relies on `csrftoken` remaining JavaScript-readable so the frontend can send `X-CSRFToken`
 - Django session cookies are intended to remain host-scoped unless a future explicit SSO requirement changes that direction
 

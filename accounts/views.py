@@ -43,6 +43,13 @@ class AuditPersistenceError(Exception):
     pass
 
 
+def build_password_reset_url(*, user, frontend_url):
+    base_url = frontend_url.rstrip("/")
+    uid = urlsafe_base64_encode(force_bytes(user.pk))
+    token = default_token_generator.make_token(user)
+    return f"{base_url}/reset-password/{uid}/{token}"
+
+
 def record_auth_audit_or_raise(**kwargs):
     try:
         record_audit_event(**kwargs)
@@ -230,10 +237,7 @@ class PasswordResetRequestView(APIView):
         return Response({"detail": PASSWORD_RESET_REQUEST_DETAIL})
 
     def _reset_url(self, user):
-        base_url = settings.CRM_FRONTEND_URL.rstrip("/")
-        uid = urlsafe_base64_encode(force_bytes(user.pk))
-        token = default_token_generator.make_token(user)
-        return f"{base_url}/reset-password/{uid}/{token}"
+        return build_password_reset_url(user=user, frontend_url=settings.CRM_FRONTEND_URL)
 
 
 @method_decorator(csrf_protect, name="dispatch")

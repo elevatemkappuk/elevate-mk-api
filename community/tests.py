@@ -1,0 +1,948 @@
+from unittest import mock
+from datetime import timedelta
+
+from django.core.cache import cache
+from django.db import IntegrityError, transaction
+from django.test import TestCase, override_settings
+from django.utils import timezone
+from rest_framework.test import APIClient
+
+from audit.models import AuditEvent
+from community.models import CommunityAccountInvitation, JoinSubmissionReceipt
+from external_references.models import ExternalPersonSyncJob
+from marketing_preferences.models import MarketingPreference, MarketingPreferenceHistory
+from memberships.models import Membership
+from people.models import Person
+from professional_profiles.models import Industry, ProfessionalProfile
+from accounts.models import User
+from notifications.models import TransactionalEmailJob
+
+
+class CommunityActivationSchedulingTests(TestCase):
+    join_url = "/api/v1/community/join/"
+
+    def setUp(self):
+        self.client = APIClient()
+        cache.clear()
+        self.industry = Industry.objects.get(slug="technology")
+
+    def payload(self, **overrides):
+        result = {
+            "first_name": "Amina",
+            "last_name": "Zulu",
+            "gender": Person.Gender.FEMALE,
+            "age_range": Person.AgeRange.AGE_30_34,
+            "email": "activation@example.com",
+            "mobile": "",
+            "phone_region": "",
+            "location": "Milton Keynes",
+            "industry": self.industry.slug,
+            "job_title": "Software Engineer",
+            "linkedin_url": "",
+        }
+        result.update(overrides)
+        return result
+
+    @override_settings(
+        COMMUNITY_ACTIVATION_EXPIRY_HOURS=48,
+        COMMUNITY_FRONTEND_URL="http://localhost:4201",
+        BREVO_COMMUNITY_ACTIVATION_TEMPLATE_ID="activation-template",
+    )
+    def test_eligible_join_creates_one_non_secret_invitation_and_job_without_user(self):
+        response = self.client.post(self.join_url, self.payload(), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        person = Person.objects.get(primary_email="activation@example.com")
+        invitation = CommunityAccountInvitation.objects.get(person=person)
+        job = TransactionalEmailJob.objects.get(invitation=invitation)
+        self.assertFalse(User.objects.filter(person=person).exists())
+        self.assertEqual(invitation.intended_email, "activation@example.com")
+        self.assertAlmostEqual(
+            (invitation.expires_at - invitation.created_at).total_seconds(),
+            48 * 3600,
+            places=2,
+        )
+        self.assertIsNone(invitation.token_hash)
+        self.assertNotIn("activation_url", {field.name for field in TransactionalEmailJob._meta.fields})
+        self.assertEqual(job.template_id, "activation-template")
+        self.assertEqual(job.first_name, "Amina")
+        self.assertEqual(job.expires_in_hours, 48)
+        self.assertEqual(job.status, TransactionalEmailJob.Status.PENDING)
+
+    def test_existing_person_without_user_gets_same_single_invitation(self):
+        person = Person.objects.create(
+            first_name="Existing",
+            last_name="Member",
+            primary_email="activation@example.com",
+        )
+        response = self.client.post(self.join_url, self.payload(), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(CommunityAccountInvitation.objects.filter(person=person).count(), 1)
+        self.assertEqual(TransactionalEmailJob.objects.filter(invitation__person=person).count(), 1)
+
+    def test_person_can_have_historical_invitations_but_only_one_current(self):
+        person = Person.objects.create(
+            first_name="History",
+            last_name="Member",
+            primary_email="history@example.com",
+        )
+        first = CommunityAccountInvitation.objects.create(
+            person=person,
+            intended_email=person.primary_email,
+            expires_at=timezone.now() + timedelta(hours=72),
+        )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                CommunityAccountInvitation.objects.create(
+                    person=person,
+                    intended_email=person.primary_email,
+                    expires_at=timezone.now() + timedelta(hours=72),
+                )
+
+        first.superseded_at = timezone.now()
+        first.save(update_fields=["superseded_at", "updated_at"])
+        replacement = CommunityAccountInvitation.objects.create(
+            person=person,
+            intended_email=person.primary_email,
+            expires_at=timezone.now() + timedelta(hours=72),
+        )
+
+        self.assertEqual(person.community_account_invitations.count(), 2)
+        self.assertEqual(replacement.person_id, person.id)
+        self.assertTrue(first.superseded_at is not None)
+
+    def test_idempotent_replay_does_not_duplicate_invitation_or_job(self):
+        headers = {"HTTP_IDEMPOTENCY_KEY": "activation-key"}
+        first = self.client.post(self.join_url, self.payload(), format="json", **headers)
+        second = self.client.post(self.join_url, self.payload(), format="json", **headers)
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 202)
+        self.assertEqual(CommunityAccountInvitation.objects.count(), 1)
+        self.assertEqual(TransactionalEmailJob.objects.count(), 1)
+
+    def test_existing_usable_user_gets_no_new_account_invitation(self):
+        person = Person.objects.create(
+            first_name="Existing",
+            last_name="User",
+            primary_email="activation@example.com",
+        )
+        User.objects.create_user(email="activation@example.com", password="Strong-password-123!", person=person)
+
+        response = self.client.post(self.join_url, self.payload(), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        self.assertFalse(CommunityAccountInvitation.objects.exists())
+        self.assertFalse(TransactionalEmailJob.objects.exists())
+
+    def test_cancelled_activation_job_is_replaced_by_a_new_current_invitation_and_job(self):
+        first = self.client.post(
+            self.join_url,
+            self.payload(email="cancelled@example.com"),
+            format="json",
+            HTTP_IDEMPOTENCY_KEY="cancelled-first",
+        )
+        person = Person.objects.get(primary_email="cancelled@example.com")
+        old_invitation = CommunityAccountInvitation.objects.get(person=person)
+        old_job = TransactionalEmailJob.objects.get(invitation=old_invitation)
+        old_job.status = TransactionalEmailJob.Status.CANCELLED
+        old_job.completed_at = timezone.now()
+        old_job.save(update_fields=["status", "completed_at", "updated_at"])
+
+        second = self.client.post(
+            self.join_url,
+            self.payload(email="cancelled@example.com"),
+            format="json",
+            HTTP_IDEMPOTENCY_KEY="cancelled-recovery",
+        )
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 202)
+        current_invitations = CommunityAccountInvitation.objects.filter(
+            person=person,
+            used_at__isnull=True,
+            revoked_at__isnull=True,
+            superseded_at__isnull=True,
+        )
+        self.assertEqual(current_invitations.count(), 1)
+        replacement = current_invitations.get()
+        replacement_job = TransactionalEmailJob.objects.get(invitation=replacement)
+        self.assertNotEqual(replacement.pk, old_invitation.pk)
+        self.assertNotEqual(replacement_job.pk, old_job.pk)
+        self.assertEqual(old_job.status, TransactionalEmailJob.Status.CANCELLED)
+        old_invitation.refresh_from_db()
+        self.assertIsNotNone(old_invitation.superseded_at)
+        self.assertEqual(replacement_job.status, TransactionalEmailJob.Status.PENDING)
+        self.assertEqual(Person.objects.filter(primary_email="cancelled@example.com").count(), 1)
+        self.assertEqual(Membership.objects.filter(person=person).count(), 1)
+        self.assertEqual(ProfessionalProfile.objects.filter(person=person).count(), 1)
+
+    def test_viable_activation_job_states_reuse_existing_invitation_and_job(self):
+        for index, job_status in enumerate(
+            (
+                TransactionalEmailJob.Status.PENDING,
+                TransactionalEmailJob.Status.PROCESSING,
+                TransactionalEmailJob.Status.SENT,
+                TransactionalEmailJob.Status.DELIVERY_UNCERTAIN,
+                TransactionalEmailJob.Status.FAILED,
+            )
+        ):
+            email = f"reuse-{index}@example.com"
+            response = self.client.post(
+                self.join_url,
+                self.payload(email=email),
+                format="json",
+                HTTP_IDEMPOTENCY_KEY=f"reuse-first-{index}",
+            )
+            person = Person.objects.get(primary_email=email)
+            invitation = CommunityAccountInvitation.objects.get(person=person)
+            job = TransactionalEmailJob.objects.get(invitation=invitation)
+            job.status = job_status
+            job.save(update_fields=["status", "updated_at"])
+
+            replay = self.client.post(
+                self.join_url,
+                self.payload(email=email),
+                format="json",
+                HTTP_IDEMPOTENCY_KEY=f"reuse-second-{index}",
+            )
+
+            self.assertEqual(response.status_code, 202)
+            self.assertEqual(replay.status_code, 202)
+            self.assertEqual(CommunityAccountInvitation.objects.filter(person=person).count(), 1)
+            self.assertEqual(TransactionalEmailJob.objects.filter(invitation=invitation).count(), 1)
+            job.refresh_from_db()
+            self.assertEqual(job.status, job_status)
+
+    def test_inactive_or_unusable_user_is_not_mutated_or_invited(self):
+        person = Person.objects.create(
+            first_name="Existing",
+            last_name="User",
+            primary_email="activation@example.com",
+        )
+        user = User.objects.create_user(email="activation@example.com", password=None, person=person)
+        user.is_active = False
+        user.save(update_fields=["is_active"])
+
+        response = self.client.post(self.join_url, self.payload(), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        self.assertFalse(CommunityAccountInvitation.objects.exists())
+        self.assertFalse(TransactionalEmailJob.objects.exists())
+        user.refresh_from_db()
+        self.assertFalse(user.is_active)
+
+    def test_activation_scheduling_is_independent_of_marketing_opt_in(self):
+        for index, opt_in in enumerate((True, False, None)):
+            payload = self.payload(email=f"activation-{index}@example.com")
+            if opt_in is not None:
+                payload["email_marketing_opt_in"] = opt_in
+
+            response = self.client.post(self.join_url, payload, format="json")
+
+            self.assertEqual(response.status_code, 202)
+
+        self.assertEqual(CommunityAccountInvitation.objects.count(), 3)
+        self.assertEqual(TransactionalEmailJob.objects.count(), 3)
+        self.assertEqual(MarketingPreference.objects.count(), 1)
+
+
+class CommunityJoinApiTests(TestCase):
+    join_url = "/api/v1/community/join/"
+    industries_url = "/api/v1/community/industries/"
+
+    def setUp(self):
+        self.client = APIClient()
+        cache.clear()
+        self.industry = Industry.objects.get(slug="technology")
+
+    def payload(self, **overrides):
+        result = {
+            "first_name": "Amina",
+            "last_name": "Zulu",
+            "gender": Person.Gender.FEMALE,
+            "age_range": Person.AgeRange.AGE_30_34,
+            "email": "amina@example.com",
+            "mobile": "07123 456 789",
+            "phone_region": "GB",
+            "location": "Milton Keynes",
+            "industry": self.industry.slug,
+            "job_title": "Software Engineer",
+            "linkedin_url": "https://www.linkedin.com/in/amina",
+        }
+        result.update(overrides)
+        return result
+
+    def test_public_industry_projection_contains_only_slug_and_label(self):
+        response = self.client.get(self.industries_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(set(response.data[0]), {"slug", "label"})
+        self.assertIn({"slug": self.industry.slug, "label": self.industry.name}, response.data)
+
+    def test_crm_industry_endpoint_remains_protected(self):
+        response = self.client.get("/api/v1/industries/")
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_new_join_creates_person_profile_membership_and_safe_response(self):
+        response = self.client.post(self.join_url, self.payload(), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(
+            response.data,
+            {"status": "accepted", "message": "Your membership submission has been received."},
+        )
+        person = Person.objects.get(primary_email="amina@example.com")
+        self.assertEqual(person.record_type, Person.RecordType.BUSINESS)
+        self.assertEqual(person.mobile, "+447123456789")
+        self.assertEqual(person.professional_profile.industry, self.industry)
+        self.assertEqual(person.professional_profile.job_title, "Software Engineer")
+        self.assertEqual(person.membership.status, Membership.Status.ACTIVE)
+        self.assertEqual(person.membership.membership_source, Membership.Source.COMMUNITY_PLATFORM)
+        self.assertEqual(person.membership.joined_at, timezone.localdate())
+        self.assertIsNone(person.membership.ended_at)
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                action=AuditEvent.Action.PERSON_CREATED,
+                metadata__source="COMMUNITY_JOIN",
+            ).exists()
+        )
+
+    def test_exact_email_reuses_active_person_and_fills_only_missing_values(self):
+        person = Person.objects.create(
+            first_name="Existing",
+            last_name="Name",
+            primary_email="amina@example.com",
+            location="Existing location",
+        )
+        response = self.client.post(self.join_url, self.payload(), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        person.refresh_from_db()
+        self.assertEqual(person.first_name, "Existing")
+        self.assertEqual(person.last_name, "Name")
+        self.assertEqual(person.location, "Existing location")
+        self.assertEqual(person.gender, Person.Gender.FEMALE)
+        self.assertEqual(person.age_range, Person.AgeRange.AGE_30_34)
+        self.assertEqual(person.membership.status, Membership.Status.ACTIVE)
+
+    def test_cross_person_email_and_mobile_collision_is_generic_and_does_not_mutate(self):
+        person_a = Person.objects.create(
+            first_name="Email",
+            last_name="Owner",
+            primary_email="amina@example.com",
+            location="A location",
+        )
+        person_b = Person.objects.create(
+            first_name="Mobile",
+            last_name="Owner",
+            primary_email="other@example.com",
+            mobile="+447123456789",
+        )
+        profile_a = ProfessionalProfile.objects.create(person=person_a, job_title="A title", industry=self.industry)
+        profile_b = ProfessionalProfile.objects.create(person=person_b, job_title="B title", industry=self.industry)
+        membership_a = Membership.objects.create(
+            person=person_a,
+            status=Membership.Status.ACTIVE,
+            joined_at=timezone.localdate(),
+            membership_source=Membership.Source.STAFF,
+        )
+        membership_b = Membership.objects.create(
+            person=person_b,
+            status=Membership.Status.ACTIVE,
+            joined_at=timezone.localdate(),
+            membership_source=Membership.Source.WEBSITE_FORM,
+        )
+
+        response = self.client.post(
+            self.join_url,
+            self.payload(email="AMINA@EXAMPLE.COM", mobile="07123 456 789"),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        person_a.refresh_from_db()
+        person_b.refresh_from_db()
+        profile_a.refresh_from_db()
+        profile_b.refresh_from_db()
+        membership_a.refresh_from_db()
+        membership_b.refresh_from_db()
+        self.assertEqual(person_a.location, "A location")
+        self.assertEqual(person_b.mobile, "+447123456789")
+        self.assertEqual(profile_a.job_title, "A title")
+        self.assertEqual(profile_b.job_title, "B title")
+        self.assertEqual(membership_a.membership_source, Membership.Source.STAFF)
+        self.assertEqual(membership_b.membership_source, Membership.Source.WEBSITE_FORM)
+
+    def test_same_person_normalized_mobile_is_safely_reused(self):
+        person = Person.objects.create(
+            first_name="Existing",
+            last_name="Mobile",
+            primary_email="amina@example.com",
+            mobile="07123 456 789",
+        )
+
+        response = self.client.post(
+            self.join_url,
+            self.payload(mobile="07123456789"),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(Person.objects.filter(primary_email="amina@example.com").count(), 1)
+        person.refresh_from_db()
+        self.assertEqual(person.mobile, "07123 456 789")
+        self.assertEqual(person.membership.status, Membership.Status.ACTIVE)
+
+    def test_existing_active_member_repeat_is_accepted_without_duplicate_membership(self):
+        person = Person.objects.create(
+            first_name="Existing",
+            last_name="Member",
+            primary_email="amina@example.com",
+            mobile="+447123456789",
+            location="Existing location",
+        )
+        profile = ProfessionalProfile.objects.create(
+            person=person,
+            job_title="Existing title",
+            industry=Industry.objects.create(name="Finance", slug="finance"),
+            linkedin_url="https://www.linkedin.com/in/existing",
+        )
+        joined_at = timezone.localdate()
+        membership = Membership.objects.create(
+            person=person,
+            status=Membership.Status.ACTIVE,
+            joined_at=joined_at,
+            membership_source=Membership.Source.STAFF,
+        )
+        response = self.client.post(self.join_url, self.payload(), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(
+            response.data,
+            {"status": "accepted", "message": "Your membership submission has been received."},
+        )
+        self.assertEqual(Membership.objects.filter(person=person).count(), 1)
+        person.refresh_from_db()
+        membership.refresh_from_db()
+        profile.refresh_from_db()
+        self.assertEqual(membership.status, Membership.Status.ACTIVE)
+        self.assertEqual(membership.joined_at, joined_at)
+        self.assertEqual(membership.membership_source, Membership.Source.STAFF)
+        self.assertEqual(person.first_name, "Existing")
+        self.assertEqual(person.last_name, "Member")
+        self.assertEqual(person.mobile, "+447123456789")
+        self.assertEqual(person.location, "Existing location")
+        self.assertEqual(profile.job_title, "Existing title")
+        self.assertEqual(profile.industry.slug, "finance")
+        self.assertEqual(profile.linkedin_url, "https://www.linkedin.com/in/existing")
+
+    def test_existing_active_member_fills_only_missing_values(self):
+        person = Person.objects.create(
+            first_name="Existing",
+            last_name="Member",
+            primary_email="amina@example.com",
+            location="Existing location",
+        )
+        profile = ProfessionalProfile.objects.create(person=person, job_title="Existing title")
+        membership = Membership.objects.create(
+            person=person,
+            status=Membership.Status.ACTIVE,
+            joined_at=timezone.localdate(),
+            membership_source=Membership.Source.STAFF,
+        )
+
+        response = self.client.post(self.join_url, self.payload(), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        person.refresh_from_db()
+        profile.refresh_from_db()
+        membership.refresh_from_db()
+        self.assertEqual(person.location, "Existing location")
+        self.assertEqual(person.gender, Person.Gender.FEMALE)
+        self.assertEqual(person.age_range, Person.AgeRange.AGE_30_34)
+        self.assertEqual(profile.job_title, "Existing title")
+        self.assertEqual(profile.industry, self.industry)
+        self.assertEqual(profile.linkedin_url, "https://www.linkedin.com/in/amina")
+        self.assertEqual(membership.status, Membership.Status.ACTIVE)
+
+    def test_name_only_and_mobile_only_evidence_do_not_match(self):
+        Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="other@example.com")
+        Person.objects.create(first_name="Mobile", last_name="Owner", primary_email="mobile@example.com", mobile="+447123456789")
+
+        name_response = self.client.post(
+            self.join_url,
+            self.payload(email="new@example.com", mobile="", phone_region=""),
+            format="json",
+        )
+        mobile_response = self.client.post(
+            self.join_url,
+            self.payload(email="new-mobile@example.com", mobile="07123456789"),
+            format="json",
+        )
+
+        self.assertEqual(name_response.status_code, 202)
+        self.assertEqual(mobile_response.status_code, 409)
+        self.assertEqual(Person.objects.filter(primary_email="new@example.com").count(), 1)
+        self.assertFalse(Person.objects.filter(primary_email="new-mobile@example.com").exists())
+
+    def test_contradictory_mobile_evidence_does_not_mutate(self):
+        Person.objects.create(
+            first_name="Existing",
+            last_name="Person",
+            primary_email="amina@example.com",
+            mobile="07123111111",
+        )
+
+        response = self.client.post(self.join_url, self.payload(mobile="07123222222"), format="json")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(Person.objects.filter(primary_email="amina@example.com").count(), 1)
+        self.assertFalse(Membership.objects.filter(person__primary_email="amina@example.com").exists())
+
+    def test_archived_former_and_ambiguous_or_contradictory_identity_do_not_mutate(self):
+        archived = Person.objects.create(
+            first_name="Archived", last_name="Person", primary_email="archived@example.com", archived_at=timezone.now()
+        )
+        former = Person.objects.create(first_name="Former", last_name="Person", primary_email="former@example.com")
+        Membership.objects.create(
+            person=former,
+            status=Membership.Status.FORMER,
+            joined_at=timezone.localdate(),
+            ended_at=timezone.localdate(),
+            membership_source=Membership.Source.STAFF,
+        )
+        Person.objects.create(first_name="One", last_name="Email", primary_email="ambiguous@example.com")
+        Person.objects.create(first_name="Two", last_name="Email", primary_email="ambiguous@example.com")
+
+        for email in ("archived@example.com", "former@example.com", "ambiguous@example.com"):
+            response = self.client.post(self.join_url, self.payload(email=email), format="json")
+            self.assertEqual(response.status_code, 409)
+        self.assertFalse(hasattr(archived, "membership"))
+        self.assertEqual(Membership.objects.filter(person=former).count(), 1)
+
+    def test_existing_populated_profile_fields_are_not_overwritten(self):
+        person = Person.objects.create(first_name="Existing", last_name="Profile", primary_email="amina@example.com")
+        profile = ProfessionalProfile.objects.create(
+            person=person,
+            job_title="Existing title",
+            industry=Industry.objects.create(name="Finance", slug="finance"),
+            linkedin_url="https://www.linkedin.com/in/existing",
+        )
+
+        response = self.client.post(self.join_url, self.payload(), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        profile.refresh_from_db()
+        self.assertEqual(profile.job_title, "Existing title")
+        self.assertEqual(profile.industry.slug, "finance")
+        self.assertEqual(profile.linkedin_url, "https://www.linkedin.com/in/existing")
+
+    def test_invalid_or_inactive_industry_is_rejected(self):
+        inactive = Industry.objects.create(name="Inactive", slug="inactive", is_active=False)
+        for value in ("missing", inactive.slug):
+            response = self.client.post(self.join_url, self.payload(industry=value), format="json")
+            self.assertEqual(response.status_code, 400)
+        self.assertFalse(Person.objects.filter(primary_email="amina@example.com").exists())
+
+    def test_mobile_requires_phone_region_and_invalid_phone_does_not_mutate(self):
+        missing_region = self.client.post(
+            self.join_url,
+            self.payload(phone_region=""),
+            format="json",
+        )
+        invalid_number = self.client.post(
+            self.join_url,
+            self.payload(mobile="07123", phone_region="GB", email="invalid@example.com"),
+            format="json",
+        )
+        mismatch = self.client.post(
+            self.join_url,
+            self.payload(mobile="+233241234567", phone_region="GB", email="mismatch@example.com"),
+            format="json",
+        )
+
+        self.assertEqual(missing_region.status_code, 400)
+        self.assertEqual(invalid_number.status_code, 400)
+        self.assertEqual(mismatch.status_code, 400)
+        self.assertFalse(Person.objects.filter(primary_email__in=("invalid@example.com", "mismatch@example.com")).exists())
+
+    def test_phone_region_does_not_populate_person_location(self):
+        response = self.client.post(self.join_url, self.payload(), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        person = Person.objects.get(primary_email="amina@example.com")
+        self.assertEqual(person.location, "Milton Keynes")
+
+    def test_new_join_email_opt_in_records_preference_history_and_async_job(self):
+        response = self.client.post(
+            self.join_url,
+            self.payload(email_marketing_opt_in=True),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 202)
+        person = Person.objects.get(primary_email="amina@example.com")
+        preference = MarketingPreference.objects.get(person=person)
+        history = MarketingPreferenceHistory.objects.get(preference=preference)
+        self.assertEqual(preference.channel, MarketingPreference.Channel.EMAIL)
+        self.assertEqual(preference.state, MarketingPreference.State.OPTED_IN)
+        self.assertEqual(preference.source, MarketingPreference.Source.COMMUNITY_JOIN)
+        self.assertIsNone(preference.actor_user_id)
+        self.assertEqual(history.source, MarketingPreference.Source.COMMUNITY_JOIN)
+        self.assertEqual(history.state, MarketingPreference.State.OPTED_IN)
+        self.assertIsNone(history.actor_user_id)
+        self.assertTrue(
+            ExternalPersonSyncJob.objects.filter(
+                provider="BREVO",
+                job_type="EMAIL_MARKETING_PREFERENCE",
+                source_event_id=history.id,
+            ).exists()
+        )
+
+    def test_new_join_false_leaves_email_preference_unknown(self):
+        response = self.client.post(
+            self.join_url,
+            self.payload(email_marketing_opt_in=False),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 202)
+        person = Person.objects.get(primary_email="amina@example.com")
+        self.assertFalse(MarketingPreference.objects.filter(person=person).exists())
+        self.assertFalse(MarketingPreferenceHistory.objects.exists())
+        self.assertEqual(Membership.objects.filter(person=person).count(), 1)
+
+    def test_new_join_omitted_email_opt_in_leaves_email_preference_unknown(self):
+        response = self.client.post(self.join_url, self.payload(), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        person = Person.objects.get(primary_email="amina@example.com")
+        self.assertFalse(MarketingPreference.objects.filter(person=person).exists())
+        self.assertFalse(MarketingPreferenceHistory.objects.exists())
+
+    def test_existing_unknown_person_can_opt_into_email(self):
+        person = Person.objects.create(first_name="Existing", last_name="Person", primary_email="amina@example.com")
+
+        response = self.client.post(self.join_url, self.payload(email_marketing_opt_in=True), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        preference = MarketingPreference.objects.get(person=person)
+        self.assertEqual(preference.state, MarketingPreference.State.OPTED_IN)
+        self.assertEqual(preference.source, MarketingPreference.Source.COMMUNITY_JOIN)
+
+    def test_existing_unknown_person_without_email_opt_in_remains_unknown(self):
+        person = Person.objects.create(first_name="Existing", last_name="Person", primary_email="amina@example.com")
+
+        response = self.client.post(self.join_url, self.payload(email_marketing_opt_in=False), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        self.assertFalse(MarketingPreference.objects.filter(person=person).exists())
+
+    def test_existing_opted_in_person_is_preserved_for_all_join_values(self):
+        person = Person.objects.create(first_name="Existing", last_name="Person", primary_email="amina@example.com")
+        preference = MarketingPreference.objects.create(
+            person=person,
+            channel=MarketingPreference.Channel.EMAIL,
+            state=MarketingPreference.State.OPTED_IN,
+            source=MarketingPreference.Source.STAFF_RECORDED,
+        )
+        MarketingPreferenceHistory.objects.create(
+            preference=preference,
+            channel=preference.channel,
+            state=preference.state,
+            source=preference.source,
+            recorded_at=preference.recorded_at,
+        )
+
+        for overrides in ({"email_marketing_opt_in": True}, {"email_marketing_opt_in": False}, {}):
+            response = self.client.post(self.join_url, self.payload(**overrides), format="json")
+            self.assertEqual(response.status_code, 202)
+
+        preference.refresh_from_db()
+        self.assertEqual(preference.state, MarketingPreference.State.OPTED_IN)
+        self.assertEqual(preference.source, MarketingPreference.Source.STAFF_RECORDED)
+        self.assertEqual(MarketingPreferenceHistory.objects.filter(preference=preference).count(), 1)
+
+    def test_existing_opted_out_person_cannot_be_reversed_by_community_join(self):
+        person = Person.objects.create(first_name="Existing", last_name="Person", primary_email="amina@example.com")
+        preference = MarketingPreference.objects.create(
+            person=person,
+            channel=MarketingPreference.Channel.EMAIL,
+            state=MarketingPreference.State.OPTED_OUT,
+            source=MarketingPreference.Source.BREVO,
+        )
+
+        response = self.client.post(self.join_url, self.payload(email_marketing_opt_in=True), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        preference.refresh_from_db()
+        self.assertEqual(preference.state, MarketingPreference.State.OPTED_OUT)
+        self.assertEqual(preference.source, MarketingPreference.Source.BREVO)
+        self.assertEqual(MarketingPreferenceHistory.objects.count(), 0)
+        self.assertNotIn("OPTED_OUT", str(response.data))
+
+    def test_existing_active_member_can_opt_into_email_without_membership_change(self):
+        person = Person.objects.create(first_name="Existing", last_name="Member", primary_email="amina@example.com")
+        joined_at = timezone.localdate()
+        membership = Membership.objects.create(
+            person=person,
+            status=Membership.Status.ACTIVE,
+            joined_at=joined_at,
+            membership_source=Membership.Source.STAFF,
+        )
+
+        response = self.client.post(self.join_url, self.payload(email_marketing_opt_in=True), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        membership.refresh_from_db()
+        self.assertEqual(Membership.objects.filter(person=person).count(), 1)
+        self.assertEqual(membership.status, Membership.Status.ACTIVE)
+        self.assertEqual(membership.joined_at, joined_at)
+        self.assertEqual(membership.membership_source, Membership.Source.STAFF)
+        self.assertEqual(
+            MarketingPreference.objects.get(person=person).state,
+            MarketingPreference.State.OPTED_IN,
+        )
+
+    def test_existing_active_opted_out_member_remains_opted_out(self):
+        person = Person.objects.create(first_name="Existing", last_name="Member", primary_email="amina@example.com")
+        Membership.objects.create(
+            person=person,
+            status=Membership.Status.ACTIVE,
+            joined_at=timezone.localdate(),
+            membership_source=Membership.Source.STAFF,
+        )
+        MarketingPreference.objects.create(
+            person=person,
+            channel=MarketingPreference.Channel.EMAIL,
+            state=MarketingPreference.State.OPTED_OUT,
+            source=MarketingPreference.Source.BREVO,
+        )
+
+        response = self.client.post(self.join_url, self.payload(email_marketing_opt_in=True), format="json")
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(
+            MarketingPreference.objects.get(person=person).state,
+            MarketingPreference.State.OPTED_OUT,
+        )
+        self.assertEqual(Membership.objects.filter(person=person).count(), 1)
+
+    def test_malformed_email_marketing_opt_in_is_rejected_without_mutation(self):
+        response = self.client.post(
+            self.join_url,
+            self.payload(email_marketing_opt_in="sometimes"),
+            format="json",
+            HTTP_IDEMPOTENCY_KEY="invalid-marketing-preference",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Person.objects.exists())
+        self.assertFalse(MarketingPreference.objects.exists())
+        self.assertFalse(MarketingPreferenceHistory.objects.exists())
+        self.assertFalse(ExternalPersonSyncJob.objects.exists())
+        self.assertFalse(JoinSubmissionReceipt.objects.exists())
+
+    def test_unknown_and_invalid_fields_are_rejected(self):
+        response = self.client.post(
+            self.join_url,
+            self.payload(status="ACTIVE", joined_at="2026-09-30"),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("status", response.data)
+        self.assertIn("joined_at", response.data)
+
+    def test_transaction_rolls_back_when_audit_fails(self):
+        with mock.patch("community.services.record_audit_event", side_effect=RuntimeError("audit down")):
+            with self.assertRaises(RuntimeError):
+                self.client.post(self.join_url, self.payload(), format="json")
+
+        self.assertFalse(Person.objects.filter(primary_email="amina@example.com").exists())
+        self.assertFalse(AuditEvent.objects.filter(metadata__source="COMMUNITY_JOIN").exists())
+
+    def test_idempotency_replays_safe_result_and_rejects_different_payload(self):
+        headers = {"HTTP_IDEMPOTENCY_KEY": "join-retry-1"}
+        first = self.client.post(self.join_url, self.payload(), format="json", **headers)
+        second = self.client.post(self.join_url, self.payload(), format="json", **headers)
+        different = self.client.post(
+            self.join_url,
+            self.payload(first_name="Different"),
+            format="json",
+            **headers,
+        )
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 202)
+        self.assertEqual(second.data, first.data)
+        self.assertEqual(different.status_code, 409)
+        self.assertEqual(Person.objects.filter(primary_email="amina@example.com").count(), 1)
+
+    def test_idempotency_email_normalization_replays_same_result(self):
+        headers = {"HTTP_IDEMPOTENCY_KEY": "join-email-normalization"}
+        first = self.client.post(self.join_url, self.payload(email="AMINA@EXAMPLE.COM"), format="json", **headers)
+        second = self.client.post(self.join_url, self.payload(email="amina@example.com"), format="json", **headers)
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 202)
+        self.assertEqual(second.data, first.data)
+        self.assertEqual(Person.objects.filter(primary_email="amina@example.com").count(), 1)
+
+    def test_idempotency_mobile_normalization_replays_same_result(self):
+        headers = {"HTTP_IDEMPOTENCY_KEY": "join-mobile-normalization"}
+        first = self.client.post(self.join_url, self.payload(mobile="07123 456 789"), format="json", **headers)
+        second = self.client.post(self.join_url, self.payload(mobile="07123456789"), format="json", **headers)
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 202)
+        self.assertEqual(second.data, first.data)
+        self.assertEqual(Person.objects.filter(primary_email="amina@example.com").count(), 1)
+
+    def test_idempotency_marketing_true_replays_without_duplicate_history(self):
+        headers = {"HTTP_IDEMPOTENCY_KEY": "join-marketing-true"}
+        first = self.client.post(self.join_url, self.payload(email_marketing_opt_in=True), format="json", **headers)
+        second = self.client.post(self.join_url, self.payload(email_marketing_opt_in=True), format="json", **headers)
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 202)
+        self.assertEqual(MarketingPreferenceHistory.objects.count(), 1)
+        self.assertEqual(ExternalPersonSyncJob.objects.count(), 1)
+
+    def test_idempotency_marketing_false_replays_without_preference(self):
+        headers = {"HTTP_IDEMPOTENCY_KEY": "join-marketing-false"}
+        first = self.client.post(self.join_url, self.payload(email_marketing_opt_in=False), format="json", **headers)
+        second = self.client.post(self.join_url, self.payload(email_marketing_opt_in=False), format="json", **headers)
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 202)
+        self.assertFalse(MarketingPreference.objects.exists())
+
+    def test_idempotency_marketing_omitted_and_false_are_equivalent(self):
+        omitted_headers = {"HTTP_IDEMPOTENCY_KEY": "join-marketing-omitted"}
+        omitted = self.client.post(
+            self.join_url,
+            self.payload(mobile="", phone_region=""),
+            format="json",
+            **omitted_headers,
+        )
+        explicit_false = self.client.post(
+            self.join_url,
+            self.payload(email_marketing_opt_in=False, mobile="", phone_region=""),
+            format="json",
+            **omitted_headers,
+        )
+        false_headers = {"HTTP_IDEMPOTENCY_KEY": "join-marketing-false-omitted"}
+        explicit = self.client.post(
+            self.join_url,
+            self.payload(email_marketing_opt_in=False, email="second@example.com", mobile="", phone_region=""),
+            format="json",
+            **false_headers,
+        )
+        omitted_again = self.client.post(
+            self.join_url,
+            self.payload(email="second@example.com", mobile="", phone_region=""),
+            format="json",
+            **false_headers,
+        )
+
+        self.assertEqual(omitted.status_code, 202)
+        self.assertEqual(explicit_false.status_code, 202)
+        self.assertEqual(explicit.status_code, 202)
+        self.assertEqual(omitted_again.status_code, 202)
+
+    def test_idempotency_marketing_change_between_false_and_true_conflicts(self):
+        false_headers = {"HTTP_IDEMPOTENCY_KEY": "join-marketing-false-then-true"}
+        first = self.client.post(
+            self.join_url,
+            self.payload(email_marketing_opt_in=False, mobile="", phone_region=""),
+            format="json",
+            **false_headers,
+        )
+        changed = self.client.post(
+            self.join_url,
+            self.payload(email_marketing_opt_in=True, mobile="", phone_region=""),
+            format="json",
+            **false_headers,
+        )
+        true_headers = {"HTTP_IDEMPOTENCY_KEY": "join-marketing-true-then-false"}
+        second = self.client.post(
+            self.join_url,
+            self.payload(email_marketing_opt_in=True, email="second@example.com", mobile="", phone_region=""),
+            format="json",
+            **true_headers,
+        )
+        changed_again = self.client.post(
+            self.join_url,
+            self.payload(email_marketing_opt_in=False, email="second@example.com", mobile="", phone_region=""),
+            format="json",
+            **true_headers,
+        )
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(changed.status_code, 409)
+        self.assertEqual(second.status_code, 202)
+        self.assertEqual(changed_again.status_code, 409)
+
+    def test_marketing_preference_failure_rolls_back_join_side_effects(self):
+        with mock.patch("marketing_preferences.services.record_audit_event", side_effect=RuntimeError("audit down")):
+            with self.assertRaises(RuntimeError):
+                self.client.post(
+                    self.join_url,
+                    self.payload(email_marketing_opt_in=True),
+                    format="json",
+                )
+
+        self.assertFalse(Person.objects.exists())
+        self.assertFalse(MarketingPreference.objects.exists())
+        self.assertFalse(MarketingPreferenceHistory.objects.exists())
+        self.assertFalse(ExternalPersonSyncJob.objects.exists())
+        self.assertFalse(JoinSubmissionReceipt.objects.exists())
+
+    def test_idempotency_receipt_contains_only_digest_metadata(self):
+        headers = {"HTTP_IDEMPOTENCY_KEY": "join-receipt-privacy"}
+        response = self.client.post(self.join_url, self.payload(), format="json", **headers)
+
+        self.assertEqual(response.status_code, 202)
+        receipt = JoinSubmissionReceipt.objects.get()
+        self.assertEqual(
+            {field.name for field in receipt._meta.fields},
+            {"id", "key_hash", "request_digest", "status", "created_at", "updated_at"},
+        )
+        self.assertNotIn("amina@example.com", receipt.request_digest)
+        self.assertNotIn("07123", receipt.request_digest)
+
+    def test_invalid_phone_does_not_create_an_accepted_idempotency_receipt(self):
+        response = self.client.post(
+            self.join_url,
+            self.payload(mobile="+233241234567", phone_region="GB"),
+            format="json",
+            HTTP_IDEMPOTENCY_KEY="join-invalid-phone",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(JoinSubmissionReceipt.objects.exists())
+
+    def test_join_is_csrf_protected(self):
+        csrf_client = APIClient(enforce_csrf_checks=True)
+        response = csrf_client.post(self.join_url, self.payload(), format="json")
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(Person.objects.filter(primary_email="amina@example.com").exists())
+
+    def test_join_has_dedicated_throttle(self):
+        responses = [
+            self.client.post(
+                self.join_url,
+                self.payload(email=f"member-{index}@example.com", mobile="", phone_region=""),
+                format="json",
+            )
+            for index in range(11)
+        ]
+
+        self.assertTrue(all(response.status_code == 202 for response in responses[:10]))
+        self.assertEqual(responses[10].status_code, 429)

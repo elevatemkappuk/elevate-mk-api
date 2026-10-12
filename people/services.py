@@ -160,6 +160,34 @@ def normalize_phone_for_provider(value, *, region=None):
     )
 
 
+def is_supported_phone_region(region):
+    return isinstance(region, str) and region.strip().upper() in phonenumbers.SUPPORTED_REGIONS
+
+
+def normalize_phone_for_community(value, *, region):
+    """Canonicalize a Community mobile and require region/number agreement."""
+    normalized_region = region.strip().upper() if isinstance(region, str) else ""
+    if not is_supported_phone_region(normalized_region):
+        return PhoneNormalizationResult(PhoneNormalizationStatus.INVALID, reason="INVALID_REGION")
+
+    result = normalize_phone_for_provider(value, region=normalized_region)
+    if result.status != PhoneNormalizationStatus.NORMALIZED:
+        return result
+
+    raw = "" if value is None else str(value).strip()
+    explicit_international = raw.startswith("+") or raw.startswith("00")
+    parse_value = "+" + raw[2:].lstrip() if raw.startswith("00") else raw
+    try:
+        parsed = phonenumbers.parse(parse_value, None if explicit_international else normalized_region)
+    except phonenumbers.NumberParseException:
+        return PhoneNormalizationResult(PhoneNormalizationStatus.INVALID, reason="PARSE_FAILED")
+
+    parsed_region = phonenumbers.region_code_for_number(parsed)
+    if parsed_region != normalized_region:
+        return PhoneNormalizationResult(PhoneNormalizationStatus.INVALID, reason="REGION_MISMATCH")
+    return result
+
+
 def find_business_duplicate_people(*, primary_email="", mobile="", exclude_person_id=None):
     """Return BUSINESS candidates matching the CRM's exact normalized identity signals."""
     normalized_email = normalize_email(primary_email)

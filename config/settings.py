@@ -14,6 +14,9 @@ from pathlib import Path
 import math
 
 import environ
+from corsheaders.defaults import default_headers
+
+from config.storage import build_storage_config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -61,6 +64,7 @@ INSTALLED_APPS = [
     'mailchimp',
     'marketing_preferences',
     'campaigns',
+    'community',
     'corsheaders',
     'rest_framework',
     'drf_spectacular',
@@ -159,19 +163,35 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
-STORAGES = {
-    'default': {
-        'BACKEND': 'django.core.files.storage.FileSystemStorage',
-    },
-    'staticfiles': {
-        'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
-    },
-}
+USE_S3_STORAGE = env.bool("USE_S3_STORAGE", default=False)
+AWS_STORAGE_BUCKET_NAME = env("AWS_STORAGE_BUCKET_NAME", default="")
+AWS_S3_REGION_NAME = env("AWS_S3_REGION_NAME", default="")
+AWS_ACCESS_KEY_ID = env("AWS_ACCESS_KEY_ID", default="")
+AWS_SECRET_ACCESS_KEY = env("AWS_SECRET_ACCESS_KEY", default="")
+AWS_QUERYSTRING_EXPIRE = env.int("AWS_QUERYSTRING_EXPIRE", default=900)
+AWS_S3_ADDRESSING_STYLE = env("AWS_S3_ADDRESSING_STYLE", default="virtual")
 
-CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=["http://localhost:4200"])
+STORAGES = build_storage_config(
+    use_s3=USE_S3_STORAGE,
+    bucket_name=AWS_STORAGE_BUCKET_NAME,
+    region_name=AWS_S3_REGION_NAME,
+    access_key_id=AWS_ACCESS_KEY_ID,
+    secret_access_key=AWS_SECRET_ACCESS_KEY,
+    querystring_expire=AWS_QUERYSTRING_EXPIRE,
+    addressing_style=AWS_S3_ADDRESSING_STYLE,
+)
+
+CORS_ALLOWED_ORIGINS = env.list(
+    "CORS_ALLOWED_ORIGINS",
+    default=["http://localhost:4200", "http://localhost:4201"],
+)
 CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_HEADERS = (*default_headers, "idempotency-key")
 
-CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=["http://localhost:4200"])
+CSRF_TRUSTED_ORIGINS = env.list(
+    "CSRF_TRUSTED_ORIGINS",
+    default=["http://localhost:4200", "http://localhost:4201"],
+)
 
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SECURE = not DEBUG
@@ -179,6 +199,24 @@ SESSION_COOKIE_SAMESITE = env("SESSION_COOKIE_SAMESITE", default="Lax" if DEBUG 
 CSRF_COOKIE_HTTPONLY = False
 CSRF_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SAMESITE = env("CSRF_COOKIE_SAMESITE", default="Lax" if DEBUG else "None")
+COMMUNITY_JOIN_THROTTLE_RATE = env("COMMUNITY_JOIN_THROTTLE_RATE", default="10/hour")
+COMMUNITY_ACTIVATION_THROTTLE_RATE = env("COMMUNITY_ACTIVATION_THROTTLE_RATE", default="10/hour")
+COMMUNITY_LOGIN_THROTTLE_RATE = env("COMMUNITY_LOGIN_THROTTLE_RATE", default="10/hour")
+COMMUNITY_PASSWORD_RESET_THROTTLE_RATE = env("COMMUNITY_PASSWORD_RESET_THROTTLE_RATE", default="5/hour")
+COMMUNITY_ACCOUNT_PASSWORD_THROTTLE_RATE = env("COMMUNITY_ACCOUNT_PASSWORD_THROTTLE_RATE", default="5/hour")
+COMMUNITY_ACCOUNT_MOBILE_THROTTLE_RATE = env("COMMUNITY_ACCOUNT_MOBILE_THROTTLE_RATE", default="10/hour")
+COMMUNITY_ACCOUNT_MARKETING_THROTTLE_RATE = env("COMMUNITY_ACCOUNT_MARKETING_THROTTLE_RATE", default="10/hour")
+COMMUNITY_ACCOUNT_EMAIL_CHANGE_THROTTLE_RATE = env("COMMUNITY_ACCOUNT_EMAIL_CHANGE_THROTTLE_RATE", default="5/hour")
+COMMUNITY_ACCOUNT_EMAIL_CHANGE_VERIFY_THROTTLE_RATE = env("COMMUNITY_ACCOUNT_EMAIL_CHANGE_VERIFY_THROTTLE_RATE", default="10/hour")
+COMMUNITY_DIRECTORY_THROTTLE_RATE = env("COMMUNITY_DIRECTORY_THROTTLE_RATE", default="60/hour")
+COMMUNITY_CONNECTIONS_THROTTLE_RATE = env("COMMUNITY_CONNECTIONS_THROTTLE_RATE", default="60/hour")
+COMMUNITY_CONNECTION_REQUESTS_THROTTLE_RATE = env("COMMUNITY_CONNECTION_REQUESTS_THROTTLE_RATE", default="60/hour")
+COMMUNITY_CONNECTION_CREATE_THROTTLE_RATE = env("COMMUNITY_CONNECTION_CREATE_THROTTLE_RATE", default="10/hour")
+COMMUNITY_CONNECTION_MUTATIONS_THROTTLE_RATE = env("COMMUNITY_CONNECTION_MUTATIONS_THROTTLE_RATE", default="30/hour")
+COMMUNITY_POST_CREATE_THROTTLE_RATE = env("COMMUNITY_POST_CREATE_THROTTLE_RATE", default="10/hour")
+COMMUNITY_POST_IDEMPOTENCY_RETENTION_HOURS = env.int("COMMUNITY_POST_IDEMPOTENCY_RETENTION_HOURS", default=24)
+COMMUNITY_REPLY_CREATE_THROTTLE_RATE = env("COMMUNITY_REPLY_CREATE_THROTTLE_RATE", default="30/hour")
+COMMUNITY_CONTENT_REPORT_THROTTLE_RATE = env("COMMUNITY_CONTENT_REPORT_THROTTLE_RATE", default="10/hour")
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
@@ -188,6 +226,23 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "password_reset": "5/hour",
         "password_reset_confirm": "10/hour",
+        "community_join": COMMUNITY_JOIN_THROTTLE_RATE,
+        "community_activation": COMMUNITY_ACTIVATION_THROTTLE_RATE,
+        "community_login": COMMUNITY_LOGIN_THROTTLE_RATE,
+        "community_password_reset": COMMUNITY_PASSWORD_RESET_THROTTLE_RATE,
+        "community_account_password": COMMUNITY_ACCOUNT_PASSWORD_THROTTLE_RATE,
+        "community_account_mobile": COMMUNITY_ACCOUNT_MOBILE_THROTTLE_RATE,
+        "community_account_marketing": COMMUNITY_ACCOUNT_MARKETING_THROTTLE_RATE,
+        "community_account_email_change": COMMUNITY_ACCOUNT_EMAIL_CHANGE_THROTTLE_RATE,
+        "community_account_email_change_verify": COMMUNITY_ACCOUNT_EMAIL_CHANGE_VERIFY_THROTTLE_RATE,
+        "community_directory": COMMUNITY_DIRECTORY_THROTTLE_RATE,
+        "community_connections": COMMUNITY_CONNECTIONS_THROTTLE_RATE,
+        "community_connection_requests": COMMUNITY_CONNECTION_REQUESTS_THROTTLE_RATE,
+        "community_connection_create": COMMUNITY_CONNECTION_CREATE_THROTTLE_RATE,
+        "community_connection_mutations": COMMUNITY_CONNECTION_MUTATIONS_THROTTLE_RATE,
+        "community_post_create": COMMUNITY_POST_CREATE_THROTTLE_RATE,
+        "community_reply_create": COMMUNITY_REPLY_CREATE_THROTTLE_RATE,
+        "community_content_report": COMMUNITY_CONTENT_REPORT_THROTTLE_RATE,
     },
 }
 
@@ -211,6 +266,9 @@ BREVO_SENDER_NAME = env("BREVO_SENDER_NAME", default="")
 BREVO_REPLY_TO_EMAIL = env("BREVO_REPLY_TO_EMAIL", default="")
 BREVO_REPLY_TO_NAME = env("BREVO_REPLY_TO_NAME", default="")
 BREVO_PASSWORD_RESET_TEMPLATE_ID = env("BREVO_PASSWORD_RESET_TEMPLATE_ID", default="")
+BREVO_COMMUNITY_PASSWORD_RESET_TEMPLATE_ID = env("BREVO_COMMUNITY_PASSWORD_RESET_TEMPLATE_ID", default="")
+BREVO_COMMUNITY_EMAIL_CHANGE_TEMPLATE_ID = env("BREVO_COMMUNITY_EMAIL_CHANGE_TEMPLATE_ID", default="29")
+BREVO_COMMUNITY_EMAIL_CHANGE_SECURITY_TEMPLATE_ID = env("BREVO_COMMUNITY_EMAIL_CHANGE_SECURITY_TEMPLATE_ID", default="30")
 BREVO_MARKETING_LIST_ID = env("BREVO_MARKETING_LIST_ID", default="")
 BREVO_MARKETING_CAMPAIGN_FOLDER_ID = env("BREVO_MARKETING_CAMPAIGN_FOLDER_ID", default="")
 BREVO_MARKETING_STARTER_TEMPLATE_ID = env("BREVO_MARKETING_STARTER_TEMPLATE_ID", default="")
@@ -219,6 +277,8 @@ BREVO_MARKETING_WEBHOOK_USERNAME = env("BREVO_MARKETING_WEBHOOK_USERNAME", defau
 BREVO_MARKETING_WEBHOOK_PASSWORD = env("BREVO_MARKETING_WEBHOOK_PASSWORD", default="")
 MARKETING_SYNC_PROVIDER = env("MARKETING_SYNC_PROVIDER", default="BREVO")
 CRM_FRONTEND_URL = env("CRM_FRONTEND_URL", default="http://localhost:4200")
+COMMUNITY_FRONTEND_URL = env("COMMUNITY_FRONTEND_URL", default="http://localhost:4201")
+BREVO_COMMUNITY_ACTIVATION_TEMPLATE_ID = env("BREVO_COMMUNITY_ACTIVATION_TEMPLATE_ID", default="")
 
 
 def _positive_float_setting(name, default):
@@ -239,6 +299,12 @@ def _positive_int_setting(name, default):
 
 BREVO_SYNC_WORKER_POLL_SECONDS = _positive_float_setting("BREVO_SYNC_WORKER_POLL_SECONDS", 3.0)
 BREVO_SYNC_WORKER_BATCH_SIZE = _positive_int_setting("BREVO_SYNC_WORKER_BATCH_SIZE", 20)
+COMMUNITY_ACTIVATION_EXPIRY_HOURS = _positive_int_setting("COMMUNITY_ACTIVATION_EXPIRY_HOURS", 72)
+COMMUNITY_EMAIL_CHANGE_EXPIRY_MINUTES = _positive_int_setting("COMMUNITY_EMAIL_CHANGE_EXPIRY_MINUTES", 60)
+TRANSACTIONAL_EMAIL_WORKER_POLL_SECONDS = _positive_float_setting("TRANSACTIONAL_EMAIL_WORKER_POLL_SECONDS", 3.0)
+TRANSACTIONAL_EMAIL_WORKER_BATCH_SIZE = _positive_int_setting("TRANSACTIONAL_EMAIL_WORKER_BATCH_SIZE", 20)
+TRANSACTIONAL_EMAIL_JOB_LEASE_SECONDS = _positive_int_setting("TRANSACTIONAL_EMAIL_JOB_LEASE_SECONDS", 900)
+BACKGROUND_WORKER_POLL_SECONDS = _positive_float_setting("BACKGROUND_WORKER_POLL_SECONDS", 3.0)
 
 # Mailchimp Marketing API verification is backend-only. No Mailchimp operation
 # should be attempted without explicitly configured values.

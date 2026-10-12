@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from django.conf import settings
+from drf_spectacular.utils import extend_schema_field
 
 from marketing_preferences.serializers import AudienceSelectionSerializer, PEOPLE_ORDERING_CHOICES
 from staff_access.models import StaffRole
@@ -41,21 +42,26 @@ class CampaignPreparationSerializer(serializers.ModelSerializer):
         fields = ("id", "attempt_number", "status", "started_at", "completed_at", "selected_count", "included_count", "excluded_count", "provider_ready_count", "provider_issue_count", "can_start_provider_preparation", "can_retry_provider_preparation", "brevo_list_id", "brevo_campaigns_url", "brevo_editor_url", "provider_error_code", "provider_error_message")
         read_only_fields = fields
 
+    @extend_schema_field(serializers.IntegerField())
     def get_provider_ready_count(self, obj):
         return obj.recipient_snapshots.filter(provider_outcome="ADDED_TO_CAMPAIGN_LIST").count()
 
+    @extend_schema_field(serializers.IntegerField())
     def get_provider_issue_count(self, obj):
         return obj.recipient_snapshots.filter(provider_outcome__in=("RECONCILIATION_REQUIRED", "PROVIDER_FAILED")).count()
 
+    @extend_schema_field(serializers.BooleanField())
     def get_can_start_provider_preparation(self, obj):
         return obj.status == CampaignPreparation.Status.SNAPSHOT_READY and not obj.campaign.is_archived
 
+    @extend_schema_field(serializers.BooleanField())
     def get_can_retry_provider_preparation(self, obj):
         return not obj.campaign.is_archived and obj.status in (
             CampaignPreparation.Status.PROVIDER_FAILED,
             CampaignPreparation.Status.RECONCILIATION_REQUIRED,
         )
 
+    @extend_schema_field(serializers.URLField(allow_null=True))
     def get_brevo_campaigns_url(self, obj):
         if not obj.brevo_campaign_id:
             return None
@@ -78,12 +84,15 @@ class CampaignSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         return bool(request and user_has_any_active_staff_role(request.user, (StaffRole.CRM_ADMIN, StaffRole.CRM_MANAGER)))
 
+    @extend_schema_field(serializers.BooleanField())
     def get_can_archive(self, obj):
         return self._can_write() and not obj.is_archived
 
+    @extend_schema_field(serializers.BooleanField())
     def get_can_restore(self, obj):
         return self._can_write() and obj.is_archived
 
+    @extend_schema_field(serializers.BooleanField())
     def get_can_delete(self, obj):
         return self._can_write() and campaign_delete_block_reason(obj) is None
 

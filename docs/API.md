@@ -1,6 +1,11 @@
 # Elevate MK API
+
+For the current cross-repository Community architecture and implementation
+checkpoint, see [Community Platform](community-platform.md). This includes the
+implemented Join, activation, sign-in, password recovery, frontend, and Staff
+CRM projections.
 Status: Living Documentation
-Last Updated: 2026-08-31
+Last Updated: 2026-10-01
 
 ## Scope
 This document describes the HTTP API currently implemented in the Django server repository.
@@ -9,7 +14,7 @@ This document describes the HTTP API currently implemented in the Django server 
 Current base path and versioning convention:
 
 - Base prefix: `/api/v1/`
-- Current Elevate API routes are defined in `accounts.urls`, `people.urls`, `memberships.urls`, `professional_profiles.urls`, `skills.urls`, `interests.urls`, and `tags.urls`, all mounted from `config.urls`
+- Current Elevate API routes are defined in the application URL modules mounted from `config.urls`: authentication, dashboard, people, memberships, professional profiles, skills, interests, tags, notes, imports, marketing preferences, campaigns, Community, and Brevo webhooks.
 - Machine-readable OpenAPI schema: `/api/schema/`
 - Swagger UI: `/api/docs/`
 - ReDoc: `/api/redoc/`
@@ -109,7 +114,286 @@ Currently implemented Elevate endpoints:
 - `GET /api/v1/people/{person_id}/professional-profile/`
 - `GET /api/v1/people/{person_id}/overview/`
 
-No other Elevate API endpoints are currently implemented.
+The complete route inventory is documented below. The OpenAPI schema remains the authoritative machine-readable contract.
+
+## Complete Endpoint Inventory
+
+The following is the current route inventory under `/api/v1/`. Authentication labels describe the normal application contract; CSRF is additionally required for cookie-authenticated unsafe requests.
+
+### Authentication and account recovery
+
+| Method | Endpoint | Access |
+| --- | --- | --- |
+| `GET` | `/api/v1/auth/csrf/` | Public |
+| `POST` | `/api/v1/auth/login/` | Public |
+| `POST` | `/api/v1/auth/logout/` | Authenticated session |
+| `GET` | `/api/v1/auth/me/` | Authenticated session |
+| `POST` | `/api/v1/auth/password-reset/` | Public; generic response |
+| `POST` | `/api/v1/auth/password-reset/confirm/` | Public; uid/token required |
+
+### Dashboard
+
+| Method | Endpoint | Access |
+| --- | --- | --- |
+| `GET` | `/api/v1/dashboard/` | Authenticated CRM role |
+
+### People and CRM relationship endpoints
+
+| Method | Endpoint | Access |
+| --- | --- | --- |
+| `GET` | `/api/v1/people/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/members/` | Authenticated CRM role |
+| `GET` | `/api/v1/people/{person_id}/` | Authenticated CRM role |
+| `PATCH` | `/api/v1/people/{person_id}/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/archive/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/restore/` | Authenticated CRM role |
+| `GET` | `/api/v1/people/{person_id}/overview/` | Authenticated CRM role |
+| `GET` | `/api/v1/people/{person_id}/audit-history/` | Authenticated CRM role |
+| `GET` | `/api/v1/people/{person_id}/brevo-integration/` | Authenticated CRM role |
+| `GET` | `/api/v1/people/{person_id}/membership/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/membership/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/membership/end/` | Authenticated CRM role |
+| `GET` | `/api/v1/people/{person_id}/professional-profile/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/professional-profile/` | Authenticated CRM role |
+| `PATCH` | `/api/v1/people/{person_id}/professional-profile/` | Authenticated CRM role |
+| `GET` | `/api/v1/people/{person_id}/skills/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/skills/` | Authenticated CRM role |
+| `DELETE` | `/api/v1/people/{person_id}/skills/{skill_id}/` | Authenticated CRM role |
+| `GET` | `/api/v1/people/{person_id}/interests/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/interests/` | Authenticated CRM role |
+| `DELETE` | `/api/v1/people/{person_id}/interests/{interest_id}/` | Authenticated CRM role |
+| `GET` | `/api/v1/people/{person_id}/tags/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/tags/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/tags/{tag_id}/remove/` | Authenticated CRM role |
+| `GET` | `/api/v1/people/{person_id}/notes/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/notes/` | Authenticated CRM role |
+| `PATCH` | `/api/v1/people/{person_id}/notes/{note_id}/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/notes/{note_id}/archive/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/notes/{note_id}/restore/` | Authenticated CRM role |
+
+### Shared catalog endpoints
+
+| Method | Endpoint | Access |
+| --- | --- | --- |
+| `GET` | `/api/v1/industries/` | Authenticated CRM role |
+| `GET` | `/api/v1/skills/` | Authenticated CRM role |
+| `GET` | `/api/v1/interests/` | Authenticated CRM role |
+| `GET` | `/api/v1/tags/` | Authenticated CRM role |
+
+### Imports
+
+| Method | Endpoint | Access |
+| --- | --- | --- |
+| `POST` | `/api/v1/imports/eventbrite/` | Authenticated CRM role |
+| `POST` | `/api/v1/imports/membership-form/` | Authenticated CRM role |
+| `GET` | `/api/v1/imports/` | Authenticated CRM role |
+| `GET` | `/api/v1/imports/{batch_id}/` | Authenticated CRM role |
+| `POST` | `/api/v1/imports/{batch_id}/analyze/` | Authenticated CRM role |
+| `POST` | `/api/v1/imports/{batch_id}/import/` | Authenticated CRM role |
+| `GET` | `/api/v1/imports/{batch_id}/records/` | Authenticated CRM role |
+| `GET` | `/api/v1/imports/{batch_id}/review/` | Authenticated CRM role |
+| `GET` | `/api/v1/imports/{batch_id}/review/{record_id}/` | Authenticated CRM role |
+| `POST` | `/api/v1/imports/{batch_id}/review/{record_id}/resolve/` | Authenticated CRM role |
+
+### Marketing, campaigns, and provider integration
+
+| Method | Endpoint | Access |
+| --- | --- | --- |
+| `GET` | `/api/v1/people/{person_id}/marketing-preference/` | Authenticated CRM role |
+| `POST` | `/api/v1/people/{person_id}/marketing-preference/` | Authenticated CRM role |
+| `POST` | `/api/v1/marketing/audiences/preview/` | Authenticated CRM role |
+| `GET` | `/api/v1/marketing/campaigns/` | Authenticated CRM role |
+| `POST` | `/api/v1/marketing/campaigns/` | Authenticated CRM role |
+| `GET` | `/api/v1/marketing/campaigns/{campaign_id}/` | Authenticated CRM role |
+| `DELETE` | `/api/v1/marketing/campaigns/{campaign_id}/` | Authenticated CRM role |
+| `POST` | `/api/v1/marketing/campaigns/{campaign_id}/archive/` | Authenticated CRM role |
+| `POST` | `/api/v1/marketing/campaigns/{campaign_id}/restore/` | Authenticated CRM role |
+| `POST` | `/api/v1/marketing/campaigns/{campaign_id}/prepare/` | Authenticated CRM role |
+| `POST` | `/api/v1/marketing/campaigns/{campaign_id}/prepare-provider/` | Authenticated CRM role |
+| `GET` | `/api/v1/marketing/campaigns/{campaign_id}/recipients/` | Authenticated CRM role |
+| `POST` | `/api/v1/webhooks/brevo/marketing/` | Brevo webhook authentication |
+
+### Community account and membership endpoints
+
+These endpoints are separate from the Staff CRM People API. Join, industry lookup, login, password recovery, and activation are public flows; `community/me/` requires an authenticated Community session.
+
+| Method | Endpoint | Access |
+| --- | --- | --- |
+| `GET` | `/api/v1/community/industries/` | Public |
+| `POST` | `/api/v1/community/join/` | Public; CSRF, scoped throttle, optional `Idempotency-Key` |
+| `POST` | `/api/v1/community/login/` | Public; CSRF |
+| `POST` | `/api/v1/community/password-reset/` | Public; CSRF; generic response |
+| `POST` | `/api/v1/community/password-reset/confirm/` | Public; CSRF; uid/token required |
+| `GET` | `/api/v1/community/activate/{invitation_id}/{token}/` | Public; invitation token required |
+| `POST` | `/api/v1/community/activate/{invitation_id}/{token}/` | Public; invitation token required |
+| `GET` | `/api/v1/community/me/` | Authenticated Community session |
+| `GET` | `/api/v1/community/account/` | Authenticated eligible Community member |
+| `POST` | `/api/v1/community/account/password/` | Authenticated eligible Community member; CSRF; scoped throttle |
+| `POST` | `/api/v1/community/account/email-change/` | Authenticated eligible Community member; CSRF; scoped throttle |
+| `POST` | `/api/v1/community/account/email-change/verify/` | Public-capable; CSRF; scoped throttle; request ID and token required |
+| `PATCH` | `/api/v1/community/account/mobile/` | Authenticated eligible Community member; CSRF; scoped throttle |
+| `PATCH` | `/api/v1/community/account/marketing-preference/` | Authenticated eligible Community member; CSRF; scoped throttle |
+| `GET` | `/api/v1/community/profile/` | Authenticated eligible Community member |
+| `PATCH` | `/api/v1/community/profile/` | Authenticated eligible Community member; CSRF |
+| `GET` | `/api/v1/community/profile/options/` | Authenticated eligible Community member |
+| `POST` | `/api/v1/community/profile/photo/` | Authenticated eligible Community member; multipart; CSRF |
+| `DELETE` | `/api/v1/community/profile/photo/` | Authenticated eligible Community member; CSRF |
+| `POST` | `/api/v1/community/profile/review-acknowledgement/` | Authenticated eligible Community member; CSRF |
+| `GET` | `/api/v1/community/posts/` | Authenticated eligible Community member; chronological, optional purpose filter |
+| `POST` | `/api/v1/community/posts/` | Authenticated eligible Community member; CSRF, scoped throttle, `Idempotency-Key` |
+| `GET` | `/api/v1/community/posts/{public_id}/` | Authenticated eligible Community member with visibility to the post |
+| `PATCH` | `/api/v1/community/posts/{public_id}/` | Authenticated owner; CSRF |
+| `DELETE` | `/api/v1/community/posts/{public_id}/` | Authenticated owner; CSRF |
+| `GET` | `/api/v1/community/posts/{post_id}/replies/` | Authenticated eligible member with visibility to the post |
+| `POST` | `/api/v1/community/posts/{post_id}/replies/` | Authenticated eligible member with visibility to the post; CSRF, scoped throttle, `Idempotency-Key` |
+| `PATCH` | `/api/v1/community/posts/{post_id}/replies/{reply_id}/` | Authenticated reply owner; CSRF |
+| `DELETE` | `/api/v1/community/posts/{post_id}/replies/{reply_id}/` | Authenticated reply owner; CSRF |
+
+Community Join returns the generic `202 Accepted` representation documented in [Community Platform](community-platform.md). It does not expose CRM identity evidence or create a User account. Successful activation creates the Community User account and establishes the authenticated Community session; activation and password-reset failures remain enumeration-safe.
+
+### Community Feed V1
+
+Feed reads and mutations are available only to an authenticated, currently
+eligible Community member. Community-wide posts are visible to eligible
+members; `CONNECTIONS` posts additionally require an accepted connection
+between the author and viewer, with both members still eligible. Known post or
+reply UUIDs do not bypass these checks.
+
+`GET /api/v1/community/posts/` is chronological and accepts the optional
+`purpose` filter: `ASK`, `OFFER`, `OPPORTUNITY`, or `UPDATE`. The response is
+paginated as `count`, `next`, `previous`, and `results`.
+
+Post creation accepts `purpose`, `headline` (maximum 120 characters), `body`
+(maximum 2,000 characters), and `audience` (`ELEVATE_COMMUNITY` or
+`CONNECTIONS`). It requires `Idempotency-Key` and uses the
+`community_post_create` throttle, default `10/hour`, configured through
+`COMMUNITY_POST_CREATE_THROTTLE_RATE`.
+
+Post PATCH follows the returned capability projection. Headline and body remain
+editable after a conversation starts; purpose and audience become permanently
+locked after any historical reply, including a deleted or moderator-removed
+reply. Post DELETE is a soft author deletion and cannot be restored through
+moderation.
+
+Replies are a flat, paginated, oldest-first conversation. `reply_to_id` may
+reference another reply on the same post, but the API does not return a nested
+reply tree. Reply creation accepts `body` (maximum 1,000 characters) and an
+optional same-post `reply_to_id`; it requires `Idempotency-Key` and uses
+`community_reply_create`, default `30/hour`, configured through
+`COMMUNITY_REPLY_CREATE_THROTTLE_RATE`. Reply edits change body only. Reply
+DELETE is a soft deletion and remains represented by a safe placeholder.
+
+Member post/reply projections expose only safe author identity, photo,
+professional context, location, timestamps, capability information and reply
+counts. They do not expose email, mobile, Person or Membership internals, CRM
+notes/tags, marketing state, provider data, report data, or audit data.
+
+`GET /api/v1/community/account/` returns the A1 member-safe account summary. The
+password projection contains only `password.configured`; it does not expose a
+hash, history, strength score, or session data. `POST /api/v1/community/account/password/`
+accepts only `current_password`,
+`new_password`, and `confirm_password`. It verifies the current password,
+applies Django's configured password validators, rejects an unchanged password,
+records `PASSWORD_CHANGED`, preserves the current session, and returns `200 OK`
+with `{"detail": "Your password has been changed successfully."}`. Validation
+failures use the structured `code`, `detail`, and `fields` contract. The
+endpoint uses the `community_account_password` throttle, default `5/hour`,
+configurable with `COMMUNITY_ACCOUNT_PASSWORD_THROTTLE_RATE`; it does not
+mutate Person/Profile/marketing data or enqueue provider work.
+
+`PATCH /api/v1/community/account/mobile/` accepts `mobile` and
+`phone_region`. Non-empty mobile values require a supported ISO alpha-2 phone
+region and are normalized to E.164; an empty `mobile` with an empty
+`phone_region` explicitly removes the mobile. `phone_region` is validation
+metadata only and is never persisted. The endpoint blocks canonical and safely
+normalizable legacy collisions with another active BUSINESS Person using a
+generic `409` response, and returns the refreshed masked account summary. Genuine
+add/change/remove operations audit the Person change and enqueue the coalesced
+`PERSON_PROFILE` synchronization path; no-ops do neither. The scope is
+`community_account_mobile`, default `10/hour`, configurable with
+`COMMUNITY_ACCOUNT_MOBILE_THROTTLE_RATE`.
+
+`PATCH /api/v1/community/account/marketing-preference/` accepts only
+`{"email_marketing": true}` or `{"email_marketing": false}`. It requires an
+authenticated eligible Community member and CSRF, and returns `200 OK` with
+the refreshed Account summary. Validation failures return
+`MARKETING_PREFERENCE_VALIDATION_ERROR` with a `fields` object. The endpoint
+records explicit EMAIL opt-in/opt-out decisions through the canonical
+marketing-preference service with source `COMMUNITY_SELF_SERVICE`, preserving
+append-only history and enqueueing the durable asynchronous
+`EMAIL_MARKETING_PREFERENCE` provider sync when the effective recording
+changes. `UNKNOWN` is represented by no preference row and is never converted
+merely by reading the Account page. The scope is
+`community_account_marketing`, default `10/hour`, configurable with
+`COMMUNITY_ACCOUNT_MARKETING_THROTTLE_RATE`. Marketing preference changes do
+not alter Person contact fields, Membership, CommunityProfile, Connect
+privacy, password state, or the `PERSON_PROFILE` sync path.
+
+`POST /api/v1/community/account/email-change/` starts the A5.1 verified email
+change request flow. It accepts `new_email` and `current_password` and
+requires an authenticated eligible Community member, a matching
+`User.email`/`Person.primary_email` identity, and the current password.
+Comparison is normalized. The current email returns `200 OK` with
+`{"status":"UNCHANGED","detail":"That is already your account email."}`
+and creates no request, job, or audit event. A different available email
+returns `202 Accepted` with:
+
+```json
+{"status":"VERIFICATION_REQUIRED","detail":"Check your new email address for a verification link."}
+```
+
+The response does not change `User.email` or `Person.primary_email`; A5.1 has
+no completion until the verification endpoint is used. Collisions against any other `User.email` or
+`Person.primary_email` receive a generic unavailable response. The dedicated
+`community_account_email_change` throttle defaults to `5/hour` and is
+configured with `COMMUNITY_ACCOUNT_EMAIL_CHANGE_THROTTLE_RATE`.
+
+Each member has one current request; a later request supersedes the previous
+one while historical rows remain. Only a hash of the raw verification token
+is persisted. The worker mints the raw token immediately before delivery and
+sends only to the requested new email. It uses
+`BREVO_COMMUNITY_EMAIL_CHANGE_TEMPLATE_ID`, default `29`, with exactly
+`first_name`, `verification_url`, and `expires_in_minutes` parameters. The
+default expiry is 60 minutes via `COMMUNITY_EMAIL_CHANGE_EXPIRY_MINUTES`.
+This security email is independent of marketing preference and is delivered
+asynchronously; no old-email notification is sent at request time, and no
+canonical identity, marketing preference, or Brevo marketing state changes at
+request time.
+
+`POST /api/v1/community/account/email-change/verify/` accepts exactly
+`{"request_id": "<public UUID>", "token": "<raw token>"}` and is callable
+without an authenticated session. It is CSRF-protected and rate-limited by
+`community_account_email_change_verify` (default `10/hour`). A valid current
+request atomically updates both `Person.primary_email` and `User.email`, marks
+the request used, records `COMMUNITY_EMAIL_CHANGED`, and queues the existing
+asynchronous `PERSON_EMAIL_MIGRATION` synchronization job. It also queues a
+durable security notification to the previous email address.
+
+The success response is:
+
+```json
+{"status":"EMAIL_UPDATED","detail":"Your email address has been verified and updated."}
+```
+
+Malformed, unknown, wrong, expired, superseded, revoked, used, unprepared,
+ineligible, stale-snapshot, and collision cases share the generic
+`EMAIL_CHANGE_VERIFICATION_INVALID` response. The endpoint never auto-logs in;
+if the current session belongs to the changed account it is logged out.
+The old-email notification is configured by
+`BREVO_COMMUNITY_EMAIL_CHANGE_SECURITY_TEMPLATE_ID`, default `30`. Required template: `Elevate MK — Your Email
+Address Was Changed`; subject: `Your Elevate MK account email was changed`;
+dynamic parameter: `first_name` only. It must not contain an active
+verification URL/token or password and should not unnecessarily expose the
+complete new email address.
+
+### API documentation endpoints
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/schema/` | Machine-readable OpenAPI schema |
+| `GET` | `/api/docs/` | Swagger UI |
+| `GET` | `/api/redoc/` | ReDoc |
 
 ## OpenAPI Documentation
 Current documentation endpoints:
@@ -2113,6 +2397,15 @@ Purpose: request password-reset instructions for an eligible account.
 - Only active Users with usable passwords receive a Brevo template email. Unknown, inactive, and unusable-password accounts receive the same response without delivery.
 - The reset URL is generated from backend-only `CRM_FRONTEND_URL`; no URL, token, or provider data appears in the response.
 
+## Endpoint: `POST /api/v1/community/password-reset/`
+Purpose: request password-reset instructions for an eligible Community account.
+
+- Public and CSRF-protected; rate limited by the configurable `community_password_reset` scope, defaulting to five requests per hour.
+- Accepts `{ "email": "person@example.com" }` and normalizes email before lookup.
+- Every well-formed request returns `200 OK` with `If an eligible Elevate MK account exists for that email address, we've sent password reset instructions.`
+- Only active, usable-password Users linked to non-archived BUSINESS People with ACTIVE Memberships receive an email.
+- The reset URL is generated from backend-only `COMMUNITY_FRONTEND_URL`; the browser cannot select a destination.
+
 ## Endpoint: `POST /api/v1/auth/password-reset/confirm/`
 Purpose: set a new password from a valid reset URL.
 
@@ -2168,3 +2461,501 @@ No Events data, engagement scores, percentages, or inferred analytics are return
 The dedicated `dashboard` module uses database aggregation; the projection performs
 8 queries independent of the number of People, plus normal authentication/role
 queries. The nested response contract is documented in OpenAPI as Dashboard.
+
+## Community J1 Native Membership Join
+
+The public Community endpoints are separate from CRM People and import endpoints:
+
+- `GET /api/v1/community/industries/` returns active Industry `{slug, label}` values.
+- `POST /api/v1/community/join/` accepts the native join payload.
+
+The join payload requires `first_name`, `last_name`, `gender`, `age_range`, `email`,
+`location`, `industry`, and `job_title`; `mobile`, `phone_region`,
+`linkedin_url`, and `email_marketing_opt_in` are optional. When `mobile` is
+supplied, `phone_region` is required and must be an ISO alpha-2 phone region.
+It is phone parsing metadata only, not Member Country or `Person.location`.
+An optional `Idempotency-Key` header supports safe retries. The server determines
+the join date and creates an ACTIVE `COMMUNITY_PLATFORM` Membership. It does not
+accept Person, Membership, account, audit, or collision-control fields.
+
+Successful submissions return `202` and only:
+
+```json
+{
+  "status": "accepted",
+  "message": "Your membership submission has been received."
+}
+```
+
+Unsafe identity or lifecycle outcomes return a generic `409` review response. The
+public contract never exposes CRM IDs, match evidence, contact details, archive or
+membership state, audit history, notes, tags, marketing data, or import provenance.
+This workflow does not create User accounts, CommunityProfile records, directory or
+networking access, Business Profiles, Events, or ticketing records.
+
+The anonymous join throttle uses the `community_join` DRF scope. Its default rate is
+`10/hour` and can be configured with the `COMMUNITY_JOIN_THROTTLE_RATE` environment
+setting.
+
+Community national and explicit international phone values are independently parsed
+with the installed `phonenumbers` library. Region and number must agree, and new
+successful Community mobile values are stored as E.164. Existing populated legacy
+mobile values are not rewritten; safe Community identity comparison may parse them
+using the explicitly submitted phone region. Idempotency uses canonical E.164 and
+does not persist raw phone data or `phone_region`. Person has no Country field.
+
+`email_marketing_opt_in` is EMAIL-only. `true` records an affirmative opt-in
+with source `COMMUNITY_JOIN` and queues the existing asynchronous Brevo sync
+path. `false` and omission both leave the current preference unchanged and do
+not record an opt-out. A public Community Join cannot reverse an existing
+explicit opt-out. SMS marketing preferences are not supported by Join V1.
+
+## Community Profile V1 — My Profile
+
+`GET /api/v1/community/profile/` returns the authenticated member's composed
+My Profile. It is not a direct `CommunityProfile` model serialization and does
+not accept a Person ID. The same composed response is returned by the PATCH
+endpoint after a successful update.
+
+Authentication and eligibility:
+
+- Requires an authenticated Django Community session.
+- The authenticated user must be linked to a non-archived `BUSINESS` Person with
+  an `ACTIVE` Membership.
+- Former members, archived Persons, technical Persons, and users without an
+  eligible active Membership receive `403 Forbidden`.
+- The Person is always derived from `request.user.person`; arbitrary Person
+  lookup is not supported.
+
+Successful response: `200 OK`
+
+```json
+{
+  "person": {
+    "first_name": "Amina",
+    "last_name": "Zulu",
+    "location": "Milton Keynes"
+  },
+  "community": {
+    "bio": "Community builder",
+    "review_required": false,
+    "photo_url": "https://storage.example/private/community/profiles/<profile-uuid>/profile-photos/<photo-uuid>.jpg?...",
+    "directory_id": "opaque-directory-uuid",
+    "directory_visible": false,
+    "email_visible": false,
+    "mobile_visible": false
+  },
+  "professional": {
+    "job_title": "Designer",
+    "company": "Elevate MK",
+    "industry": {
+      "id": 1,
+      "slug": "technology",
+      "label": "Technology"
+    },
+    "career_stage": "MID_CAREER",
+    "linkedin_url": "https://www.linkedin.com/in/amina"
+  },
+  "skills": [
+    {"id": 1, "name": "Strategy", "slug": "strategy"}
+  ],
+  "interests": [
+    {"id": 1, "name": "Networking", "slug": "networking"}
+  ],
+  "membership": {
+    "status": "ACTIVE",
+    "joined_at": "2026-09-01"
+  },
+  "completion": {
+    "name": true,
+    "professional_details": true,
+    "bio": true,
+    "skills": true,
+    "interests": false
+  }
+}
+```
+
+Projection rules:
+
+- `professional`, `skills`, and `interests` remain present when optional data is
+  missing; empty strings, `null`, or empty arrays represent missing data.
+- Only active Skill and Interest definitions are included.
+- `professional_details` requires a nonblank job title and a current active
+  Industry.
+- `name`, `bio`, `skills`, and `interests` are derived from current canonical
+  records. Completion is not persisted and no percentage or score is returned.
+- If a CommunityProfile does not yet exist, the existing centralized lazy
+  creation mechanism creates its Community-owned row before returning the
+  projection.
+- `community.review_required` is the only member-facing review state. It is
+  derived from P1 CommunityProfile semantics.
+
+Privacy boundary:
+
+- The response does not include email, mobile, gender, age range, CRM tags,
+  notes, audit history, import provenance, Brevo/provider data, marketing
+  administration, staff roles, User internals, invitation state, transactional
+  email jobs, `person_preexisted_community`, or `review_acknowledged_at`.
+- `photo_url` is a generated read projection for the current private profile
+  photo, or `null` when no photo exists. It is not stored as a URL in the
+  database and may be a signed/private URL when S3 storage is enabled.
+- Directory Profile data and public-profile identifiers are not part of
+  Profile V1.
+
+The projection uses `select_related` for the Person's ProfessionalProfile,
+Industry, Membership, and CommunityProfile, and filtered `prefetch_related`
+queries for active Skills and Interests. It does not perform per-item queries
+for the composed collections.
+
+### Update My Profile
+
+`PATCH /api/v1/community/profile/` accepts a partial update from the
+authenticated eligible member and returns the complete authoritative composed
+profile with `200 OK`. Cookie-authenticated unsafe requests require the normal
+Django CSRF token.
+
+The accepted request shape is:
+
+```json
+{
+  "person": {
+    "first_name": "Amina",
+    "last_name": "Zulu",
+    "location": "Milton Keynes"
+  },
+  "community": {
+    "bio": "Community builder",
+    "directory_visible": true,
+    "email_visible": false,
+    "mobile_visible": false
+  },
+  "professional": {
+    "job_title": "Designer",
+    "company": "Elevate MK",
+    "industry": "technology",
+    "career_stage": "MID_CAREER",
+    "linkedin_url": "https://www.linkedin.com/in/amina"
+  },
+  "skills": ["strategy"],
+  "interests": ["networking"]
+}
+```
+
+The writable boundary is limited to the fields shown above. Email, mobile,
+demographics, membership, marketing preferences, tags, notes, staff roles,
+account state, provider state, and review provenance are not writable through
+this endpoint. Unknown fields are rejected.
+
+Community privacy settings use partial-update semantics. Eligible Community
+profiles are discoverable by default: `directory_visible` defaults to `true`.
+Members may opt out by setting it to `false`. Email and mobile remain private
+by default: `email_visible` and `mobile_visible` both default to `false` and
+are independent opt-ins. Contact-sharing settings remain independent and are
+not cleared when Directory visibility is disabled; hidden profiles suppress
+the whole profile and both contact fields from Directory projections.
+`directory_id` is returned only through
+this owner-facing Community profile projection and is separate from the
+private `asset_namespace_id` storage namespace. Directory list/read endpoints
+are separate D2 member-facing read APIs described below; they do not expand
+this owner-facing contract.
+
+`skills` and `interests` use replacement semantics when supplied: values must
+be slugs for active canonical taxonomy definitions, `[]` intentionally clears
+the relationship, and an omitted field leaves the existing relationship
+unchanged. Duplicate selections are rejected.
+
+The backend derives the `completion` object in the response from current
+canonical data. It is not persisted by the API.
+
+### Community Member Directory V1 — D2 read APIs
+
+The following endpoints are authenticated Community-member read APIs:
+
+- `GET /api/v1/community/directory/`
+- `GET /api/v1/community/directory/{directory_id}/`
+
+The viewer must be authenticated and eligible: their User must be linked to a
+non-archived `BUSINESS` Person with an `ACTIVE` Membership. Unauthenticated or
+ineligible viewers receive the existing Community authentication/eligibility
+response. There is no public, staff, or administrator bypass.
+
+Target profiles enter the queryset only when the target has an eligible active
+Community User, a non-archived `BUSINESS` Person, an `ACTIVE` Membership, a
+CommunityProfile, and `directory_visible=true`. Hidden, unknown, archived,
+non-BUSINESS, former-member, and otherwise ineligible direct lookups all return
+the same generic `404 Not Found` response.
+
+The list is paginated with a default page size of 25 and a maximum of 100. It
+uses deterministic case-insensitive `first_name`, `last_name`, and
+`directory_id` ordering. `page_size` may be supplied between 1 and 100.
+
+List search uses the trimmed, case-insensitive `q` parameter against canonical
+Person first name, last name, and location. Search is limited to 100
+characters; blank search behaves as no search. The supported filters are one
+active canonical taxonomy slug each: `industry`, `skill`, and `interest`.
+Filters combine with logical AND. Invalid or inactive taxonomy slugs return
+`400` validation errors.
+
+The compact list result contains only:
+
+```json
+{
+  "directory_id": "opaque-directory-uuid",
+  "photo_url": null,
+  "first_name": "Amina",
+  "last_name": "Zulu",
+  "location": "Milton Keynes",
+  "professional": {
+    "job_title": "Designer",
+    "company": "Elevate MK",
+    "industry": {"slug": "technology", "label": "Technology"}
+  },
+  "skills": [{"slug": "strategy", "label": "Strategy"}],
+  "interests": [{"slug": "networking", "label": "Networking"}],
+  "relationship": {
+    "state": "NO_RELATIONSHIP",
+    "connection_id": null,
+    "can_connect": true,
+    "can_accept": false,
+    "can_decline": false,
+    "can_remove": false
+  }
+}
+```
+
+The list `relationship` object is calculated for the authenticated viewer
+using the existing Connections state machine. Its state is one of
+`NO_RELATIONSHIP`, `OUTGOING_PENDING`, `INCOMING_PENDING`, or `CONNECTED`.
+The projection is viewer-relative, does not expose contact data, and includes
+only the safe public connection UUID when a relationship exists. A member's
+self-result is never connectable. Relationship data does not make hidden
+profiles eligible for the general list; list eligibility is enforced first.
+
+The direct profile result contains the same fields plus `bio`, the complete
+professional summary (`career_stage` and `linkedin_url` included), and:
+
+```json
+"contact": {"email": null, "mobile": "+447700900123"}
+```
+
+Contact values are projected from canonical Person fields only when the
+corresponding CommunityProfile preference is enabled. Whole-profile visibility
+is enforced first, and disabling it suppresses both contact values without
+clearing the stored independent preferences. Once an accepted Community
+connection exists, both participants receive each other's canonical email and
+mobile values where present, regardless of these non-connected visibility
+preferences. Pending, declined, and disconnected relationships do not grant
+connection-derived contact access. Email/mobile are never included in list
+results.
+
+`photo_url` is generated at read time through Django's configured default
+storage and may be a temporary signed/private URL. Raw photo keys, bucket
+names, `asset_namespace_id`, internal database IDs, demographics, membership
+metadata, marketing data, tags, notes, audit/provider/account/invitation data,
+and security data are excluded. Reads do not create profiles, mutate domain
+records, enqueue Brevo work, write audit events, or modify S3 objects.
+
+Directory requests use the configurable `community_directory` DRF throttle
+scope, defaulting to `60/hour` via `COMMUNITY_DIRECTORY_THROTTLE_RATE`.
+
+### Community Connections V1 — C2 backend APIs
+
+Connections are mutual Person-to-Person relationships. They are not a
+follower/following system and do not copy contact data into a relationship
+record. The relationship stores one canonical unordered Person pair, with the
+lower Person database key in `person_low` and the higher key in `person_high`.
+Clients use the opaque `public_id` UUID for relationship mutations; internal
+Person, User, Membership, CommunityProfile, and connection database IDs are
+not exposed.
+
+The relationship states are:
+
+- `PENDING` — the recipient has not decided;
+- `ACCEPTED` — both members are connected;
+- `DECLINED` — the request was declined;
+- `DISCONNECTED` — an accepted relationship was removed.
+
+Declined and disconnected pairs remain as historical rows and may be reopened
+by a later valid request without creating a second pair row. A crossed request
+does not auto-accept: the existing pending request remains available for the
+recipient's explicit decision.
+
+Available endpoints:
+
+```text
+GET    /api/v1/community/connections/
+GET    /api/v1/community/connections/requests/?direction=incoming
+GET    /api/v1/community/connections/requests/?direction=outgoing
+POST   /api/v1/community/connections/requests/
+POST   /api/v1/community/connections/{public_id}/accept/
+POST   /api/v1/community/connections/{public_id}/decline/
+DELETE /api/v1/community/connections/{public_id}/
+```
+
+Request creation accepts only a discoverable target `directory_id`:
+
+```json
+{"directory_id": "opaque-directory-uuid"}
+```
+
+All endpoints require an authenticated, currently eligible Community member.
+Eligibility requires an active User linked to a non-archived BUSINESS Person
+with an ACTIVE Membership. Both participants must remain currently eligible for
+connection access, contact access, lists, and mutations. A self-request is not
+allowed. New requests to hidden or otherwise unavailable targets return a
+generic `404` and do not reveal target existence.
+
+Connection and request list DTOs contain only a safe compact member projection
+and a public `connection_id`; they contain no contact details or internal
+identifiers. The detail Directory response additionally contains:
+
+```json
+"relationship": {
+  "state": "NO_RELATIONSHIP",
+  "connection_id": null,
+  "can_connect": true,
+  "can_accept": false,
+  "can_decline": false,
+  "can_remove": false
+}
+```
+
+The state is backend-derived and may be `NO_RELATIONSHIP`,
+`OUTGOING_PENDING`, `INCOMING_PENDING`, or `CONNECTED`. Relationship state is
+always included in the direct Directory detail response. Compact connection
+and request member projections may omit it; authenticated Directory list
+results include the viewer-relative relationship projection described above.
+
+General Directory lists remain strictly limited to `directory_visible=true`.
+For detail reads only, an accepted connection can access a currently eligible
+member whose profile is hidden. Pending, declined, disconnected, and unrelated
+viewers receive the same generic `404` response.
+
+Contact detail authorization is backend-controlled. A target's email/mobile
+visibility preference applies to non-connected viewers. An accepted,
+currently effective connection grants both participants access to each other's
+canonical Person email and mobile where present, even when those preferences
+are false. Disconnecting or losing current Community eligibility removes that
+effective access immediately. Contact values are never copied to the
+connection model.
+
+Connection mutations use the existing scoped throttle architecture:
+
+| Scope | Default |
+| --- | --- |
+| `community_connections` | `60/hour` |
+| `community_connection_requests` | `60/hour` |
+| `community_connection_create` | `10/hour` |
+| `community_connection_mutations` | `30/hour` |
+
+Each rate is configurable through the corresponding
+`COMMUNITY_CONNECTION_*_THROTTLE_RATE` environment setting. Connection reads
+and mutations do not call AWS or Brevo.
+
+### Profile photo
+
+`POST /api/v1/community/profile/photo/` accepts an authenticated eligible
+Community member's multipart upload under the `photo` field and returns the
+complete composed profile. `DELETE` on the same endpoint removes the current
+photo and returns the complete composed profile. Both methods are
+CSRF-protected for cookie-authenticated requests and operate only on the
+authenticated user's own Person.
+
+Accepted input is JPEG, PNG, or WebP up to 5 MiB. The backend rejects SVG,
+GIF, animated images, malformed files, unsupported formats, and decoded images
+larger than 25 megapixels. Accepted images are decoded and normalized before
+storage: EXIF orientation is applied, metadata is stripped, the longest edge
+is limited to 1024 pixels without upscaling, and transparency is preserved
+where practical. The backend does not crop images to a square.
+
+The stored value is only an opaque generated object name under
+`community/profiles/<profile-uuid>/profile-photos/<photo-uuid>.<ext>`; it
+contains no user-derived name or original filename. The profile UUID is a
+stable random non-PII storage namespace, not an authentication identifier,
+and the final asset name is independently random. Existing legacy references
+under `community/profile-photos/` remain readable. The response's `photo_url`
+is generated at read time. Replacement
+stores the new object and commits the new database reference before deleting
+the old object. Upload and removal are recorded through the existing
+`COMMUNITY_SELF_SERVICE` audit mechanism without image bytes, URLs, or
+credentials. Profile photos do not affect completion, Brevo synchronization,
+marketing preferences, or anonymous/public profile projections.
+
+### Community content reporting and moderation
+
+Eligible authenticated Community members can report visible active content:
+
+```text
+POST /api/v1/community/posts/{post_id}/report/
+POST /api/v1/community/posts/{post_id}/replies/{reply_id}/report/
+```
+
+Requests accept one reason (`OFF_TOPIC`, `SPAM_OR_EXCESSIVE_PROMOTION`,
+`INAPPROPRIATE_OR_ABUSIVE`, `MISLEADING_OR_SUSPICIOUS`, or `OTHER`) and
+optional details up to 1,000 characters. Members cannot report their own or
+unavailable content. There is one open report per reporter and target;
+repeating a report returns the same safe acknowledgement without another row
+or report audit event. Member feed DTOs never include report fields.
+
+Active `CRM_ADMIN` and `CRM_MANAGER` staff roles alone can use the moderation
+queue:
+
+```text
+GET  /api/v1/community/moderation/reports/
+GET  /api/v1/community/moderation/reports/{report_id}/
+POST /api/v1/community/moderation/reports/{report_id}/dismiss/
+POST /api/v1/community/moderation/reports/{report_id}/remove/
+POST /api/v1/community/moderation/reports/{report_id}/restore/
+```
+
+The queue is newest-open-first and exposes only safe reporter/author identity,
+report reason/details, target content/state, and parent-post context for
+replies. Dismissal leaves content unchanged. Removal changes active content to
+`MODERATOR_REMOVED` and resolves all other open reports for that target.
+Restoration is allowed only for moderator-removed content; author-deleted
+content cannot be restored. Moderation history is retained separately and
+append-only audit metadata contains only opaque target/report identifiers,
+target type, reason, and action information.
+
+Member report POSTs use `community_content_report`, defaulting to `10/hour`
+through `COMMUNITY_CONTENT_REPORT_THROTTLE_RATE`.
+
+### Profile editor options
+
+`GET /api/v1/community/profile/options/` returns `200 OK` with the active
+canonical editor options:
+
+```json
+{
+  "industries": [{"slug": "technology", "label": "Technology"}],
+  "career_stages": [{"slug": "MID_CAREER", "label": "Mid Career"}],
+  "skills": [{"slug": "strategy", "label": "Strategy"}],
+  "interests": [{"slug": "networking", "label": "Networking"}]
+}
+```
+
+Only active Industry, Skill, and Interest definitions are returned. The
+endpoint does not create taxonomy values.
+
+### Review acknowledgement
+
+`POST /api/v1/community/profile/review-acknowledgement/` accepts an empty JSON
+object and returns `200 OK` with:
+
+```json
+{"review_required": false}
+```
+
+The operation is explicit and idempotent. Saving profile edits alone does not
+acknowledge review. Review state is derived as:
+
+```text
+review_required = person_preexisted_community AND review_acknowledged_at IS NULL
+```
+
+Profile V1 has no field-by-field mismatch or conflict system and this is not an
+approval workflow. Anonymous Join remains generic; an existing-record member
+is prompted to review the composed canonical profile after authentication.
+Review Profile followed by explicit acknowledgement and the My Profile
+Looks Good action both use this acknowledgement behavior.
