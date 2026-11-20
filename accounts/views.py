@@ -27,6 +27,7 @@ from accounts.serializers import (
     DetailSerializer,
     InvalidCredentialsError,
     LoginSerializer,
+    MobileTokenRefreshSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     InvalidRefreshTokenError,
@@ -34,6 +35,7 @@ from accounts.serializers import (
 )
 from audit.models import AuditEvent
 from audit.services import record_audit_event
+from accounts.authentication import MobileJWTAuthentication, SessionAuthentication
 from notifications.exceptions import TransactionalEmailError
 from notifications.services import send_transactional_email
 
@@ -175,7 +177,10 @@ class TokenLoginView(APIView):
         auth=[],
     )
     def post(self, request):
-        serializer = LoginSerializer(data=request.data, context={"request": request})
+        serializer = LoginSerializer(
+            data=request.data,
+            context={"request": request, "require_active_mobile_membership": True},
+        )
         if not serializer.is_valid():
             detail_error = serializer.errors.get("detail")
             if (
@@ -209,6 +214,7 @@ class TokenLoginView(APIView):
 class TokenRefreshEndpointView(TokenRefreshView):
     permission_classes = [AllowAny]
     authentication_classes = []
+    serializer_class = MobileTokenRefreshSerializer
 
     @extend_schema(
         operation_id="auth_token_refresh",
@@ -326,6 +332,7 @@ class LogoutView(APIView):
 
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
+    authentication_classes = [SessionAuthentication, MobileJWTAuthentication]
 
     @extend_schema(
         operation_id="auth_me",

@@ -5,10 +5,13 @@ from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
-from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.models import normalize_email_address
+from accounts.services import user_is_active_mobile_member
+from memberships.serializers import MembershipSerializer
 from staff_access.permissions import get_active_staff_role_codes_for_user
 
 
@@ -41,13 +44,21 @@ class AuthenticatedUserSerializer(serializers.ModelSerializer):
 
 class CurrentUserSerializer(AuthenticatedUserSerializer):
     staff_roles = serializers.SerializerMethodField()
+    membership = serializers.SerializerMethodField()
 
     class Meta(AuthenticatedUserSerializer.Meta):
-        fields = ("id", "email", "person", "staff_roles")
+        fields = ("id", "email", "person", "staff_roles", "membership")
 
     @extend_schema_field(serializers.ListField(child=serializers.CharField()))
     def get_staff_roles(self, obj):
         return get_active_staff_role_codes_for_user(obj)
+
+    @extend_schema_field(MembershipSerializer(allow_null=True))
+    def get_membership(self, obj):
+        membership = getattr(obj.person, "membership", None)
+        if membership is None:
+            return None
+        return MembershipSerializer(membership).data
 
 
 class LoginSerializer(serializers.Serializer):
@@ -70,9 +81,31 @@ class LoginSerializer(serializers.Serializer):
                 code=InvalidCredentialsError.default_code,
             )
 
+        if self.context.get("require_active_mobile_membership") and not user_is_active_mobile_member(user):
+            raise InvalidCredentialsError(
+                {"detail": self.error_messages["invalid_credentials"]},
+                code=InvalidCredentialsError.default_code,
+            )
+
         attrs["email"] = email
         attrs["user"] = user
         return attrs
+
+
+class MobileTokenRefreshSerializer(TokenRefreshSerializer):
+    """Refresh serializer that rechecks current mobile membership eligibility."""
+
+    def validate(self, attrs):
+        try:
+            refresh = RefreshToken(attrs["refresh"])
+            user = User.objects.select_related("person").get(pk=refresh["user_id"])
+        except (TokenError, KeyError, TypeError, ValueError, User.DoesNotExist) as error:
+            raise InvalidToken("Token is invalid or expired") from error
+
+        if not user_is_active_mobile_member(user):
+            raise InvalidToken("Token is invalid or expired")
+
+        return super().validate(attrs)
 
 
 class InvalidRefreshTokenError(serializers.ValidationError):
