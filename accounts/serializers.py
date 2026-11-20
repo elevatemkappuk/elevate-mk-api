@@ -5,6 +5,8 @@ from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.models import normalize_email_address
 from staff_access.permissions import get_active_staff_role_codes_for_user
@@ -70,6 +72,34 @@ class LoginSerializer(serializers.Serializer):
 
         attrs["email"] = email
         attrs["user"] = user
+        return attrs
+
+
+class InvalidRefreshTokenError(serializers.ValidationError):
+    default_code = "invalid_refresh_token"
+
+
+class RefreshTokenLogoutSerializer(serializers.Serializer):
+    refresh = serializers.CharField(write_only=True, trim_whitespace=False)
+
+    def validate(self, attrs):
+        try:
+            refresh = RefreshToken(attrs["refresh"])
+            token_user_id = refresh["user_id"]
+        except (TokenError, KeyError, TypeError, ValueError) as error:
+            raise InvalidRefreshTokenError(
+                {"detail": "The refresh token is invalid, expired, or already revoked."},
+                code=InvalidRefreshTokenError.default_code,
+            ) from error
+
+        request = self.context.get("request")
+        if request is None or str(token_user_id) != str(request.user.pk):
+            raise serializers.ValidationError(
+                {"detail": "The refresh token does not belong to the authenticated user."},
+                code="refresh_token_user_mismatch",
+            )
+
+        attrs["token"] = refresh
         return attrs
 
 

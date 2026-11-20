@@ -16,6 +16,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
@@ -28,6 +29,8 @@ from accounts.serializers import (
     LoginSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
+    InvalidRefreshTokenError,
+    RefreshTokenLogoutSerializer,
 )
 from audit.models import AuditEvent
 from audit.services import record_audit_event
@@ -220,6 +223,70 @@ class TokenRefreshEndpointView(TokenRefreshView):
     )
     def post(self, request, *args, **kwargs):
         return super().post(request, *args, **kwargs)
+
+
+class TokenLogoutView(APIView):
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [JWTAuthentication]
+
+    @extend_schema(
+        operation_id="auth_token_logout",
+        summary="Revoke a mobile refresh token",
+        description=(
+            "Requires a valid JWT access token and the matching refresh token in the request body. "
+            "The refresh token is blacklisted and can no longer be used to refresh. Already-issued "
+            "access tokens remain valid until they expire; this endpoint does not revoke them."
+        ),
+        request=RefreshTokenLogoutSerializer,
+        responses={
+            204: OpenApiResponse(description="Refresh token revoked. No response body."),
+            400: OpenApiResponse(description="The refresh token field is missing or malformed."),
+            401: OpenApiResponse(description="JWT access or refresh authentication failed."),
+            403: OpenApiResponse(description="The refresh token belongs to another user."),
+        },
+        tags=["Authentication"],
+    )
+    def post(self, request):
+        serializer = RefreshTokenLogoutSerializer(
+            data=request.data,
+            context={"request": request},
+        )
+        if not serializer.is_valid():
+            detail_error = serializer.errors.get("detail")
+            if (
+                isinstance(detail_error, list)
+                and len(detail_error) == 1
+                and getattr(detail_error[0], "code", None) == InvalidRefreshTokenError.default_code
+            ):
+                return Response(
+                    {
+                        "code": InvalidRefreshTokenError.default_code,
+                        "detail": "The refresh token is invalid, expired, or already revoked.",
+                    },
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            if (
+                isinstance(detail_error, list)
+                and len(detail_error) == 1
+                and getattr(detail_error[0], "code", None) == "refresh_token_user_mismatch"
+            ):
+                return Response(
+                    {"code": "refresh_token_user_mismatch", "detail": str(detail_error[0])},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            serializer.validated_data["token"].blacklist()
+            record_auth_audit_or_raise(
+                action=AuditEvent.Action.LOGOUT,
+                actor_user=request.user,
+                entity_type="User",
+                entity_id=request.user.id,
+                metadata={"authentication": "jwt", "refresh_token_revoked": True},
+            )
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @method_decorator(csrf_protect, name="dispatch")
