@@ -132,6 +132,8 @@ class AuthenticationApiTests(TestCase):
         )
         self.csrf_url = "/api/v1/auth/csrf/"
         self.login_url = "/api/v1/auth/login/"
+        self.token_url = "/api/v1/auth/token/"
+        self.token_refresh_url = "/api/v1/auth/token/refresh/"
         self.logout_url = "/api/v1/auth/logout/"
         self.me_url = "/api/v1/auth/me/"
         self.admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
@@ -249,6 +251,73 @@ class AuthenticationApiTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data["detail"][0], "Invalid email or password.")
+
+    def test_token_login_issues_access_and_refresh_tokens_without_creating_session(self):
+        response = self.client.post(
+            self.token_url,
+            {"email": "MEMBER@EXAMPLE.COM", "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["access"])
+        self.assertTrue(response.data["refresh"])
+        self.assertNotIn("_auth_user_id", self.client.session)
+        event = AuditEvent.objects.get(action=AuditEvent.Action.LOGIN_SUCCEEDED)
+        self.assertEqual(event.actor_user, self.user)
+        self.assertEqual(event.metadata, {"authentication": "jwt"})
+
+    def test_token_login_rejects_invalid_credentials_and_records_failed_audit(self):
+        response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": "wrongpass"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["detail"][0], "Invalid email or password.")
+        self.assertEqual(AuditEvent.objects.get().action, AuditEvent.Action.LOGIN_FAILED)
+
+    def test_token_login_rejects_inactive_user(self):
+        self.user.is_active = False
+        self.user.save(update_fields=["is_active"])
+
+        response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["detail"][0], "Invalid email or password.")
+        self.assertEqual(AuditEvent.objects.get().action, AuditEvent.Action.LOGIN_FAILED)
+
+    def test_rotated_refresh_token_is_blacklisted(self):
+        login_response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+        original_refresh = login_response.data["refresh"]
+
+        refresh_response = self.client.post(
+            self.token_refresh_url,
+            {"refresh": original_refresh},
+            format="json",
+        )
+
+        self.assertEqual(refresh_response.status_code, 200)
+        self.assertTrue(refresh_response.data["access"])
+        self.assertTrue(refresh_response.data["refresh"])
+        self.assertNotEqual(refresh_response.data["refresh"], original_refresh)
+
+        reused_response = self.client.post(
+            self.token_refresh_url,
+            {"refresh": original_refresh},
+            format="json",
+        )
+
+        self.assertEqual(reused_response.status_code, 401)
 
     def test_user_linked_to_technical_person_can_still_authenticate(self):
         technical_user = User.objects.create_user(
