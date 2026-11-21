@@ -535,14 +535,11 @@ class AuthenticationApiTests(TestCase):
 
         event = AuditEvent.objects.get(action=AuditEvent.Action.LOGOUT)
         self.assertEqual(event.actor_user, self.user)
-        self.assertEqual(
-            event.metadata,
-            {
-                "authentication": "jwt",
-                "mobile_session_revoked": True,
-                "refresh_token_revoked": True,
-            },
-        )
+        self.assertEqual(event.metadata["authentication"], "jwt")
+        self.assertTrue(event.metadata["mobile_session_revoked"])
+        self.assertTrue(event.metadata["mobile_session_id"])
+        self.assertEqual(event.metadata["revocation_reason"], "mobile_logout")
+        self.assertTrue(event.metadata["refresh_token_revoked"])
         self.assertNotIn(refresh, str(event.metadata))
 
     def test_jwt_logout_rejects_invalid_expired_and_already_blacklisted_refresh_tokens(self):

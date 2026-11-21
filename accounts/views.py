@@ -59,7 +59,12 @@ def build_password_reset_url(*, user, frontend_url):
     return f"{base_url}/reset-password/{uid}/{token}"
 
 
-def record_auth_audit_or_raise(**kwargs):
+def record_auth_audit_or_raise(*, request=None, **kwargs):
+    if request is not None:
+        request_id = request.headers.get("X-Request-ID") or request.META.get("HTTP_X_REQUEST_ID")
+        if request_id:
+            kwargs.setdefault("request_id", request_id)
+        kwargs.setdefault("ip_address", request.META.get("REMOTE_ADDR"))
     try:
         record_audit_event(**kwargs)
     except Exception as exc:
@@ -132,6 +137,7 @@ class LoginView(APIView):
             ):
                 try:
                     record_auth_audit_or_raise(
+                        request=request,
                         action=AuditEvent.Action.LOGIN_FAILED,
                         actor_user=None,
                         entity_type="Authentication",
@@ -152,6 +158,7 @@ class LoginView(APIView):
 
         try:
             record_auth_audit_or_raise(
+                request=request,
                 action=AuditEvent.Action.LOGIN_SUCCEEDED,
                 actor_user=user,
                 entity_type="User",
@@ -197,6 +204,7 @@ class TokenLoginView(APIView):
                 and getattr(detail_error[0], "code", None) == InvalidCredentialsError.default_code
             ):
                 record_auth_audit_or_raise(
+                    request=request,
                     action=AuditEvent.Action.LOGIN_FAILED,
                     actor_user=None,
                     entity_type="Authentication",
@@ -208,6 +216,7 @@ class TokenLoginView(APIView):
         with transaction.atomic():
             refresh = issue_mobile_token_pair(user=user)
             record_auth_audit_or_raise(
+                request=request,
                 action=AuditEvent.Action.LOGIN_SUCCEEDED,
                 actor_user=user,
                 entity_type="User",
@@ -298,6 +307,7 @@ class TokenLogoutView(APIView):
             )
             serializer.validated_data["token"].blacklist()
             record_auth_audit_or_raise(
+                request=request,
                 action=AuditEvent.Action.LOGOUT,
                 actor_user=request.user,
                 entity_type="User",
@@ -305,6 +315,8 @@ class TokenLogoutView(APIView):
                 metadata={
                     "authentication": "jwt",
                     "mobile_session_revoked": True,
+                    "mobile_session_id": str(serializer.validated_data["mobile_session_id"]),
+                    "revocation_reason": "mobile_logout",
                     "refresh_token_revoked": True,
                 },
             )
@@ -335,6 +347,7 @@ class LogoutView(APIView):
         user = request.user
         try:
             record_auth_audit_or_raise(
+                request=request,
                 action=AuditEvent.Action.LOGOUT,
                 actor_user=user,
                 entity_type="User",
@@ -430,8 +443,9 @@ class PasswordResetConfirmView(APIView):
         with transaction.atomic():
             user.set_password(serializer.validated_data["new_password"])
             user.save(update_fields=["password"])
-            revoke_user_credentials(user=user, reason="password_reset")
+            revoke_user_credentials(user=user, reason="password_reset", request=request)
             record_auth_audit_or_raise(
+                request=request,
                 action=AuditEvent.Action.PASSWORD_RESET,
                 actor_user=None,
                 entity_type="User",

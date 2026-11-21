@@ -48,18 +48,44 @@ def revoke_mobile_session(*, session_id, reason):
     )
 
 
-def revoke_user_credentials(*, user, reason):
+def _request_audit_context(request):
+    if request is None:
+        return {}
+    request_id = request.headers.get("X-Request-ID") or request.META.get("HTTP_X_REQUEST_ID")
+    return {
+        "request_id": request_id or None,
+        "ip_address": request.META.get("REMOTE_ADDR"),
+    }
+
+
+def revoke_user_credentials(*, user, reason, actor_user=None, request=None):
     """Invalidate all credentials issued for a user without exposing secrets."""
+    from audit.models import AuditEvent
+    from audit.services import record_audit_event
+
     now = timezone.now()
     User.objects.filter(pk=user.pk).update(auth_version=F("auth_version") + 1)
-    MobileAuthSession.objects.filter(
+    revoked_sessions = MobileAuthSession.objects.filter(
         user_id=user.pk,
         revoked_at__isnull=True,
-    ).update(
+    )
+    revoked_count = revoked_sessions.update(
         revoked_at=now,
         revoked_reason=reason,
     )
     user.refresh_from_db(fields=["auth_version", "crm_session_version", "is_active"])
+    record_audit_event(
+        action=AuditEvent.Action.CREDENTIALS_REVOKED,
+        actor_user=actor_user,
+        entity_type="User",
+        entity_id=user.pk,
+        metadata={
+            "reason": reason,
+            "mobile_sessions_revoked": revoked_count,
+            "authentication": "all_credentials",
+        },
+        **_request_audit_context(request),
+    )
 
 
 def invalidate_crm_sessions(*, user_ids):
@@ -72,18 +98,24 @@ def invalidate_crm_sessions(*, user_ids):
     )
 
 
-def handle_user_active_state_change(*, user, was_active, actor_user=None):
+def handle_user_active_state_change(*, user, was_active, actor_user=None, request=None):
     from audit.models import AuditEvent
     from audit.services import record_audit_event
 
     if was_active and not user.is_active:
-        revoke_user_credentials(user=user, reason="account_deactivated")
+        revoke_user_credentials(
+            user=user,
+            reason="account_deactivated",
+            actor_user=actor_user,
+            request=request,
+        )
         record_audit_event(
             action=AuditEvent.Action.ACCOUNT_DISABLED,
             actor_user=actor_user,
             entity_type="User",
             entity_id=user.pk,
             metadata={"reason": "account_deactivated", "credentials_revoked": True},
+            **_request_audit_context(request),
         )
     elif was_active is False and user.is_active:
         record_audit_event(
@@ -92,4 +124,5 @@ def handle_user_active_state_change(*, user, was_active, actor_user=None):
             entity_type="User",
             entity_id=user.pk,
             metadata={"reason": "account_reactivated", "fresh_authentication_required": True},
+            **_request_audit_context(request),
         )

@@ -262,8 +262,9 @@ class CommunityPasswordResetConfirmView(APIView):
 
             user.set_password(serializer.validated_data["new_password"])
             user.save(update_fields=["password"])
-            revoke_user_credentials(user=user, reason="password_reset")
+            revoke_user_credentials(user=user, reason="password_reset", request=request)
             record_auth_audit_or_raise(
+                request=request,
                 action=AuditEvent.Action.PASSWORD_RESET,
                 actor_user=None,
                 entity_type="User",
@@ -357,6 +358,7 @@ class CommunityLoginView(APIView):
         serializer = LoginSerializer(data=request.data, context={"request": request})
         if not serializer.is_valid():
             record_auth_audit_or_raise(
+                request=request,
                 action=AuditEvent.Action.LOGIN_FAILED,
                 actor_user=None,
                 entity_type="Authentication",
@@ -370,6 +372,7 @@ class CommunityLoginView(APIView):
         user = serializer.validated_data["user"]
         if not is_community_eligible_user(user):
             record_auth_audit_or_raise(
+                request=request,
                 action=AuditEvent.Action.LOGIN_FAILED,
                 actor_user=user,
                 entity_type="Authentication",
@@ -385,6 +388,7 @@ class CommunityLoginView(APIView):
         request.session["elevate_auth_context"] = "community"
         request.session["elevate_auth_version"] = user.auth_version
         record_auth_audit_or_raise(
+            request=request,
             action=AuditEvent.Action.LOGIN_SUCCEEDED,
             actor_user=user,
             entity_type="Authentication",

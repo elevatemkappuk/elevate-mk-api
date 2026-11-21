@@ -37,10 +37,10 @@ class StaffRole(models.Model):
             ensure_staff_role_can_be_deactivated(self)
         super().save(*args, **kwargs)
 
-    def deactivate(self):
+    def deactivate(self, *, actor_user=None, request=None):
         from staff_access.services import deactivate_staff_role
 
-        return deactivate_staff_role(self)
+        return deactivate_staff_role(self, actor_user=actor_user, request=request)
 
 
 class StaffRoleAssignmentQuerySet(models.QuerySet):

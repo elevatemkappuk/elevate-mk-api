@@ -95,6 +95,7 @@ class User(AbstractUser):
                 user=self,
                 was_active=previous_is_active,
                 actor_user=getattr(self, "_audit_actor_user", None),
+                request=getattr(self, "_audit_request", None),
             )
 
     def get_full_name(self):

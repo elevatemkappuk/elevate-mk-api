@@ -13,7 +13,12 @@ from staff_access.services import (
 )
 
 
-def record_staff_role_audit_event(*, action, actor_user, assignment):
+def record_staff_role_audit_event(*, action, actor_user, assignment, request=None):
+    request_id = None
+    ip_address = None
+    if request is not None:
+        request_id = request.headers.get("X-Request-ID") or request.META.get("HTTP_X_REQUEST_ID")
+        ip_address = request.META.get("REMOTE_ADDR")
     record_audit_event(
         action=action,
         actor_user=actor_user,
@@ -34,6 +39,8 @@ def record_staff_role_audit_event(*, action, actor_user, assignment):
             "staff_role_id": str(assignment.role_id),
             "staff_role_code": assignment.role.code,
         },
+        request_id=request_id,
+        ip_address=ip_address,
     )
 
 
@@ -142,6 +149,7 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
                         action=AuditEvent.Action.STAFF_ROLE_REACTIVATED,
                         actor_user=request.user,
                         assignment=existing,
+                        request=request,
                     )
                     self.message_user(request, "Existing assignment reactivated.", level=messages.SUCCESS)
                 else:
@@ -159,6 +167,7 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
                 action=AuditEvent.Action.STAFF_ROLE_ASSIGNED,
                 actor_user=request.user,
                 assignment=assignment,
+                request=request,
             )
 
         obj.pk = assignment.pk
@@ -179,6 +188,7 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
                         action=AuditEvent.Action.STAFF_ROLE_REVOKED,
                         actor_user=request.user,
                         assignment=assignment,
+                        request=request,
                     )
         except FinalCrmAdminProtectionError as error:
             self.message_user(request, error.messages[0], level=messages.ERROR)
@@ -211,6 +221,7 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
                     action=AuditEvent.Action.STAFF_ROLE_REACTIVATED,
                     actor_user=request.user,
                     assignment=assignment,
+                    request=request,
                 )
                 updated += 1
         self.message_user(

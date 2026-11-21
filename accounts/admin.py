@@ -28,11 +28,14 @@ class UserAdmin(DjangoUserAdmin):
 
     def save_model(self, request, obj, form, change):
         obj._audit_actor_user = request.user
+        obj._audit_request = request
         try:
             super().save_model(request, obj, form, change)
         finally:
             if hasattr(obj, "_audit_actor_user"):
                 del obj._audit_actor_user
+            if hasattr(obj, "_audit_request"):
+                del obj._audit_request
 
     @admin.display(ordering="person__last_name", description="Person")
     def person_name(self, obj):

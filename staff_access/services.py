@@ -2,6 +2,8 @@ from django.db import transaction
 from django.db.models import F
 
 from accounts.models import User
+from audit.models import AuditEvent
+from audit.services import record_audit_event
 from staff_access.exceptions import FinalCrmAdminProtectionError
 from staff_access.models import StaffRole, StaffRoleAssignment
 
@@ -11,7 +13,7 @@ def ensure_staff_role_can_be_deactivated(role):
         raise FinalCrmAdminProtectionError()
 
 
-def deactivate_staff_role(role):
+def deactivate_staff_role(role, *, actor_user=None, request=None):
     """Deactivate a non-canonical-admin role through the Staff Access domain."""
     with transaction.atomic():
         locked_role = StaffRole.objects.select_for_update().get(pk=role.pk)
@@ -25,6 +27,25 @@ def deactivate_staff_role(role):
         locked_role.save(update_fields=["is_active", "updated_at"])
         User.objects.filter(pk__in=affected_user_ids).update(
             crm_session_version=F("crm_session_version") + 1,
+        )
+        request_id = None
+        ip_address = None
+        if request is not None:
+            request_id = request.headers.get("X-Request-ID") or request.META.get("HTTP_X_REQUEST_ID")
+            ip_address = request.META.get("REMOTE_ADDR")
+        record_audit_event(
+            action=AuditEvent.Action.STAFF_ROLE_REVOKED,
+            actor_user=actor_user,
+            entity_type="StaffRole",
+            entity_id=locked_role.pk,
+            metadata={
+                "reason": "staff_role_deactivated",
+                "staff_role_code": locked_role.code,
+                "affected_user_count": len(affected_user_ids),
+                "crm_sessions_invalidated": True,
+            },
+            request_id=request_id,
+            ip_address=ip_address,
         )
     return locked_role
 
