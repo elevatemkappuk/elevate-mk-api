@@ -52,6 +52,10 @@ class CommunityAccountMobileApiTests(TestCase):
     def authenticate(self, client=None):
         target = client or self.client
         target.force_login(self.user)
+        session = target.session
+        session["elevate_auth_context"] = "community"
+        session["elevate_auth_version"] = self.user.auth_version
+        session.save()
         return target
 
     def payload(self, mobile=None, phone_region="GB"):

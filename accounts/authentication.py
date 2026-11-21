@@ -64,24 +64,36 @@ def enforce_crm_session_lifetime(request, user):
     request.session.modified = True
 
 
+def _validate_session_authentication(request, result, *, allow_mobile_fallback=False):
+    if result is None:
+        return None
+
+    user, _session_auth = result
+    expected_version = str(user.auth_version)
+    session_version = request.session.get("elevate_auth_version")
+    if session_version is None or str(session_version) != expected_version:
+        request.session.flush()
+        if allow_mobile_fallback:
+            return None
+        raise AuthenticationFailed("Authentication credentials were not provided.")
+
+    return result
+
+
 class SessionAuthentication(DRFSessionAuthentication):
     def authenticate_header(self, request):
         return "Session"
 
     def authenticate(self, request):
-        result = super().authenticate(request)
-        if result is None:
-            return None
+        return _validate_session_authentication(request, super().authenticate(request))
 
-        user, _session_auth = result
-        expected_version = str(user.auth_version)
-        session_version = request.session.get("elevate_auth_version")
-        if session_version is None:
-            request.session["elevate_auth_version"] = user.auth_version
-        elif str(session_version) != expected_version:
-            raise AuthenticationFailed("Authentication credentials were not provided.")
 
-        return result
+class CommunitySessionAuthentication(SessionAuthentication):
+    """Fail closed for stale sessions without blocking a valid mobile JWT."""
+
+    def authenticate(self, request):
+        result = DRFSessionAuthentication.authenticate(self, request)
+        return _validate_session_authentication(request, result, allow_mobile_fallback=True)
 
 
 class CrmSessionAuthentication(SessionAuthentication):
@@ -124,3 +136,10 @@ class MobileJWTAuthentication(JWTAuthentication):
         validate_mobile_token_claims(user=user, token=token)
 
         return user, token
+
+
+# Community member endpoints accept either a versioned Django session or a
+# mobile JWT whose device session and account generation remain valid. Session
+# authentication stays first so DRF continues to enforce CSRF for unsafe
+# cookie-authenticated requests.
+COMMUNITY_AUTHENTICATION_CLASSES = (CommunitySessionAuthentication, MobileJWTAuthentication)

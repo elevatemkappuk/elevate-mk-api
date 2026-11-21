@@ -551,6 +551,31 @@ class StaffAdminTests(TestCase):
         self.assertFalse(form.is_valid())
         self.assertIn("is_active", form.errors)
 
+    def test_staff_role_admin_deactivation_invalidates_existing_crm_sessions(self):
+        StaffRoleAssignment.objects.assign_role(user=self.target_user, role=self.crm_viewer_role)
+        client = APIClient()
+        response = client.post(
+            "/api/v1/auth/login/",
+            {"email": self.target_user.email, "password": "testpass123"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(client.get("/api/v1/people/").status_code, 200)
+
+        request = self.build_request()
+        role = StaffRole.objects.get(pk=self.crm_viewer_role.pk)
+        role.is_active = False
+        self.role_admin.save_model(request, role, form=None, change=True)
+
+        self.assertEqual(client.get("/api/v1/people/").status_code, 401)
+        event = AuditEvent.objects.get(action=AuditEvent.Action.STAFF_ROLE_REVOKED)
+        self.assertEqual(event.actor_user, self.admin_user)
+        self.assertEqual(event.entity_type, "StaffRole")
+
+        role.is_active = True
+        self.role_admin.save_model(request, role, form=None, change=True)
+        self.assertEqual(client.get("/api/v1/people/").status_code, 401)
+
     def test_bulk_revoke_of_all_crm_admins_is_rejected_without_audit_events(self):
         request = self.build_request()
         first = StaffRoleAssignment.objects.assign_role(user=self.target_user, role=self.crm_admin_role)

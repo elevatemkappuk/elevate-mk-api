@@ -146,5 +146,13 @@ class CommunityLoginApiTests(TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertNotIn("_auth_user_id", self.csrf_client.session)
 
+    def test_legacy_unversioned_session_fails_closed(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get("/api/v1/community/me/")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertNotIn("_auth_user_id", self.client.session)
+
     def test_login_uses_dedicated_throttle_scope(self):
         self.assertEqual(CommunityLoginView.throttle_scope, "community_login")

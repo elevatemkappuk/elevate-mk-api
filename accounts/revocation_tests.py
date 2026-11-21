@@ -65,6 +65,13 @@ class AuthenticationRevocationTests(TestCase):
 
     def test_password_reset_revokes_mobile_access_refresh_and_browser_sessions(self):
         tokens = self.token_pair()
+        self.assertEqual(
+            self.client.get(
+                "/api/v1/community/me/",
+                HTTP_AUTHORIZATION=f"Bearer {tokens['access']}",
+            ).status_code,
+            200,
+        )
         crm_client = self.login_session()
         community_client = self.login_session("/api/v1/community/login/")
         self.assertEqual(crm_client.get("/api/v1/auth/me/").status_code, 200)
@@ -85,6 +92,13 @@ class AuthenticationRevocationTests(TestCase):
                 "/api/v1/auth/token/refresh/",
                 {"refresh": tokens["refresh"]},
                 format="json",
+            ).status_code,
+            401,
+        )
+        self.assertEqual(
+            self.client.get(
+                "/api/v1/community/me/",
+                HTTP_AUTHORIZATION=f"Bearer {tokens['access']}",
             ).status_code,
             401,
         )
@@ -118,6 +132,13 @@ class AuthenticationRevocationTests(TestCase):
                 "/api/v1/auth/token/refresh/",
                 {"refresh": tokens["refresh"]},
                 format="json",
+            ).status_code,
+            401,
+        )
+        self.assertEqual(
+            self.client.get(
+                "/api/v1/community/me/",
+                HTTP_AUTHORIZATION=f"Bearer {tokens['access']}",
             ).status_code,
             401,
         )
@@ -198,6 +219,68 @@ class AuthenticationRevocationTests(TestCase):
             ).status_code,
             200,
         )
+
+    def test_mobile_logout_rejects_the_access_token_on_community_member_endpoints(self):
+        tokens = self.token_pair()
+
+        self.assertEqual(
+            self.client.get(
+                "/api/v1/community/me/",
+                HTTP_AUTHORIZATION=f"Bearer {tokens['access']}",
+            ).status_code,
+            200,
+        )
+        response = self.client.post(
+            "/api/v1/auth/token/logout/",
+            {"refresh": tokens["refresh"]},
+            format="json",
+            HTTP_AUTHORIZATION=f"Bearer {tokens['access']}",
+        )
+
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(
+            self.client.get(
+                "/api/v1/community/me/",
+                HTTP_AUTHORIZATION=f"Bearer {tokens['access']}",
+            ).status_code,
+            401,
+        )
+
+    def test_mobile_jwt_is_rejected_by_community_endpoints_after_membership_ends(self):
+        tokens = self.token_pair()
+        self.user.person.membership.status = Membership.Status.FORMER
+        self.user.person.membership.save(update_fields=["status"])
+
+        self.assertEqual(
+            self.client.get(
+                "/api/v1/community/me/",
+                HTTP_AUTHORIZATION=f"Bearer {tokens['access']}",
+            ).status_code,
+            401,
+        )
+        self.assertEqual(
+            self.client.post(
+                "/api/v1/auth/token/refresh/",
+                {"refresh": tokens["refresh"]},
+                format="json",
+            ).status_code,
+            401,
+        )
+
+    def test_valid_mobile_jwt_survives_a_stale_community_session_cookie(self):
+        self.client.force_login(self.user)
+        session = self.client.session
+        session["elevate_auth_context"] = "community"
+        session["elevate_auth_version"] = "stale"
+        session.save()
+        tokens = self.token_pair()
+
+        response = self.client.get(
+            "/api/v1/community/me/",
+            HTTP_AUTHORIZATION=f"Bearer {tokens['access']}",
+        )
+
+        self.assertEqual(response.status_code, 200)
 
     def test_revocation_records_are_server_side_and_do_not_store_raw_tokens(self):
         tokens = self.token_pair()

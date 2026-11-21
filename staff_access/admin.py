@@ -82,6 +82,16 @@ class StaffRoleAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return False
 
+    def save_model(self, request, obj, form, change):
+        if change and obj.pk:
+            was_active = StaffRole.objects.filter(pk=obj.pk).values_list("is_active", flat=True).first()
+            if was_active and not obj.is_active:
+                obj.deactivate(actor_user=request.user, request=request)
+                obj.refresh_from_db()
+                return
+
+        super().save_model(request, obj, form, change)
+
     def get_actions(self, request):
         actions = super().get_actions(request)
         actions.pop("delete_selected", None)

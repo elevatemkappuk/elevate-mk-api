@@ -23,7 +23,7 @@ from people.models import Person
 from professional_profiles.models import Industry
 from skills.models import PersonSkill
 from accounts.serializers import LoginSerializer, PasswordResetConfirmSerializer, PasswordResetRequestSerializer
-from accounts.authentication import CRM_SESSION_AUTHENTICATION_CLASSES
+from accounts.authentication import COMMUNITY_AUTHENTICATION_CLASSES, CRM_SESSION_AUTHENTICATION_CLASSES
 from accounts.revocation import revoke_user_credentials
 from accounts.views import INVALID_RESET_TOKEN_DETAIL, build_password_reset_url, record_auth_audit_or_raise
 from audit.models import AuditEvent
@@ -460,6 +460,8 @@ class CommunityActivationView(APIView):
             return Response({"code": ACCOUNT_SETUP_UNAVAILABLE_CODE, "detail": ACCOUNT_SETUP_UNAVAILABLE_DETAIL}, status=status.HTTP_409_CONFLICT)
 
         login(request, result.user)
+        request.session["elevate_auth_context"] = "community"
+        request.session["elevate_auth_version"] = result.user.auth_version
         return Response(
             CommunityCurrentUserSerializer({
                 "id": result.user.id,
@@ -470,8 +472,11 @@ class CommunityActivationView(APIView):
         )
 
 
-@method_decorator(csrf_protect, name="dispatch")
-class CommunityProfileView(APIView):
+class CommunityAuthenticatedAPIView(APIView):
+    authentication_classes = COMMUNITY_AUTHENTICATION_CLASSES
+
+
+class CommunityProfileView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
@@ -538,7 +543,7 @@ class CommunityProfileView(APIView):
         return Response(CommunityProfileSerializer(projection).data, status=status.HTTP_200_OK)
 
 
-class CommunityPostListView(APIView):
+class CommunityPostListView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
@@ -566,7 +571,7 @@ class CommunityPostListView(APIView):
         return paginator.get_paginated_response(CommunityPostSerializer(data, many=True).data)
 
 
-class CommunityPostDetailView(APIView):
+class CommunityPostDetailView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
@@ -595,7 +600,6 @@ class CommunityPostDetailView(APIView):
         responses={200: CommunityPostSerializer, 400: OpenApiResponse(description="Invalid post or locked conversation fields."), 403: OpenApiResponse(description="Community access is unavailable."), 404: OpenApiResponse(description="Post not found.")},
         tags=["Community"],
     )
-    @method_decorator(csrf_protect)
     def patch(self, request, public_id):
         if not is_community_eligible_user(request.user):
             return Response({"detail": "Community access is unavailable."}, status=status.HTTP_403_FORBIDDEN)
@@ -624,7 +628,6 @@ class CommunityPostDetailView(APIView):
         responses={204: None, 403: OpenApiResponse(description="Community access is unavailable."), 404: OpenApiResponse(description="Post not found.")},
         tags=["Community"],
     )
-    @method_decorator(csrf_protect)
     def delete(self, request, public_id):
         try:
             delete_community_post(user=request.user, public_id=public_id, request=request)
@@ -633,7 +636,6 @@ class CommunityPostDetailView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-@method_decorator(csrf_protect, name="dispatch")
 class CommunityPostCreateView(CommunityPostListView):
     permission_classes = [IsAuthenticated]
     throttle_classes = [ScopedRateThrottle]
@@ -680,7 +682,7 @@ class CommunityPostCreateView(CommunityPostListView):
         )
 
 
-class CommunityReplyListCreateView(APIView):
+class CommunityReplyListCreateView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "community_reply_create"
@@ -715,7 +717,6 @@ class CommunityReplyListCreateView(APIView):
         ]
         return paginator.get_paginated_response(CommunityReplySerializer(data, many=True).data)
 
-    @method_decorator(csrf_protect)
     @extend_schema(
         operation_id="community_post_replies_create",
         summary="Create a reply to a visible Community post",
@@ -756,7 +757,7 @@ class CommunityReplyListCreateView(APIView):
         )
 
 
-class CommunityReplyDetailView(APIView):
+class CommunityReplyDetailView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
 
     def _visible_parent(self, request, post_id):
@@ -774,7 +775,6 @@ class CommunityReplyDetailView(APIView):
         responses={200: CommunityReplySerializer, 400: OpenApiResponse(description="Invalid reply."), 403: OpenApiResponse(description="Community access is unavailable."), 404: OpenApiResponse(description="Reply not found.")},
         tags=["Community"],
     )
-    @method_decorator(csrf_protect)
     def patch(self, request, post_id, reply_id):
         parent = self._visible_parent(request, post_id)
         if isinstance(parent, Response):
@@ -804,7 +804,6 @@ class CommunityReplyDetailView(APIView):
         responses={204: None, 403: OpenApiResponse(description="Community access unavailable."), 404: OpenApiResponse(description="Reply not found.")},
         tags=["Community"],
     )
-    @method_decorator(csrf_protect)
     def delete(self, request, post_id, reply_id):
         parent = self._visible_parent(request, post_id)
         if isinstance(parent, Response):
@@ -821,7 +820,7 @@ class CommunityReplyDetailView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class CommunityPostReportView(APIView):
+class CommunityPostReportView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "community_content_report"
@@ -834,7 +833,6 @@ class CommunityPostReportView(APIView):
         tags=["Community"],
     )
 
-    @method_decorator(csrf_protect)
     def post(self, request, post_id):
         serializer = CommunityContentReportCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -847,7 +845,7 @@ class CommunityPostReportView(APIView):
         return Response(CommunityContentReportAcknowledgementSerializer({"report_id": report.public_id, "status": report.status}).data, status=status.HTTP_200_OK if replayed else status.HTTP_201_CREATED)
 
 
-class CommunityReplyReportView(APIView):
+class CommunityReplyReportView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "community_content_report"
@@ -860,7 +858,6 @@ class CommunityReplyReportView(APIView):
         tags=["Community"],
     )
 
-    @method_decorator(csrf_protect)
     def post(self, request, post_id, reply_id):
         serializer = CommunityContentReportCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -934,7 +931,7 @@ class CommunityModerationReportActionView(APIView):
         return Response(CommunityModerationReportSerializer(staff_report_projection(report)).data)
 
 
-class CommunityDirectoryListView(APIView):
+class CommunityDirectoryListView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "community_directory"
@@ -969,7 +966,7 @@ class CommunityDirectoryListView(APIView):
         return paginator.get_paginated_response(CommunityDirectoryListSerializer(data, many=True).data)
 
 
-class CommunityDirectoryDetailView(APIView):
+class CommunityDirectoryDetailView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "community_directory"
@@ -999,7 +996,7 @@ class CommunityDirectoryDetailView(APIView):
         )
 
 
-class CommunityConnectionListView(APIView):
+class CommunityConnectionListView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "community_connections"
@@ -1027,7 +1024,7 @@ class CommunityConnectionListView(APIView):
         return paginator.get_paginated_response(CommunityConnectionSerializer(serialized, many=True).data)
 
 
-class CommunityConnectionRequestListView(APIView):
+class CommunityConnectionRequestListView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "community_connection_requests"
@@ -1070,7 +1067,7 @@ class CommunityConnectionRequestListView(APIView):
         return CommunityConnectionRequestCreateView().post(request)
 
 
-class CommunityConnectionRequestCreateView(APIView):
+class CommunityConnectionRequestCreateView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "community_connection_create"
@@ -1102,7 +1099,7 @@ class CommunityConnectionRequestCreateView(APIView):
         return Response(CommunityConnectionSerializer(payload).data, status=status.HTTP_200_OK)
 
 
-class CommunityConnectionActionView(APIView):
+class CommunityConnectionActionView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "community_connection_mutations"
@@ -1143,7 +1140,7 @@ class CommunityConnectionActionView(APIView):
         }
         return Response(CommunityConnectionSerializer(payload).data, status=status.HTTP_200_OK)
 
-class CommunityProfileOptionsView(APIView):
+class CommunityProfileOptionsView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
@@ -1158,8 +1155,7 @@ class CommunityProfileOptionsView(APIView):
         return Response(CommunityProfileOptionsSerializer(community_profile_options()).data, status=status.HTTP_200_OK)
 
 
-@method_decorator(csrf_protect, name="dispatch")
-class CommunityProfilePhotoView(APIView):
+class CommunityProfilePhotoView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
@@ -1197,8 +1193,7 @@ class CommunityProfilePhotoView(APIView):
         return Response(CommunityProfileSerializer(projection).data, status=status.HTTP_200_OK)
 
 
-@method_decorator(csrf_protect, name="dispatch")
-class CommunityProfileReviewAcknowledgementView(APIView):
+class CommunityProfileReviewAcknowledgementView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
@@ -1215,7 +1210,7 @@ class CommunityProfileReviewAcknowledgementView(APIView):
         return Response({"review_required": profile.review_required}, status=status.HTTP_200_OK)
 
 
-class CommunityMeView(APIView):
+class CommunityMeView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
@@ -1231,7 +1226,7 @@ class CommunityMeView(APIView):
         return Response(CommunityCurrentUserSerializer({"id": request.user.id, "first_name": person.first_name, "last_name": person.last_name}).data)
 
 
-class CommunityAccountView(APIView):
+class CommunityAccountView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
@@ -1249,8 +1244,7 @@ class CommunityAccountView(APIView):
         )
 
 
-@method_decorator(csrf_protect, name="dispatch")
-class CommunityAccountPasswordView(APIView):
+class CommunityAccountPasswordView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "community_account_password"
@@ -1295,8 +1289,7 @@ class CommunityAccountPasswordView(APIView):
         return Response({"detail": "Your password has been changed successfully."}, status=status.HTTP_200_OK)
 
 
-@method_decorator(csrf_protect, name="dispatch")
-class CommunityAccountEmailChangeView(APIView):
+class CommunityAccountEmailChangeView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "community_account_email_change"
@@ -1360,8 +1353,7 @@ class CommunityAccountEmailChangeVerificationView(APIView):
         return Response(result, status=status.HTTP_200_OK)
 
 
-@method_decorator(csrf_protect, name="dispatch")
-class CommunityAccountMobileView(APIView):
+class CommunityAccountMobileView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "community_account_mobile"
@@ -1403,8 +1395,7 @@ class CommunityAccountMobileView(APIView):
         )
 
 
-@method_decorator(csrf_protect, name="dispatch")
-class CommunityAccountMarketingPreferenceView(APIView):
+class CommunityAccountMarketingPreferenceView(CommunityAuthenticatedAPIView):
     permission_classes = [IsAuthenticated]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "community_account_marketing"

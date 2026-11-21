@@ -78,6 +78,8 @@ class CommunityActivationApiTests(TestCase):
         self.assertIsNotNone(self.invitation.used_at)
         self.assertEqual(self.job.status, TransactionalEmailJob.Status.CANCELLED)
         self.assertTrue(AuditEvent.objects.filter(action=AuditEvent.Action.COMMUNITY_ACCOUNT_ACTIVATED).exists())
+        self.assertEqual(self.client.session["elevate_auth_context"], "community")
+        self.assertEqual(self.client.session["elevate_auth_version"], user.auth_version)
 
         me = self.client.get("/api/v1/community/me/")
         self.assertEqual(me.status_code, 200)

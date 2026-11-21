@@ -99,8 +99,11 @@ the User only after atomically revalidating the invitation, Person, Membership,
 email consistency, and account state. Successful redemption logs the new
 member into a normal HttpOnly session. `GET /api/v1/community/me/` exposes only
 the minimal Community-safe current-user representation and requires an ACTIVE
-Membership. Community Users are not assigned staff roles and do not gain CRM
-authorization. Activation attempts use the dedicated
+Membership. Community member endpoints accept either a versioned Django session
+or a mobile JWT whose account generation and device session remain valid. Django
+session requests continue to receive DRF CSRF enforcement for unsafe methods;
+JWT requests use bearer-token authentication instead. Community Users are not
+assigned staff roles and do not gain CRM authorization. Activation attempts use the dedicated
 `COMMUNITY_ACTIVATION_THROTTLE_RATE` setting, defaulting to `10/hour`.
 
 The combined `process_background_jobs --watch` worker claims pending
@@ -411,7 +414,9 @@ Why CSRF matters here:
 - browsers automatically attach cookies
 - without CSRF protection, a third-party site could potentially trigger unintended authenticated POST requests from a victim browser
 
-Current implementation does not disable CSRF globally and does not switch to token/JWT auth.
+Current implementation does not disable CSRF globally. Staff CRM resources remain
+session-authenticated; mobile JWT authentication is limited to the documented
+mobile and Community member endpoints.
 
 ## Anonymous 401 Behavior
 Current protected API behavior:
