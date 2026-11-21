@@ -5,6 +5,7 @@ from rest_framework.exceptions import APIException, NotFound
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from accounts.authentication import CRM_SESSION_AUTHENTICATION_CLASSES
 from audit.models import AuditEvent
 from audit.services import record_audit_event
 from people.models import Person
@@ -36,6 +37,7 @@ class SkillAssignmentConflict(APIException):
 
 
 class SkillListView(generics.ListAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = SkillSummarySerializer
     permission_classes = [IsAuthenticated, HasSkillAccess]
     pagination_class = None
@@ -73,6 +75,7 @@ class SkillListView(generics.ListAPIView):
 
 
 class PersonSkillListView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = SkillSummarySerializer
     pagination_class = None
 
@@ -215,6 +218,7 @@ class PersonSkillListView(generics.GenericAPIView):
 
 
 class PersonSkillDetailView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, HasSkillWriteAccess]
 
     @extend_schema(

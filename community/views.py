@@ -23,6 +23,7 @@ from people.models import Person
 from professional_profiles.models import Industry
 from skills.models import PersonSkill
 from accounts.serializers import LoginSerializer, PasswordResetConfirmSerializer, PasswordResetRequestSerializer
+from accounts.authentication import CRM_SESSION_AUTHENTICATION_CLASSES
 from accounts.views import INVALID_RESET_TOKEN_DETAIL, build_password_reset_url, record_auth_audit_or_raise
 from audit.models import AuditEvent
 
@@ -865,6 +866,7 @@ class CommunityReplyReportView(APIView):
 
 
 class CommunityModerationReportListView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, HasCommunityModerationRole]
 
     @extend_schema(
@@ -882,6 +884,7 @@ class CommunityModerationReportListView(APIView):
 
 
 class CommunityModerationReportDetailView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, HasCommunityModerationRole]
 
     @extend_schema(
@@ -899,6 +902,7 @@ class CommunityModerationReportDetailView(APIView):
 
 
 class CommunityModerationReportActionView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, HasCommunityModerationRole]
 
     @extend_schema(

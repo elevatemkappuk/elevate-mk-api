@@ -6,6 +6,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from accounts.authentication import CRM_SESSION_AUTHENTICATION_CLASSES
 from .models import Campaign, CampaignRecipientSnapshot
 from .permissions import HasCampaignAccess, HasCampaignWriteAccess
 from .serializers import CampaignCreateSerializer, CampaignRecipientSnapshotSerializer, CampaignSerializer
@@ -34,6 +35,7 @@ class CampaignPagination(PageNumberPagination):
 
 
 class CampaignListCreateView(generics.ListCreateAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     queryset = Campaign.objects.select_related("created_by", "current_preparation").all()
     pagination_class = CampaignPagination
 
@@ -75,6 +77,7 @@ class CampaignListCreateView(generics.ListCreateAPIView):
 
 
 class CampaignDetailView(generics.RetrieveAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     queryset = Campaign.objects.select_related("created_by", "current_preparation").all()
     serializer_class = CampaignSerializer
     lookup_url_kwarg = "campaign_id"
@@ -93,6 +96,7 @@ class CampaignDetailView(generics.RetrieveAPIView):
 
 
 class CampaignArchiveView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     queryset = Campaign.objects.all()
     serializer_class = CampaignSerializer
     permission_classes = [IsAuthenticated, HasCampaignWriteAccess]
@@ -107,6 +111,7 @@ class CampaignArchiveView(generics.GenericAPIView):
 
 
 class CampaignRestoreView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     queryset = Campaign.objects.all()
     serializer_class = CampaignSerializer
     permission_classes = [IsAuthenticated, HasCampaignWriteAccess]
@@ -121,6 +126,7 @@ class CampaignRestoreView(generics.GenericAPIView):
 
 
 class CampaignPrepareView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     queryset = Campaign.objects.all()
     serializer_class = CampaignSerializer
     permission_classes = [IsAuthenticated, HasCampaignWriteAccess]
@@ -138,6 +144,7 @@ class CampaignPrepareView(generics.GenericAPIView):
 
 
 class CampaignPrepareProviderView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     queryset = Campaign.objects.all()
     serializer_class = CampaignSerializer
     permission_classes = [IsAuthenticated, HasCampaignWriteAccess]
@@ -155,6 +162,7 @@ class CampaignPrepareProviderView(generics.GenericAPIView):
 
 
 class CampaignRecipientListView(generics.ListAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = CampaignRecipientSnapshotSerializer
     permission_classes = [IsAuthenticated, HasCampaignAccess]
     pagination_class = CampaignPagination

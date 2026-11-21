@@ -10,6 +10,11 @@ class SessionAuthentication(DRFSessionAuthentication):
         return "Session"
 
 
+# CRM resources intentionally accept Django sessions only. Keep the global
+# DRF authentication defaults unchanged for mobile and community endpoints.
+CRM_SESSION_AUTHENTICATION_CLASSES = (SessionAuthentication,)
+
+
 class MobileJWTAuthentication(JWTAuthentication):
     """JWT authentication for mobile/member endpoints only."""
 

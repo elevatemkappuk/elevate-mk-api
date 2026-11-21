@@ -10,6 +10,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from accounts.authentication import CRM_SESSION_AUTHENTICATION_CLASSES
 from audit.models import AuditEvent
 from audit.policies import build_person_audit_scope_q, filter_person_audit_visibility_for_user
 from audit.services import record_audit_event
@@ -147,6 +148,7 @@ class BusinessPersonQuerysetMixin:
 
 
 class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = PersonDirectoryListSerializer
     permission_classes = [IsAuthenticated, HasPeopleAccess]
     pagination_class = PeoplePagination
@@ -337,6 +339,7 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
 
 
 class PersonMemberCreateView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, HasPeopleWriteAccess]
 
     @extend_schema(
@@ -400,6 +403,7 @@ class PersonMemberCreateView(generics.GenericAPIView):
 
 
 class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = PersonListSerializer
     permission_classes = [IsAuthenticated, HasPeopleAccess]
     lookup_url_kwarg = "person_id"
@@ -541,6 +545,7 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
 
 
 class PersonArchiveView(BusinessPersonQuerysetMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, HasPeopleWriteAccess]
 
     @extend_schema(
@@ -603,6 +608,7 @@ class PersonRestoreView(PersonArchiveView):
 
 
 class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = PersonOverviewSerializer
     permission_classes = [IsAuthenticated, HasPeopleAccess]
     lookup_url_kwarg = "person_id"
@@ -745,6 +751,7 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
 
 
 class PersonBrevoIntegrationView(BusinessPersonQuerysetMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, HasPeopleAccess]
     serializer_class = PersonBrevoIntegrationSerializer
 
@@ -782,6 +789,7 @@ class PersonAuditHistoryPagination(PageNumberPagination):
 
 
 class PersonAuditHistoryView(BusinessPersonQuerysetMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = PersonAuditHistoryEventSerializer
     permission_classes = [IsAuthenticated, HasPeopleAccess]
     pagination_class = PersonAuditHistoryPagination
