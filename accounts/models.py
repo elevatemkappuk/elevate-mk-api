@@ -1,7 +1,7 @@
 import uuid
 
 from django.contrib.auth.models import AbstractUser, UserManager as DjangoUserManager
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 
 from people.models import Person
@@ -87,16 +87,17 @@ class User(AbstractUser):
         if self.pk:
             previous_is_active = type(self).objects.filter(pk=self.pk).values_list("is_active", flat=True).first()
         self.email = normalize_email_address(self.email)
-        super().save(*args, **kwargs)
-        if previous_is_active is not None and previous_is_active != self.is_active:
-            from accounts.revocation import handle_user_active_state_change
+        with transaction.atomic(using=kwargs.get("using")):
+            super().save(*args, **kwargs)
+            if previous_is_active is not None and previous_is_active != self.is_active:
+                from accounts.revocation import handle_user_active_state_change
 
-            handle_user_active_state_change(
-                user=self,
-                was_active=previous_is_active,
-                actor_user=getattr(self, "_audit_actor_user", None),
-                request=getattr(self, "_audit_request", None),
-            )
+                handle_user_active_state_change(
+                    user=self,
+                    was_active=previous_is_active,
+                    actor_user=getattr(self, "_audit_actor_user", None),
+                    request=getattr(self, "_audit_request", None),
+                )
 
     def get_full_name(self):
         return f"{self.person.first_name} {self.person.last_name}".strip()
