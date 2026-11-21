@@ -93,11 +93,13 @@ class CrmSessionAuthentication(SessionAuthentication):
             return None
 
         user, _session_auth = result
-        if request.session.get("elevate_auth_context") == "crm":
-            enforce_crm_session_lifetime(request, user)
-            session_version = request.session.get("elevate_crm_session_version")
-            if str(session_version) != str(user.crm_session_version):
-                raise AuthenticationFailed("Authentication credentials were not provided.")
+        if request.session.get("elevate_auth_context") != "crm":
+            raise AuthenticationFailed("Authentication credentials were not provided.")
+
+        enforce_crm_session_lifetime(request, user)
+        session_version = request.session.get("elevate_crm_session_version")
+        if str(session_version) != str(user.crm_session_version):
+            raise AuthenticationFailed("Authentication credentials were not provided.")
 
         return result
 

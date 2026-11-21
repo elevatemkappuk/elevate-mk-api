@@ -123,3 +123,17 @@ class AuthenticationAuditTests(TestCase):
         self.assertEqual(event.metadata["mobile_sessions_revoked"], 1)
         self.assertNotIn(token_response.data["access"], str({"metadata": event.metadata, "changes": event.changes}))
         self.assertNotIn(token_response.data["refresh"], str({"metadata": event.metadata, "changes": event.changes}))
+
+    def test_domain_staff_role_revocation_is_audited_without_token_data(self):
+        assignment = StaffRoleAssignment.objects.get(user=self.user)
+
+        assignment.revoke(revoked_by=self.user)
+
+        event = AuditEvent.objects.get(
+            action=AuditEvent.Action.STAFF_ROLE_REVOKED,
+            entity_type="StaffRoleAssignment",
+            entity_id=str(assignment.id),
+        )
+        self.assertEqual(event.actor_user, self.user)
+        self.assertTrue(event.metadata["target_user_id"])
+        self.assertNotIn("token", str({"metadata": event.metadata, "changes": event.changes}).lower())

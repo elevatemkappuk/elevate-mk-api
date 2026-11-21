@@ -203,9 +203,9 @@ class CommunityActivationApiTests(TestCase):
             format="json",
         )
 
-        self.assertEqual(self.client.get("/api/v1/people/").status_code, 403)
-        self.assertEqual(self.client.get(f"/api/v1/people/{self.person.id}/membership/").status_code, 403)
-        self.assertEqual(self.client.get(f"/api/v1/people/{self.person.id}/marketing-preference/").status_code, 403)
+        self.assertEqual(self.client.get("/api/v1/people/").status_code, 401)
+        self.assertEqual(self.client.get(f"/api/v1/people/{self.person.id}/membership/").status_code, 401)
+        self.assertEqual(self.client.get(f"/api/v1/people/{self.person.id}/marketing-preference/").status_code, 401)
 
     def test_activation_requires_csrf(self):
         csrf_client = APIClient(enforce_csrf_checks=True)

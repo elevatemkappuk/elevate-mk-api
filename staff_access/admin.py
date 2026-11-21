@@ -182,6 +182,8 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
                 assignments = revoke_staff_role_assignments(
                     assignments=queryset,
                     revoked_by=request.user,
+                    request=request,
+                    audit=False,
                 )
                 for assignment in assignments:
                     record_staff_role_audit_event(

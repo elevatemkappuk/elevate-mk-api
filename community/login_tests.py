@@ -138,7 +138,7 @@ class CommunityLoginApiTests(TestCase):
 
         response = self.client.get("/api/v1/people/")
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 401)
 
     def test_login_requires_csrf(self):
         response = self.login(client=self.csrf_client)

@@ -50,7 +50,7 @@ def deactivate_staff_role(role, *, actor_user=None, request=None):
     return locked_role
 
 
-def revoke_staff_role_assignments(*, assignments, revoked_by=None, revoked_at=None):
+def revoke_staff_role_assignments(*, assignments, revoked_by=None, revoked_at=None, request=None, audit=True):
     """Revoke active assignments without permitting loss of the final CRM admin.
 
     Locking the canonical CRM_ADMIN role first serializes all supported revoke
@@ -92,5 +92,27 @@ def revoke_staff_role_assignments(*, assignments, revoked_by=None, revoked_at=No
         User.objects.filter(pk__in={assignment.user_id for assignment in active_assignments}).update(
             crm_session_version=F("crm_session_version") + 1,
         )
+
+        if audit:
+            request_id = None
+            ip_address = None
+            if request is not None:
+                request_id = request.headers.get("X-Request-ID") or request.META.get("HTTP_X_REQUEST_ID")
+                ip_address = request.META.get("REMOTE_ADDR")
+            for assignment in active_assignments:
+                record_audit_event(
+                    action=AuditEvent.Action.STAFF_ROLE_REVOKED,
+                    actor_user=revoked_by,
+                    entity_type="StaffRoleAssignment",
+                    entity_id=assignment.id,
+                    changes={"is_active": {"from": True, "to": False}},
+                    metadata={
+                        "target_user_id": str(assignment.user_id),
+                        "staff_role_id": str(assignment.role_id),
+                        "staff_role_code": assignment.role.code,
+                    },
+                    request_id=request_id,
+                    ip_address=ip_address,
+                )
 
     return active_assignments

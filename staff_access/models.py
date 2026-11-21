@@ -111,13 +111,14 @@ class StaffRoleAssignment(models.Model):
     def __str__(self):
         return f"{self.user.email} -> {self.role.code}"
 
-    def revoke(self, *, revoked_by=None, revoked_at=None):
+    def revoke(self, *, revoked_by=None, revoked_at=None, request=None):
         from staff_access.services import revoke_staff_role_assignments
 
         revoked_assignments = revoke_staff_role_assignments(
             assignments=[self],
             revoked_by=revoked_by,
             revoked_at=revoked_at,
+            request=request,
         )
         if revoked_assignments:
             self.refresh_from_db()
