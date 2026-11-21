@@ -17,7 +17,6 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
-from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from accounts.serializers import (
@@ -36,6 +35,7 @@ from accounts.serializers import (
 from audit.models import AuditEvent
 from audit.services import record_audit_event
 from accounts.authentication import MobileJWTAuthentication, SessionAuthentication
+from accounts.revocation import issue_mobile_token_pair, revoke_mobile_session, revoke_user_credentials
 from notifications.exceptions import TransactionalEmailError
 from notifications.services import send_transactional_email
 
@@ -141,6 +141,9 @@ class LoginView(APIView):
 
         user = serializer.validated_data["user"]
         login(request, user)
+        request.session["elevate_auth_context"] = "crm"
+        request.session["elevate_auth_version"] = user.auth_version
+        request.session["elevate_crm_session_version"] = user.crm_session_version
 
         try:
             record_auth_audit_or_raise(
@@ -197,14 +200,15 @@ class TokenLoginView(APIView):
             serializer.is_valid(raise_exception=True)
 
         user = serializer.validated_data["user"]
-        refresh = RefreshToken.for_user(user)
-        record_auth_audit_or_raise(
-            action=AuditEvent.Action.LOGIN_SUCCEEDED,
-            actor_user=user,
-            entity_type="User",
-            entity_id=user.id,
-            metadata={"authentication": "jwt"},
-        )
+        with transaction.atomic():
+            refresh = issue_mobile_token_pair(user=user)
+            record_auth_audit_or_raise(
+                action=AuditEvent.Action.LOGIN_SUCCEEDED,
+                actor_user=user,
+                entity_type="User",
+                entity_id=user.id,
+                metadata={"authentication": "jwt"},
+            )
         return Response(
             {"access": str(refresh.access_token), "refresh": str(refresh)},
             status=status.HTTP_200_OK,
@@ -240,8 +244,8 @@ class TokenLogoutView(APIView):
         summary="Revoke a mobile refresh token",
         description=(
             "Requires a valid JWT access token and the matching refresh token in the request body. "
-            "The refresh token is blacklisted and can no longer be used to refresh. Already-issued "
-            "access tokens remain valid until they expire; this endpoint does not revoke them."
+            "The refresh token is blacklisted and the current device session is revoked. "
+            "The supplied access token is rejected immediately after logout. Other mobile sessions remain valid."
         ),
         request=RefreshTokenLogoutSerializer,
         responses={
@@ -283,13 +287,21 @@ class TokenLogoutView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         with transaction.atomic():
+            revoke_mobile_session(
+                session_id=serializer.validated_data["mobile_session_id"],
+                reason="mobile_logout",
+            )
             serializer.validated_data["token"].blacklist()
             record_auth_audit_or_raise(
                 action=AuditEvent.Action.LOGOUT,
                 actor_user=request.user,
                 entity_type="User",
                 entity_id=request.user.id,
-                metadata={"authentication": "jwt", "refresh_token_revoked": True},
+                metadata={
+                    "authentication": "jwt",
+                    "mobile_session_revoked": True,
+                    "refresh_token_revoked": True,
+                },
             )
 
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -413,6 +425,7 @@ class PasswordResetConfirmView(APIView):
         with transaction.atomic():
             user.set_password(serializer.validated_data["new_password"])
             user.save(update_fields=["password"])
+            revoke_user_credentials(user=user, reason="password_reset")
             record_auth_audit_or_raise(
                 action=AuditEvent.Action.PASSWORD_RESET,
                 actor_user=None,

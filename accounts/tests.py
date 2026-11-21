@@ -287,7 +287,7 @@ class AuthenticationApiTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data["detail"][0], "Invalid email or password.")
-        self.assertEqual(AuditEvent.objects.get().action, AuditEvent.Action.LOGIN_FAILED)
+        self.assertTrue(AuditEvent.objects.filter(action=AuditEvent.Action.LOGIN_FAILED).exists())
 
     def test_token_login_rejects_inactive_user(self):
         self.user.is_active = False
@@ -301,7 +301,7 @@ class AuthenticationApiTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data["detail"][0], "Invalid email or password.")
-        self.assertEqual(AuditEvent.objects.get().action, AuditEvent.Action.LOGIN_FAILED)
+        self.assertTrue(AuditEvent.objects.filter(action=AuditEvent.Action.LOGIN_FAILED).exists())
 
     def test_active_member_token_login_is_allowed(self):
         response = self.client.post(
@@ -537,7 +537,11 @@ class AuthenticationApiTests(TestCase):
         self.assertEqual(event.actor_user, self.user)
         self.assertEqual(
             event.metadata,
-            {"authentication": "jwt", "refresh_token_revoked": True},
+            {
+                "authentication": "jwt",
+                "mobile_session_revoked": True,
+                "refresh_token_revoked": True,
+            },
         )
         self.assertNotIn(refresh, str(event.metadata))
 

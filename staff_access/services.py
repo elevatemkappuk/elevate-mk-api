@@ -1,5 +1,7 @@
 from django.db import transaction
+from django.db.models import F
 
+from accounts.models import User
 from staff_access.exceptions import FinalCrmAdminProtectionError
 from staff_access.models import StaffRole, StaffRoleAssignment
 
@@ -14,8 +16,16 @@ def deactivate_staff_role(role):
     with transaction.atomic():
         locked_role = StaffRole.objects.select_for_update().get(pk=role.pk)
         ensure_staff_role_can_be_deactivated(locked_role)
+        affected_user_ids = list(
+            StaffRoleAssignment.objects.active()
+            .filter(role=locked_role)
+            .values_list("user_id", flat=True)
+        )
         locked_role.is_active = False
         locked_role.save(update_fields=["is_active", "updated_at"])
+        User.objects.filter(pk__in=affected_user_ids).update(
+            crm_session_version=F("crm_session_version") + 1,
+        )
     return locked_role
 
 
@@ -57,5 +67,9 @@ def revoke_staff_role_assignments(*, assignments, revoked_by=None, revoked_at=No
 
         for assignment in active_assignments:
             assignment._revoke_unchecked(revoked_by=revoked_by, revoked_at=revoked_at)
+
+        User.objects.filter(pk__in={assignment.user_id for assignment in active_assignments}).update(
+            crm_session_version=F("crm_session_version") + 1,
+        )
 
     return active_assignments

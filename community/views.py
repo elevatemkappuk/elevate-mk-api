@@ -24,6 +24,7 @@ from professional_profiles.models import Industry
 from skills.models import PersonSkill
 from accounts.serializers import LoginSerializer, PasswordResetConfirmSerializer, PasswordResetRequestSerializer
 from accounts.authentication import CRM_SESSION_AUTHENTICATION_CLASSES
+from accounts.revocation import revoke_user_credentials
 from accounts.views import INVALID_RESET_TOKEN_DETAIL, build_password_reset_url, record_auth_audit_or_raise
 from audit.models import AuditEvent
 
@@ -261,6 +262,7 @@ class CommunityPasswordResetConfirmView(APIView):
 
             user.set_password(serializer.validated_data["new_password"])
             user.save(update_fields=["password"])
+            revoke_user_credentials(user=user, reason="password_reset")
             record_auth_audit_or_raise(
                 action=AuditEvent.Action.PASSWORD_RESET,
                 actor_user=None,
@@ -380,6 +382,8 @@ class CommunityLoginView(APIView):
             )
 
         login(request, user)
+        request.session["elevate_auth_context"] = "community"
+        request.session["elevate_auth_version"] = user.auth_version
         record_auth_audit_or_raise(
             action=AuditEvent.Action.LOGIN_SUCCEEDED,
             actor_user=user,

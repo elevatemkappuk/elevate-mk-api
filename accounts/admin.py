@@ -26,6 +26,14 @@ class UserAdmin(DjangoUserAdmin):
     )
     readonly_fields = ("last_login", "date_joined")
 
+    def save_model(self, request, obj, form, change):
+        obj._audit_actor_user = request.user
+        try:
+            super().save_model(request, obj, form, change)
+        finally:
+            if hasattr(obj, "_audit_actor_user"):
+                del obj._audit_actor_user
+
     @admin.display(ordering="person__last_name", description="Person")
     def person_name(self, obj):
         return obj.get_full_name()

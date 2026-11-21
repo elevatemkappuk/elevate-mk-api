@@ -69,7 +69,12 @@ class CrmAuthenticationIsolationTests(TestCase):
 
     def session_client(self, user, *, enforce_csrf_checks=False):
         client = APIClient(enforce_csrf_checks=enforce_csrf_checks)
-        self.assertTrue(client.login(email=user.email, password=self.password))
+        response = client.post(
+            "/api/v1/auth/login/",
+            {"email": user.email, "password": self.password},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
         return client
 
     def test_staff_session_can_access_crm_endpoint(self):
@@ -113,7 +118,9 @@ class CrmAuthenticationIsolationTests(TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_session_authenticated_crm_mutation_still_requires_csrf(self):
-        client = self.session_client(self.staff_user, enforce_csrf_checks=True)
+        authenticated_client = self.session_client(self.staff_user)
+        client = APIClient(enforce_csrf_checks=True)
+        client.cookies.update(authenticated_client.cookies)
 
         response = client.post(self.archive_url, {}, format="json")
 
