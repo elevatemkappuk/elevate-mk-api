@@ -16,6 +16,9 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenRefreshView
 
 from accounts.serializers import (
     AuthErrorSerializer,
@@ -24,11 +27,15 @@ from accounts.serializers import (
     DetailSerializer,
     InvalidCredentialsError,
     LoginSerializer,
+    MobileTokenRefreshSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
+    InvalidRefreshTokenError,
+    RefreshTokenLogoutSerializer,
 )
 from audit.models import AuditEvent
 from audit.services import record_audit_event
+from accounts.authentication import MobileJWTAuthentication, SessionAuthentication
 from notifications.exceptions import TransactionalEmailError
 from notifications.services import send_transactional_email
 
@@ -149,6 +156,145 @@ class LoginView(APIView):
         return Response(CurrentUserSerializer(user).data, status=status.HTTP_200_OK)
 
 
+class TokenLoginView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    @extend_schema(
+        operation_id="auth_token_login",
+        summary="Issue mobile access and refresh tokens",
+        description=(
+            "Authenticates a user with the normalized email/password rules used by the "
+            "session login endpoint and returns a short-lived access token plus a "
+            "rotating refresh token. This endpoint does not create a Django session."
+        ),
+        request=LoginSerializer,
+        responses={
+            200: OpenApiResponse(description="Access and refresh tokens."),
+            400: OpenApiResponse(response=AuthErrorSerializer, description="Invalid credentials."),
+        },
+        tags=["Authentication"],
+        auth=[],
+    )
+    def post(self, request):
+        serializer = LoginSerializer(
+            data=request.data,
+            context={"request": request, "require_active_mobile_membership": True},
+        )
+        if not serializer.is_valid():
+            detail_error = serializer.errors.get("detail")
+            if (
+                isinstance(detail_error, list)
+                and len(detail_error) == 1
+                and getattr(detail_error[0], "code", None) == InvalidCredentialsError.default_code
+            ):
+                record_auth_audit_or_raise(
+                    action=AuditEvent.Action.LOGIN_FAILED,
+                    actor_user=None,
+                    entity_type="Authentication",
+                    entity_id=None,
+                )
+            serializer.is_valid(raise_exception=True)
+
+        user = serializer.validated_data["user"]
+        refresh = RefreshToken.for_user(user)
+        record_auth_audit_or_raise(
+            action=AuditEvent.Action.LOGIN_SUCCEEDED,
+            actor_user=user,
+            entity_type="User",
+            entity_id=user.id,
+            metadata={"authentication": "jwt"},
+        )
+        return Response(
+            {"access": str(refresh.access_token), "refresh": str(refresh)},
+            status=status.HTTP_200_OK,
+        )
+
+
+class TokenRefreshEndpointView(TokenRefreshView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    serializer_class = MobileTokenRefreshSerializer
+
+    @extend_schema(
+        operation_id="auth_token_refresh",
+        summary="Rotate a mobile refresh token",
+        description="Returns a new short-lived access token and rotates the supplied refresh token.",
+        responses={
+            200: OpenApiResponse(description="Rotated access and refresh tokens."),
+            401: OpenApiResponse(description="Invalid, expired, or already rotated refresh token."),
+        },
+        tags=["Authentication"],
+        auth=[],
+    )
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
+
+
+class TokenLogoutView(APIView):
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [JWTAuthentication]
+
+    @extend_schema(
+        operation_id="auth_token_logout",
+        summary="Revoke a mobile refresh token",
+        description=(
+            "Requires a valid JWT access token and the matching refresh token in the request body. "
+            "The refresh token is blacklisted and can no longer be used to refresh. Already-issued "
+            "access tokens remain valid until they expire; this endpoint does not revoke them."
+        ),
+        request=RefreshTokenLogoutSerializer,
+        responses={
+            204: OpenApiResponse(description="Refresh token revoked. No response body."),
+            400: OpenApiResponse(description="The refresh token field is missing or malformed."),
+            401: OpenApiResponse(description="JWT access or refresh authentication failed."),
+            403: OpenApiResponse(description="The refresh token belongs to another user."),
+        },
+        tags=["Authentication"],
+    )
+    def post(self, request):
+        serializer = RefreshTokenLogoutSerializer(
+            data=request.data,
+            context={"request": request},
+        )
+        if not serializer.is_valid():
+            detail_error = serializer.errors.get("detail")
+            if (
+                isinstance(detail_error, list)
+                and len(detail_error) == 1
+                and getattr(detail_error[0], "code", None) == InvalidRefreshTokenError.default_code
+            ):
+                return Response(
+                    {
+                        "code": InvalidRefreshTokenError.default_code,
+                        "detail": "The refresh token is invalid, expired, or already revoked.",
+                    },
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            if (
+                isinstance(detail_error, list)
+                and len(detail_error) == 1
+                and getattr(detail_error[0], "code", None) == "refresh_token_user_mismatch"
+            ):
+                return Response(
+                    {"code": "refresh_token_user_mismatch", "detail": str(detail_error[0])},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            serializer.validated_data["token"].blacklist()
+            record_auth_audit_or_raise(
+                action=AuditEvent.Action.LOGOUT,
+                actor_user=request.user,
+                entity_type="User",
+                entity_id=request.user.id,
+                metadata={"authentication": "jwt", "refresh_token_revoked": True},
+            )
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 @method_decorator(csrf_protect, name="dispatch")
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
@@ -186,6 +332,7 @@ class LogoutView(APIView):
 
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
+    authentication_classes = [SessionAuthentication, MobileJWTAuthentication]
 
     @extend_schema(
         operation_id="auth_me",

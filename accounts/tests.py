@@ -1,4 +1,5 @@
 import os
+from datetime import date
 from io import StringIO
 from unittest import mock
 
@@ -9,10 +10,13 @@ from django.conf import settings
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
+from django.utils import timezone
 from rest_framework.test import APIClient
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.models import User
 from audit.models import AuditEvent
+from memberships.models import Membership
 from people.models import Person
 from notifications.exceptions import TransactionalEmailError
 from staff_access.models import StaffRole, StaffRoleAssignment
@@ -130,8 +134,17 @@ class AuthenticationApiTests(TestCase):
             person_first_name="Member",
             person_last_name="Example",
         )
+        self.membership = Membership.objects.create(
+            person=self.user.person,
+            status=Membership.Status.ACTIVE,
+            joined_at=date(2024, 1, 1),
+            membership_source=Membership.Source.STAFF,
+        )
         self.csrf_url = "/api/v1/auth/csrf/"
         self.login_url = "/api/v1/auth/login/"
+        self.token_url = "/api/v1/auth/token/"
+        self.token_refresh_url = "/api/v1/auth/token/refresh/"
+        self.token_logout_url = "/api/v1/auth/token/logout/"
         self.logout_url = "/api/v1/auth/logout/"
         self.me_url = "/api/v1/auth/me/"
         self.admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
@@ -250,6 +263,380 @@ class AuthenticationApiTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data["detail"][0], "Invalid email or password.")
 
+    def test_token_login_issues_access_and_refresh_tokens_without_creating_session(self):
+        response = self.client.post(
+            self.token_url,
+            {"email": "MEMBER@EXAMPLE.COM", "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["access"])
+        self.assertTrue(response.data["refresh"])
+        self.assertNotIn("_auth_user_id", self.client.session)
+        event = AuditEvent.objects.get(action=AuditEvent.Action.LOGIN_SUCCEEDED)
+        self.assertEqual(event.actor_user, self.user)
+        self.assertEqual(event.metadata, {"authentication": "jwt"})
+
+    def test_token_login_rejects_invalid_credentials_and_records_failed_audit(self):
+        response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": "wrongpass"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["detail"][0], "Invalid email or password.")
+        self.assertEqual(AuditEvent.objects.get().action, AuditEvent.Action.LOGIN_FAILED)
+
+    def test_token_login_rejects_inactive_user(self):
+        self.user.is_active = False
+        self.user.save(update_fields=["is_active"])
+
+        response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["detail"][0], "Invalid email or password.")
+        self.assertEqual(AuditEvent.objects.get().action, AuditEvent.Action.LOGIN_FAILED)
+
+    def test_active_member_token_login_is_allowed(self):
+        response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["access"])
+        self.assertTrue(response.data["refresh"])
+
+    def test_contact_cannot_log_in_with_mobile_jwt(self):
+        contact = User.objects.create_user(
+            email="contact@example.com",
+            password=self.password,
+            person_first_name="Contact",
+            person_last_name="User",
+        )
+
+        response = self.client.post(
+            self.token_url,
+            {"email": contact.email, "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["detail"][0], "Invalid email or password.")
+
+    def test_former_member_cannot_log_in_with_mobile_jwt(self):
+        self.membership.status = Membership.Status.FORMER
+        self.membership.ended_at = date(2025, 1, 1)
+        self.membership.save(update_fields=["status", "ended_at"])
+
+        response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["detail"][0], "Invalid email or password.")
+
+    def test_archived_person_cannot_log_in_with_mobile_jwt(self):
+        self.user.person.archived_at = timezone.now()
+        self.user.person.save(update_fields=["archived_at"])
+
+        response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["detail"][0], "Invalid email or password.")
+
+    def test_access_token_is_rejected_after_membership_revocation(self):
+        login_response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+        self.membership.status = Membership.Status.FORMER
+        self.membership.ended_at = date(2025, 1, 1)
+        self.membership.save(update_fields=["status", "ended_at"])
+
+        response = self.client.get(
+            self.me_url,
+            HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}",
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_refresh_is_rejected_after_membership_revocation(self):
+        login_response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+        self.membership.status = Membership.Status.FORMER
+        self.membership.ended_at = date(2025, 1, 1)
+        self.membership.save(update_fields=["status", "ended_at"])
+
+        response = self.client.post(
+            self.token_refresh_url,
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_refresh_is_rejected_after_person_archival(self):
+        login_response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+        self.user.person.archived_at = timezone.now()
+        self.user.person.save(update_fields=["archived_at"])
+
+        response = self.client.post(
+            self.token_refresh_url,
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_refresh_is_rejected_after_user_is_disabled(self):
+        login_response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+        self.user.is_active = False
+        self.user.save(update_fields=["is_active"])
+
+        response = self.client.post(
+            self.token_refresh_url,
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_jwt_logout_can_revoke_refresh_after_membership_revocation(self):
+        login_response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+        self.membership.status = Membership.Status.FORMER
+        self.membership.ended_at = date(2025, 1, 1)
+        self.membership.save(update_fields=["status", "ended_at"])
+
+        logout_response = self.client.post(
+            self.token_logout_url,
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+            HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}",
+        )
+
+        self.assertEqual(logout_response.status_code, 204)
+        refresh_response = self.client.post(
+            self.token_refresh_url,
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+        self.assertEqual(refresh_response.status_code, 401)
+
+    def test_rotated_refresh_token_is_blacklisted(self):
+        login_response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+        original_refresh = login_response.data["refresh"]
+
+        refresh_response = self.client.post(
+            self.token_refresh_url,
+            {"refresh": original_refresh},
+            format="json",
+        )
+
+        self.assertEqual(refresh_response.status_code, 200)
+        self.assertTrue(refresh_response.data["access"])
+        self.assertTrue(refresh_response.data["refresh"])
+        self.assertNotEqual(refresh_response.data["refresh"], original_refresh)
+
+        reused_response = self.client.post(
+            self.token_refresh_url,
+            {"refresh": original_refresh},
+            format="json",
+        )
+
+        self.assertEqual(reused_response.status_code, 401)
+
+    def test_valid_jwt_access_token_authenticates_me(self):
+        login_response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+
+        response = self.client.get(
+            self.me_url,
+            HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["id"], self.user.id)
+        self.assertEqual(response.data["email"], "member@example.com")
+
+    def test_refresh_token_is_rejected_as_bearer_access_credential(self):
+        login_response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+
+        response = self.client.get(
+            self.me_url,
+            HTTP_AUTHORIZATION=f"Bearer {login_response.data['refresh']}",
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_jwt_logout_blacklists_refresh_token_and_records_safe_audit_event(self):
+        login_response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+        access = login_response.data["access"]
+        refresh = login_response.data["refresh"]
+
+        response = self.client.post(
+            self.token_logout_url,
+            {"refresh": refresh},
+            format="json",
+            HTTP_AUTHORIZATION=f"Bearer {access}",
+        )
+
+        self.assertEqual(response.status_code, 204)
+        refresh_response = self.client.post(
+            self.token_refresh_url,
+            {"refresh": refresh},
+            format="json",
+        )
+        self.assertEqual(refresh_response.status_code, 401)
+
+        event = AuditEvent.objects.get(action=AuditEvent.Action.LOGOUT)
+        self.assertEqual(event.actor_user, self.user)
+        self.assertEqual(
+            event.metadata,
+            {"authentication": "jwt", "refresh_token_revoked": True},
+        )
+        self.assertNotIn(refresh, str(event.metadata))
+
+    def test_jwt_logout_rejects_invalid_expired_and_already_blacklisted_refresh_tokens(self):
+        login_response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+        access = login_response.data["access"]
+        refresh = login_response.data["refresh"]
+        headers = {"HTTP_AUTHORIZATION": f"Bearer {access}"}
+
+        invalid_response = self.client.post(
+            self.token_logout_url,
+            {"refresh": "not-a-refresh-token"},
+            format="json",
+            **headers,
+        )
+        self.assertEqual(invalid_response.status_code, 401)
+        self.assertEqual(invalid_response.data["code"], "invalid_refresh_token")
+
+        expired = RefreshToken.for_user(self.user)
+        expired["exp"] = int(timezone.now().timestamp()) - 1
+        expired_response = self.client.post(
+            self.token_logout_url,
+            {"refresh": str(expired)},
+            format="json",
+            **headers,
+        )
+        self.assertEqual(expired_response.status_code, 401)
+        self.assertEqual(expired_response.data["code"], "invalid_refresh_token")
+
+        first_logout = self.client.post(
+            self.token_logout_url,
+            {"refresh": refresh},
+            format="json",
+            **headers,
+        )
+        self.assertEqual(first_logout.status_code, 204)
+        repeated_logout = self.client.post(
+            self.token_logout_url,
+            {"refresh": refresh},
+            format="json",
+            **headers,
+        )
+        self.assertEqual(repeated_logout.status_code, 401)
+        self.assertEqual(repeated_logout.data["code"], "invalid_refresh_token")
+
+    def test_jwt_logout_requires_jwt_access_authentication(self):
+        login_response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+
+        anonymous_response = self.client.post(
+            self.token_logout_url,
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+        self.assertEqual(anonymous_response.status_code, 401)
+
+        self.client.post(
+            self.login_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+        session_response = self.client.post(
+            self.token_logout_url,
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+        self.assertEqual(session_response.status_code, 401)
+
+    def test_jwt_logout_rejects_a_refresh_token_owned_by_another_user(self):
+        other_user = User.objects.create_user(
+            email="other@example.com",
+            password=self.password,
+            person_first_name="Other",
+            person_last_name="User",
+        )
+        other_refresh = RefreshToken.for_user(other_user)
+        login_response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+
+        response = self.client.post(
+            self.token_logout_url,
+            {"refresh": str(other_refresh)},
+            format="json",
+            HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "refresh_token_user_mismatch")
+
     def test_user_linked_to_technical_person_can_still_authenticate(self):
         technical_user = User.objects.create_user(
             email="technical@example.com",
@@ -270,6 +657,10 @@ class AuthenticationApiTests(TestCase):
         self.assertEqual(response.data["person"]["id"], technical_user.person_id)
         self.assertEqual(response.data["staff_roles"], [])
 
+        me_response = self.client.get(self.me_url)
+        self.assertEqual(me_response.status_code, 200)
+        self.assertIsNone(me_response.data["membership"])
+
     def test_authenticated_me_returns_user_and_person(self):
         self.client.post(
             self.login_url,
@@ -283,6 +674,7 @@ class AuthenticationApiTests(TestCase):
         self.assertEqual(response.data["id"], self.user.id)
         self.assertEqual(response.data["person"]["first_name"], "Member")
         self.assertEqual(response.data["staff_roles"], [])
+        self.assertEqual(response.data["membership"]["status"], Membership.Status.ACTIVE)
         self.assertNotIn("password", response.data)
 
     def test_staff_user_receives_active_role_codes_in_me(self):
