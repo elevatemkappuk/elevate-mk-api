@@ -1,9 +1,38 @@
+from django.utils import timezone
 from rest_framework.authentication import SessionAuthentication as DRFSessionAuthentication
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from accounts.revocation import validate_mobile_token_claims
 from accounts.services import user_is_active_mobile_member
+
+CRM_SESSION_CREATED_AT = "elevate_crm_session_created_at"
+CRM_SESSION_LAST_ACTIVITY = "elevate_crm_session_last_activity"
+CRM_SESSION_IDLE_TIMEOUT_SECONDS = 30 * 60
+CRM_SESSION_ABSOLUTE_TIMEOUT_SECONDS = 12 * 60 * 60
+
+
+def _session_timestamp_is_valid(value):
+    return isinstance(value, (int, float)) and value > 0
+
+
+def enforce_crm_session_lifetime(request):
+    """Enforce CRM-only idle and absolute session limits server-side."""
+    now = timezone.now().timestamp()
+    created_at = request.session.get(CRM_SESSION_CREATED_AT)
+    last_activity = request.session.get(CRM_SESSION_LAST_ACTIVITY)
+
+    if (
+        not _session_timestamp_is_valid(created_at)
+        or not _session_timestamp_is_valid(last_activity)
+        or now - created_at > CRM_SESSION_ABSOLUTE_TIMEOUT_SECONDS
+        or now - last_activity > CRM_SESSION_IDLE_TIMEOUT_SECONDS
+    ):
+        request.session.flush()
+        raise AuthenticationFailed("Authentication credentials were not provided.")
+
+    request.session[CRM_SESSION_LAST_ACTIVITY] = now
+    request.session.modified = True
 
 
 class SessionAuthentication(DRFSessionAuthentication):
@@ -36,6 +65,7 @@ class CrmSessionAuthentication(SessionAuthentication):
 
         user, _session_auth = result
         if request.session.get("elevate_auth_context") == "crm":
+            enforce_crm_session_lifetime(request)
             session_version = request.session.get("elevate_crm_session_version")
             if str(session_version) != str(user.crm_session_version):
                 raise AuthenticationFailed("Authentication credentials were not provided.")

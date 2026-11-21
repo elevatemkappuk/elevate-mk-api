@@ -10,6 +10,7 @@ from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.csrf import csrf_protect
 from django.middleware.csrf import get_token
+from django.utils import timezone
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -34,7 +35,8 @@ from accounts.serializers import (
 )
 from audit.models import AuditEvent
 from audit.services import record_audit_event
-from accounts.authentication import MobileJWTAuthentication, SessionAuthentication
+from accounts.authentication import CrmSessionAuthentication, MobileJWTAuthentication, SessionAuthentication
+from accounts.authentication import CRM_SESSION_CREATED_AT, CRM_SESSION_LAST_ACTIVITY
 from accounts.revocation import issue_mobile_token_pair, revoke_mobile_session, revoke_user_credentials
 from notifications.exceptions import TransactionalEmailError
 from notifications.services import send_transactional_email
@@ -144,6 +146,9 @@ class LoginView(APIView):
         request.session["elevate_auth_context"] = "crm"
         request.session["elevate_auth_version"] = user.auth_version
         request.session["elevate_crm_session_version"] = user.crm_session_version
+        now = timezone.now().timestamp()
+        request.session[CRM_SESSION_CREATED_AT] = now
+        request.session[CRM_SESSION_LAST_ACTIVITY] = now
 
         try:
             record_auth_audit_or_raise(
@@ -344,7 +349,7 @@ class LogoutView(APIView):
 
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
-    authentication_classes = [SessionAuthentication, MobileJWTAuthentication]
+    authentication_classes = [CrmSessionAuthentication, MobileJWTAuthentication]
 
     @extend_schema(
         operation_id="auth_me",
