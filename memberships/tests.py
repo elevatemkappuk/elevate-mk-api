@@ -15,6 +15,11 @@ from people.models import Person
 from staff_access.models import StaffRole, StaffRoleAssignment
 
 
+def ensure_canonical_staff_roles():
+    for code, name in StaffRole.CANONICAL_ROLES:
+        StaffRole.objects.update_or_create(code=code, defaults={"name": name, "is_active": True})
+
+
 class MembershipModelTests(TestCase):
     def test_person_may_exist_without_membership(self):
         person = Person.objects.create(first_name="Taylor", last_name="Jordan")
@@ -145,6 +150,9 @@ class MembershipModelTests(TestCase):
 
 
 class MembershipIndependenceTests(TestCase):
+    def setUp(self):
+        ensure_canonical_staff_roles()
+
     def test_membership_does_not_require_user(self):
         person = Person.objects.create(first_name="No", last_name="Account")
         membership = Membership.objects.create(
@@ -173,6 +181,7 @@ class MembershipIndependenceTests(TestCase):
             password="testpass123",
             person_first_name="Staff",
             person_last_name="Only",
+            person_record_type=Person.RecordType.STAFF,
         )
         role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
         StaffRoleAssignment.objects.assign_role(user=user, role=role)
@@ -183,6 +192,7 @@ class MembershipIndependenceTests(TestCase):
 @override_settings(ROOT_URLCONF="config.urls")
 class MembershipApiTests(TestCase):
     def setUp(self):
+        ensure_canonical_staff_roles()
         self.client = APIClient()
         self.url_template = "/api/v1/people/{person_id}/membership/"
 
@@ -197,18 +207,21 @@ class MembershipApiTests(TestCase):
             password="testpass123",
             person_first_name="Admin",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.manager_user = User.objects.create_user(
             email="manager@example.com",
             password="testpass123",
             person_first_name="Manager",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.viewer_user = User.objects.create_user(
             email="viewer@example.com",
             password="testpass123",
             person_first_name="Viewer",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
 
         admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
@@ -251,12 +264,6 @@ class MembershipApiTests(TestCase):
             first_name="Root",
             last_name="Operator",
             record_type=Person.RecordType.TECHNICAL,
-        )
-        Membership.objects.create(
-            person=self.technical_person,
-            status=Membership.Status.ACTIVE,
-            joined_at=date(2024, 1, 1),
-            membership_source=Membership.Source.OTHER,
         )
         self.technical_admin_user = User.objects.create_user(
             email="technical-admin@example.com",
@@ -322,18 +329,19 @@ class MembershipApiTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
     def test_technical_person_linked_to_crm_admin_returns_404(self):
-        membership = Membership.objects.create(
-            person=self.technical_admin_user.person,
-            status=Membership.Status.ACTIVE,
-            joined_at=date(2024, 2, 1),
-            membership_source=Membership.Source.STAFF,
-        )
-
         self.authenticate(self.technical_admin_user)
         response = self.client.get(self.get_url(self.technical_admin_user.person_id))
 
         self.assertEqual(response.status_code, 404)
-        membership.refresh_from_db()
+
+    def test_membership_creation_rejects_technical_person(self):
+        with self.assertRaises(ValidationError):
+            Membership.objects.create(
+                person=self.technical_person,
+                status=Membership.Status.ACTIVE,
+                joined_at=date(2024, 2, 1),
+                membership_source=Membership.Source.STAFF,
+            )
 
     def test_nonexistent_person_returns_404(self):
         self.authenticate(self.admin_user)
@@ -371,6 +379,7 @@ class MembershipApiTests(TestCase):
 @override_settings(ROOT_URLCONF="config.urls")
 class MakeMembershipApiTests(TestCase):
     def setUp(self):
+        ensure_canonical_staff_roles()
         self.client = APIClient()
         self.client.raise_request_exception = False
         self.url_template = "/api/v1/people/{person_id}/membership/"
@@ -386,18 +395,21 @@ class MakeMembershipApiTests(TestCase):
             password="testpass123",
             person_first_name="Admin",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.manager_user = User.objects.create_user(
             email="manager-make-member@example.com",
             password="testpass123",
             person_first_name="Manager",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.viewer_user = User.objects.create_user(
             email="viewer-make-member@example.com",
             password="testpass123",
             person_first_name="Viewer",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.unrelated_person = Person.objects.create(first_name="Other", last_name="Target")
 
@@ -806,6 +818,7 @@ class MakeMembershipApiTests(TestCase):
 @override_settings(ROOT_URLCONF="config.urls")
 class EndMembershipApiTests(TestCase):
     def setUp(self):
+        ensure_canonical_staff_roles()
         self.client = APIClient()
         self.client.raise_request_exception = False
         self.url_template = "/api/v1/people/{person_id}/membership/end/"
@@ -821,18 +834,21 @@ class EndMembershipApiTests(TestCase):
             password="testpass123",
             person_first_name="Admin",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.manager_user = User.objects.create_user(
             email="manager-end-member@example.com",
             password="testpass123",
             person_first_name="Manager",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.viewer_user = User.objects.create_user(
             email="viewer-end-member@example.com",
             password="testpass123",
             person_first_name="Viewer",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.linked_user = User.objects.create_user(
             email="linked-member@example.com",
@@ -889,12 +905,6 @@ class EndMembershipApiTests(TestCase):
             first_name="Root",
             last_name="Operator",
             record_type=Person.RecordType.TECHNICAL,
-        )
-        Membership.objects.create(
-            person=self.technical_person,
-            status=Membership.Status.ACTIVE,
-            joined_at=date(2024, 1, 1),
-            membership_source=Membership.Source.STAFF,
         )
         self.linked_membership = Membership.objects.create(
             person=self.linked_user.person,

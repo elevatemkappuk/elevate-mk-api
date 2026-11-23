@@ -139,7 +139,9 @@ def identity_override_metadata(validated_data):
 
 class BusinessPersonQuerysetMixin:
     def get_business_people_queryset(self):
-        queryset = Person.objects.all()
+        queryset = Person.objects.filter(
+            record_type__in=(Person.RecordType.COMMUNITY.value, Person.RecordType.STAFF.value)
+        )
         if not user_has_any_active_staff_role(self.request.user, (StaffRole.CRM_ADMIN,)):
             queryset = queryset.filter(record_type=Person.RecordType.COMMUNITY.value)
         return queryset
@@ -221,7 +223,7 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
             revoked_at__isnull=True,
             superseded_at__isnull=True,
         ).select_related("transactional_email_job").order_by("-created_at", "-id")
-        if not user_has_any_active_staff_role(request.user, (StaffRole.CRM_ADMIN,)):
+        if not user_has_any_active_staff_role(self.request.user, (StaffRole.CRM_ADMIN,)):
             params = {**params, "record_type": [Person.RecordType.COMMUNITY.value]}
         return PeopleDirectoryQuery(self.get_business_people_queryset(), params).apply().select_related(
             "user", "professional_profile", "membership",

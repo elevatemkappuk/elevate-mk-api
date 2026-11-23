@@ -39,7 +39,10 @@ class PeopleDirectoryQuery:
 
     def apply_record_state(self, queryset):
         state = self.params["record_state"]
-        record_types = self.params.get("record_type") or [Person.RecordType.COMMUNITY.value]
+        record_types = self.params.get("record_type") or [
+            Person.RecordType.COMMUNITY.value,
+            Person.RecordType.STAFF.value,
+        ]
         queryset = queryset.filter(record_type__in=record_types)
         if state == "archived":
             return queryset.filter(archived_at__isnull=False)

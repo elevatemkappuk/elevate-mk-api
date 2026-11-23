@@ -3,6 +3,7 @@ from unittest import skipUnless
 from django.contrib.admin.sites import AdminSite
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.messages.storage.fallback import FallbackStorage
+from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connection
 from django.db import IntegrityError
 from django.http import HttpRequest
@@ -37,6 +38,7 @@ class StaffRoleModelTests(TestCase):
             password="testpass123",
             person_first_name="Viewer",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         StaffRoleAssignment.objects.assign_role(user=user, role=role)
 
@@ -50,12 +52,14 @@ class StaffRoleAssignmentModelTests(TestCase):
             password="testpass123",
             person_first_name="Member",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.actor = User.objects.create_user(
             email="actor@example.com",
             password="testpass123",
             person_first_name="Actor",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
         self.manager_role = StaffRole.objects.get(code=StaffRole.CRM_MANAGER)
@@ -72,7 +76,7 @@ class StaffRoleAssignmentModelTests(TestCase):
 
     def test_duplicate_user_role_assignment_is_prevented(self):
         StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role)
-        with self.assertRaises(IntegrityError):
+        with self.assertRaises((IntegrityError, ValidationError)):
             StaffRoleAssignment.objects.create(user=self.user, role=self.admin_role)
 
     def test_revocation_makes_assignment_inactive(self):
@@ -138,6 +142,7 @@ class FinalCrmAdminProtectionTests(TestCase):
             password="testpass123",
             person_first_name=email.split("@")[0],
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
 
     def assign(self, user, role):
@@ -251,6 +256,7 @@ class StaffPermissionTests(TestCase):
             password="testpass123",
             person_first_name="Staff",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
         self.manager_role = StaffRole.objects.get(code=StaffRole.CRM_MANAGER)
@@ -286,7 +292,14 @@ class StaffPermissionTests(TestCase):
 
     def test_revoked_role_receives_403(self):
         assignment = StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.non_staff_user, role=self.admin_role)
+        backup_staff_user = User.objects.create_user(
+            email="backup-staff@example.com",
+            password="testpass123",
+            person_first_name="Backup",
+            person_last_name="Staff",
+            person_record_type=Person.RecordType.STAFF,
+        )
+        StaffRoleAssignment.objects.assign_role(user=backup_staff_user, role=self.admin_role)
         assignment.revoke()
         self.client.force_authenticate(user=self.staff_user)
         response = self.client.get("/test-permissions/admin-only/")
@@ -316,6 +329,7 @@ class StaffAdminTests(TestCase):
             password="testpass123",
             person_first_name="Member",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.role_admin = StaffRoleAdmin(StaffRole, self.site)
         self.assignment_admin = StaffRoleAssignmentAdmin(StaffRoleAssignment, self.site)
@@ -381,6 +395,7 @@ class StaffAdminTests(TestCase):
             password="testpass123",
             person_first_name="Other",
             person_last_name="Admin",
+            person_record_type=Person.RecordType.STAFF,
         )
         StaffRoleAssignment.objects.assign_role(user=other_admin, role=self.crm_admin_role)
 
@@ -412,6 +427,7 @@ class StaffAdminTests(TestCase):
             password="testpass123",
             person_first_name="Other",
             person_last_name="Admin",
+            person_record_type=Person.RecordType.STAFF,
         )
         StaffRoleAssignment.objects.assign_role(user=other_admin, role=self.crm_admin_role)
         assignment.revoke(revoked_by=self.admin_user)
@@ -500,6 +516,7 @@ class StaffAdminTests(TestCase):
             password="testpass123",
             person_first_name="Other",
             person_last_name="Admin",
+            person_record_type=Person.RecordType.STAFF,
         )
         StaffRoleAssignment.objects.assign_role(user=other_admin, role=self.crm_admin_role)
         assignment.revoke(revoked_by=self.admin_user)
@@ -527,6 +544,7 @@ class StaffAdminTests(TestCase):
             password="testpass123",
             person_first_name="Other",
             person_last_name="Admin",
+            person_record_type=Person.RecordType.STAFF,
         )
         StaffRoleAssignment.objects.assign_role(user=other_admin, role=self.crm_admin_role)
 
@@ -584,6 +602,7 @@ class StaffAdminTests(TestCase):
             password="testpass123",
             person_first_name="Second",
             person_last_name="Admin",
+            person_record_type=Person.RecordType.STAFF,
         )
         second = StaffRoleAssignment.objects.assign_role(user=second_user, role=self.crm_admin_role)
 
@@ -606,6 +625,7 @@ class StaffAdminTests(TestCase):
             password="testpass123",
             person_first_name="Remaining",
             person_last_name="Admin",
+            person_record_type=Person.RecordType.STAFF,
         )
         StaffRoleAssignment.objects.assign_role(user=remaining_admin, role=self.crm_admin_role)
         manager = StaffRoleAssignment.objects.assign_role(
@@ -614,6 +634,7 @@ class StaffAdminTests(TestCase):
                 password="testpass123",
                 person_first_name="Manager",
                 person_last_name="User",
+                person_record_type=Person.RecordType.STAFF,
             ),
             role=StaffRole.objects.get(code=StaffRole.CRM_MANAGER),
         )
@@ -623,6 +644,7 @@ class StaffAdminTests(TestCase):
                 password="testpass123",
                 person_first_name="Viewer",
                 person_last_name="User",
+                person_record_type=Person.RecordType.STAFF,
             ),
             role=self.crm_viewer_role,
         )
@@ -653,6 +675,7 @@ class FinalCrmAdminConcurrencyTests(TransactionTestCase):
             password="testpass123",
             person_first_name=email.split("@")[0],
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         return StaffRoleAssignment.objects.assign_role(user=user, role=self.role)
 
