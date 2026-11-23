@@ -9,9 +9,14 @@ from memberships.models import Membership
 from people.admin import PersonAdmin
 from people.models import Person
 from staff_access.models import StaffRole, StaffRoleAssignment
+from people.services import correct_person_classification
 
 
 class IdentityBoundaryTests(TestCase):
+    def setUp(self):
+        for code, name in StaffRole.CANONICAL_ROLES:
+            StaffRole.objects.update_or_create(code=code, defaults={"name": name, "is_active": True})
+
     def test_new_people_default_to_community(self):
         person = Person.objects.create(first_name="New", last_name="Member")
         self.assertEqual(person.record_type, Person.RecordType.COMMUNITY)
@@ -56,3 +61,34 @@ class IdentityBoundaryTests(TestCase):
         PersonAdmin(Person, AdminSite()).save_model(request, person, form=None, change=True)
         person.refresh_from_db()
         self.assertEqual(person.record_type, Person.RecordType.COMMUNITY)
+
+    def test_crm_admin_classification_correction_revokes_linked_credentials(self):
+        actor = User.objects.create_user(
+            email="classification-admin@example.com",
+            password="testpass123",
+            person=Person.objects.create(
+                first_name="Classification", last_name="Admin", record_type=Person.RecordType.STAFF,
+            ),
+        )
+        StaffRoleAssignment.objects.assign_role(
+            user=actor,
+            role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN),
+        )
+        target = User.objects.create_user(
+            email="target@example.com",
+            password="testpass123",
+            person_first_name="Target",
+            person_last_name="Person",
+        )
+        previous_auth_version = target.auth_version
+
+        corrected = correct_person_classification(
+            person_id=target.person_id,
+            target_record_type=Person.RecordType.STAFF.value,
+            actor_user=actor,
+            reason="Verified separate Staff identity.",
+        )
+
+        self.assertEqual(corrected.record_type, Person.RecordType.STAFF.value)
+        target.refresh_from_db()
+        self.assertGreater(target.auth_version, previous_auth_version)
