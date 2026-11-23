@@ -211,6 +211,7 @@ class CampaignFoundationApiTests(TestCase):
         self.assertEqual(snapshot.provider_outcome, "SKIPPED_CURRENT_CONSENT")
 
     @patch("campaigns.services.synchronize_person_to_brevo")
+    @override_settings(BREVO_MARKETING_STARTER_TEMPLATE_ID="16")
     def test_provider_preparation_uses_dedicated_list_and_creates_prepared_draft(self, sync):
         campaign = self._snapshot_ready_campaign()
         sync.return_value = BrevoPersonSyncResult(person_id=self.included.id, outcome=BrevoPersonSyncOutcome.ALREADY_SYNCHRONIZED, contact_id=123)
