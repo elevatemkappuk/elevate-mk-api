@@ -3,6 +3,8 @@ from enum import Enum
 import re
 
 import phonenumbers
+from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import Q
 
 from people.models import Person
@@ -296,3 +298,64 @@ def reviewed_create_new_identity_evidence(match_candidates) -> dict | None:
     else:
         return None
     return {"collision": collision.value, "matched_person_ids": sorted(email_ids | mobile_ids)}
+
+
+def correct_person_classification(*, person_id, target_record_type, actor_user, reason, request=None):
+    """Apply the controlled CRM classification correction workflow.
+
+    Classification is deliberately not part of the ordinary Person edit
+    serializer.  This service is the single write boundary for the exceptional
+    correction operation and keeps related identity/access state explicit.
+    """
+    from accounts.revocation import revoke_user_credentials
+    from audit.models import AuditEvent
+    from audit.services import record_audit_event
+    from memberships.models import Membership
+    from staff_access.models import StaffRoleAssignment
+    from staff_access.permissions import user_has_any_active_staff_role
+
+    allowed_types = {value for value, _label in Person.RecordType.choices}
+    if target_record_type not in allowed_types:
+        raise ValidationError({"record_type": "Unsupported Person classification."})
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValidationError({"reason": "A correction reason is required."})
+    if not user_has_any_active_staff_role(actor_user, ("CRM_ADMIN",)):
+        raise PermissionError("Only an active CRM_ADMIN may correct Person classification.")
+
+    with transaction.atomic():
+        person = Person.objects.select_for_update().select_related("user").get(pk=person_id)
+        previous_type = person.record_type
+        if previous_type == target_record_type:
+            return person
+
+        if target_record_type in {Person.RecordType.STAFF.value, Person.RecordType.TECHNICAL.value}:
+            if Membership.objects.filter(person_id=person.pk).exists():
+                raise ValidationError({"record_type": "A Person with Membership cannot be classified as Staff or Technical."})
+
+        if target_record_type == Person.RecordType.COMMUNITY.value:
+            if StaffRoleAssignment.objects.active().filter(user__person_id=person.pk).exists():
+                raise ValidationError({"record_type": "A Person with active CRM roles cannot be classified as Community."})
+
+        person.record_type = target_record_type
+        person.save(update_fields=["record_type", "updated_at"])
+
+        user = getattr(person, "user", None)
+        if user is not None:
+            revoke_user_credentials(
+                user=user,
+                reason="person_classification_changed",
+                actor_user=actor_user,
+                request=request,
+            )
+
+        record_audit_event(
+            action=AuditEvent.Action.PERSON_UPDATED,
+            actor_user=actor_user,
+            entity_type="Person",
+            entity_id=person.pk,
+            changes={"record_type": {"from": previous_type, "to": target_record_type}},
+            metadata={"reason": reason.strip(), "classification_correction": True},
+            request_id=(request.headers.get("X-Request-ID") if request is not None else None),
+            ip_address=(request.META.get("REMOTE_ADDR") if request is not None else None),
+        )
+        return person

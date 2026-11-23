@@ -11,6 +11,14 @@ from staff_access.services import (
     ensure_staff_role_can_be_deactivated,
     revoke_staff_role_assignments,
 )
+from staff_access.permissions import user_has_any_active_staff_role
+
+
+def can_manage_staff_access(user):
+    return bool(
+        getattr(user, "is_superuser", False)
+        or user_has_any_active_staff_role(user, (StaffRole.CRM_ADMIN,))
+    )
 
 
 def record_staff_role_audit_event(*, action, actor_user, assignment, request=None):
@@ -120,6 +128,15 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
     list_filter = ("role", "is_active")
     autocomplete_fields = ("user", "role")
     readonly_fields = ("is_active", "assigned_at", "assigned_by", "revoked_at", "revoked_by", "created_at", "updated_at")
+
+    def has_add_permission(self, request):
+        return can_manage_staff_access(request.user)
+
+    def has_change_permission(self, request, obj=None):
+        return can_manage_staff_access(request.user)
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
     def get_fields(self, request, obj=None):
         if obj is None:

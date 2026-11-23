@@ -26,7 +26,7 @@ class UserManager(DjangoUserManager):
         person_first_name = extra_fields.pop("person_first_name", None)
         person_last_name = extra_fields.pop("person_last_name", None)
         person_primary_email = extra_fields.pop("person_primary_email", None)
-        person_record_type = extra_fields.pop("person_record_type", Person.RecordType.BUSINESS)
+        person_record_type = extra_fields.pop("person_record_type", Person.RecordType.COMMUNITY)
         if person_primary_email:
             person_primary_email = normalize_email_address(person_primary_email)
 

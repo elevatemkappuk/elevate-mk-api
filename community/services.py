@@ -297,6 +297,14 @@ def change_community_password(*, user, current_password, new_password, request):
 
         locked_user.set_password(new_password)
         locked_user.save(update_fields=["password"])
+        from accounts.revocation import revoke_user_credentials
+
+        revoke_user_credentials(
+            user=locked_user,
+            reason="password_change",
+            actor_user=locked_user,
+            request=request,
+        )
         record_audit_event(
             action=AuditEvent.Action.PASSWORD_CHANGED,
             actor_user=locked_user,

@@ -1286,6 +1286,8 @@ class CommunityAccountPasswordView(CommunityAuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         update_session_auth_hash(request, changed_user)
+        request.session["elevate_auth_context"] = "community"
+        request.session["elevate_auth_version"] = changed_user.auth_version
         return Response({"detail": "Your password has been changed successfully."}, status=status.HTTP_200_OK)
 
 

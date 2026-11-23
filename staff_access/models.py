@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
@@ -59,6 +60,15 @@ class StaffRoleAssignmentManager(models.Manager):
         if isinstance(role, str):
             role = StaffRole.objects.get(code=role)
 
+        if user.person.record_type == "COMMUNITY":
+            from memberships.models import Membership
+
+            if Membership.objects.filter(person_id=user.person_id).exists():
+                raise ValidationError("A Community Person with Membership cannot be provisioned as Staff.")
+            raise ValidationError(
+                "Staff roles require a separately provisioned STAFF Person and User."
+            )
+
         assignment, created = self.get_or_create(
             user=user,
             role=role,
@@ -101,6 +111,14 @@ class StaffRoleAssignment(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     objects = StaffRoleAssignmentManager()
+
+    def clean(self):
+        if self.user_id and self.user.person.record_type == "COMMUNITY":
+            raise ValidationError({"user": "Community Users cannot receive CRM roles."})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
 
     class Meta:
         ordering = ["user_id", "role__code", "id"]

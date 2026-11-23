@@ -28,6 +28,7 @@ from people.serializers import (
     IdentityCollisionResponseSerializer,
     PaginatedPersonListSerializer,
     PersonCreateSerializer,
+    PersonClassificationCorrectionSerializer,
     PersonDirectoryListSerializer,
     PersonListQuerySerializer,
     PersonListSerializer,
@@ -36,7 +37,7 @@ from people.serializers import (
     PersonBrevoIntegrationSerializer,
     PersonUpdateSerializer,
 )
-from people.services import CreateNewIdentityCollision, evaluate_create_new_identity
+from people.services import CreateNewIdentityCollision, correct_person_classification, evaluate_create_new_identity
 from external_references.services import enqueue_coalesced_person_sync_job, enqueue_person_sync_job
 from people.querying import PeopleDirectoryQuery
 from memberships.models import Membership
@@ -138,7 +139,10 @@ def identity_override_metadata(validated_data):
 
 class BusinessPersonQuerysetMixin:
     def get_business_people_queryset(self):
-        return Person.objects.business()
+        queryset = Person.objects.all()
+        if not user_has_any_active_staff_role(self.request.user, (StaffRole.CRM_ADMIN,)):
+            queryset = queryset.filter(record_type=Person.RecordType.COMMUNITY.value)
+        return queryset
 
     def get_business_person_or_404(self):
         person = self.get_business_people_queryset().filter(pk=self.kwargs["person_id"]).first()
@@ -217,6 +221,8 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
             revoked_at__isnull=True,
             superseded_at__isnull=True,
         ).select_related("transactional_email_job").order_by("-created_at", "-id")
+        if not user_has_any_active_staff_role(request.user, (StaffRole.CRM_ADMIN,)):
+            params = {**params, "record_type": [Person.RecordType.COMMUNITY.value]}
         return PeopleDirectoryQuery(self.get_business_people_queryset(), params).apply().select_related(
             "user", "professional_profile", "membership",
         ).prefetch_related(
@@ -541,6 +547,30 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
                         source_event_id=audit_event.id,
                     )
 
+        return Response(PersonListSerializer(person).data)
+
+
+class PersonClassificationCorrectionView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [IsAuthenticated, HasActiveStaffRoleCodes]
+    required_role_codes = (StaffRole.CRM_ADMIN,)
+    serializer_class = PersonClassificationCorrectionSerializer
+
+    def post(self, request, person_id):
+        input_serializer = self.get_serializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+        try:
+            person = correct_person_classification(
+                person_id=person_id,
+                target_record_type=input_serializer.validated_data["record_type"],
+                actor_user=request.user,
+                reason=input_serializer.validated_data["reason"],
+                request=request,
+            )
+        except Person.DoesNotExist:
+            raise NotFound("Not found.")
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(error.message_dict)
         return Response(PersonListSerializer(person).data)
 
 

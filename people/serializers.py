@@ -61,6 +61,10 @@ class PersonListQuerySerializer(serializers.Serializer):
     interest = serializers.ListField(child=serializers.IntegerField(min_value=1), required=False)
     skill = serializers.ListField(child=serializers.IntegerField(min_value=1), required=False)
     tag = serializers.ListField(child=serializers.IntegerField(min_value=1), required=False)
+    record_type = serializers.ListField(
+        child=serializers.ChoiceField(choices=Person.RecordType.choices),
+        required=False,
+    )
     record_state = serializers.ChoiceField(
         choices=(
             (RECORD_STATE_ACTIVE, "Active BUSINESS people"),
@@ -87,6 +91,7 @@ class PersonListSerializer(serializers.ModelSerializer):
         model = Person
         fields = (
             "id",
+            "record_type",
             "first_name",
             "last_name",
             "primary_email",
@@ -198,6 +203,11 @@ class PersonUpdateSerializer(StrictPersonWriteSerializer):
     allow_duplicate_mobile = serializers.BooleanField(required=False, default=False, write_only=True)
     first_name = serializers.CharField(max_length=150, required=False)
     last_name = serializers.CharField(max_length=150, required=False)
+
+
+class PersonClassificationCorrectionSerializer(serializers.Serializer):
+    record_type = serializers.ChoiceField(choices=Person.RecordType.choices)
+    reason = serializers.CharField(max_length=500, allow_blank=False, trim_whitespace=True)
 
 
 class PersonMemberCreateSerializer(IdentityOverrideCreateSerializerMixin, StrictPersonWriteSerializer):

@@ -93,6 +93,11 @@ class CommunitySessionAuthentication(SessionAuthentication):
 
     def authenticate(self, request):
         result = DRFSessionAuthentication.authenticate(self, request)
+        if result is not None and request.session.get("elevate_auth_context") != "community":
+            if request.session.get("elevate_auth_context") == "crm":
+                return None
+            request.session.flush()
+            return None
         return _validate_session_authentication(request, result, allow_mobile_fallback=True)
 
 
