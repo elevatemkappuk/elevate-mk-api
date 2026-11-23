@@ -494,6 +494,13 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
             if person.archived_at is not None:
                 raise PersonLifecycleConflict("Archived people cannot be edited.")
 
+            if "primary_email" in input_serializer.validated_data and hasattr(person, "user"):
+                requested_email = input_serializer.validated_data["primary_email"] or ""
+                if requested_email.strip().casefold() != (person.user.email or "").strip().casefold():
+                    raise serializers.ValidationError({
+                        "primary_email": "A Person linked to a User must change its authentication email through the verified account workflow."
+                    })
+
             allow_duplicate_mobile = input_serializer.validated_data.pop("allow_duplicate_mobile", False)
             changes = {}
             duplicate_policy = None

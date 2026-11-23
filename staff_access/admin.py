@@ -6,7 +6,7 @@ from django.utils.translation import ngettext
 from audit.models import AuditEvent
 from audit.services import record_audit_event
 from staff_access.exceptions import FinalCrmAdminProtectionError
-from staff_access.models import StaffRole, StaffRoleAssignment
+from staff_access.models import StaffInvitation, StaffRole, StaffRoleAssignment
 from staff_access.services import (
     ensure_staff_role_can_be_deactivated,
     revoke_staff_role_assignments,
@@ -263,3 +263,23 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
             % updated,
             level=messages.SUCCESS,
         )
+
+
+@admin.register(StaffInvitation)
+class StaffInvitationAdmin(admin.ModelAdmin):
+    list_display = ("intended_email", "pending_role_codes", "expires_at", "accepted_at", "revoked_at", "superseded_at")
+    search_fields = ("intended_email", "first_name", "last_name")
+    readonly_fields = (
+        "public_id", "intended_email", "first_name", "last_name", "pending_role_codes",
+        "token_hash", "expires_at", "accepted_at", "revoked_at", "superseded_at",
+        "created_by", "created_at", "updated_at",
+    )
+
+    def has_add_permission(self, request):
+        return can_manage_staff_access(request.user)
+
+    def has_change_permission(self, request, obj=None):
+        return can_manage_staff_access(request.user)
+
+    def has_delete_permission(self, request, obj=None):
+        return False

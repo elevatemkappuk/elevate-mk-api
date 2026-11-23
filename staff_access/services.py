@@ -1,11 +1,124 @@
+import hashlib
+import secrets
+from datetime import timedelta
+
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import F
+from django.utils import timezone
 
 from accounts.models import User
 from audit.models import AuditEvent
 from audit.services import record_audit_event
 from staff_access.exceptions import FinalCrmAdminProtectionError
-from staff_access.models import StaffRole, StaffRoleAssignment
+from staff_access.models import StaffInvitation, StaffRole, StaffRoleAssignment
+
+
+def _normalize_invitation_email(email):
+    return str(email or "").strip().lower()
+
+
+def _invitation_token_hash(token):
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_staff_invitation(*, actor_user, email, first_name, last_name, role_codes, expiry_hours=72):
+    """Create a pending Staff identity without creating a User yet."""
+    from accounts.models import User
+    from people.models import Person
+    from staff_access.permissions import user_has_any_active_staff_role
+
+    if not user_has_any_active_staff_role(actor_user, (StaffRole.CRM_ADMIN,)):
+        raise PermissionError("Only an active CRM_ADMIN may invite Staff.")
+    email = _normalize_invitation_email(email)
+    if not email:
+        raise ValidationError({"email": "An email address is required."})
+    if User.objects.filter(email=email).exists():
+        raise ValidationError({"email": "An account already uses this email address."})
+    allowed_codes = StaffRole.canonical_codes()
+    role_codes = list(dict.fromkeys(role_codes or []))
+    if not role_codes or not set(role_codes).issubset(allowed_codes):
+        raise ValidationError({"role_codes": "Only canonical CRM roles may be invited."})
+    if Person.objects.filter(record_type=Person.RecordType.STAFF, primary_email__iexact=email, user__isnull=True).exists():
+        raise ValidationError({"email": "A pending Staff identity already uses this email address."})
+
+    raw_token = secrets.token_urlsafe(32)
+    with transaction.atomic():
+        StaffInvitation.objects.filter(
+            intended_email=email,
+            accepted_at__isnull=True,
+            revoked_at__isnull=True,
+            superseded_at__isnull=True,
+        ).update(superseded_at=timezone.now())
+        invitation = StaffInvitation.objects.create(
+            intended_email=email,
+            first_name=first_name.strip(),
+            last_name=last_name.strip(),
+            pending_role_codes=role_codes,
+            token_hash=_invitation_token_hash(raw_token),
+            expires_at=timezone.now() + timedelta(hours=expiry_hours),
+            created_by=actor_user,
+        )
+    return invitation, raw_token
+
+
+def cancel_staff_invitation(*, invitation, actor_user):
+    from staff_access.permissions import user_has_any_active_staff_role
+
+    if not user_has_any_active_staff_role(actor_user, (StaffRole.CRM_ADMIN,)):
+        raise PermissionError("Only an active CRM_ADMIN may cancel Staff invitations.")
+    invitation.revoked_at = timezone.now()
+    invitation.save(update_fields=["revoked_at", "updated_at"])
+    return invitation
+
+
+def redeem_staff_invitation(*, public_id, raw_token, password):
+    """Atomically consume an unexpired invitation and provision its User."""
+    from accounts.models import User
+    from audit.models import AuditEvent
+    from audit.services import record_audit_event
+    from people.models import Person
+
+    with transaction.atomic():
+        invitation = StaffInvitation.objects.select_for_update().get(public_id=public_id)
+        if (
+            invitation.accepted_at is not None
+            or invitation.revoked_at is not None
+            or invitation.superseded_at is not None
+            or invitation.expires_at <= timezone.now()
+            or not invitation.token_hash
+            or not secrets.compare_digest(invitation.token_hash, _invitation_token_hash(raw_token))
+        ):
+            raise ValidationError("This Staff invitation is invalid or has expired.")
+        if User.objects.filter(email=invitation.intended_email).exists():
+            raise ValidationError({"email": "An account already uses this email address."})
+
+        person = Person.objects.create(
+            record_type=Person.RecordType.STAFF,
+            first_name=invitation.first_name,
+            last_name=invitation.last_name,
+            primary_email=invitation.intended_email,
+        )
+        user = User.objects.create_user(
+            email=invitation.intended_email,
+            password=password,
+            person=person,
+        )
+        for role_code in invitation.pending_role_codes:
+            role = StaffRole.objects.get(code=role_code, is_active=True)
+            StaffRoleAssignment.objects.assign_role(user=user, role=role, assigned_by=invitation.created_by)
+        invitation.accepted_at = timezone.now()
+        invitation.token_hash = None
+        invitation.save(update_fields=["accepted_at", "token_hash", "updated_at"])
+        record_audit_event(
+            action=AuditEvent.Action.PERSON_CREATED,
+            actor_user=invitation.created_by,
+            entity_type="Person",
+            entity_id=person.pk,
+            changes={"created": {"from": False, "to": True}},
+            metadata={"source": "STAFF_INVITATION_REDEEMED", "invitation_id": str(invitation.public_id)},
+        )
+        return user
 
 
 def ensure_staff_role_can_be_deactivated(role):

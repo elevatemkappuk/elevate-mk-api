@@ -2,6 +2,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
+import uuid
 
 
 class StaffRole(models.Model):
@@ -155,3 +156,46 @@ class StaffRoleAssignment(models.Model):
         self.revoked_by = None
         self.save(update_fields=["is_active", "revoked_at", "revoked_by", "updated_at"])
         return self
+
+
+class StaffInvitation(models.Model):
+    """Durable, single-use staff account invitation state.
+
+    Only a SHA-256 token digest is stored.  Delivery is intentionally kept at
+    the service boundary so this model cannot leak a usable invitation secret.
+    """
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    intended_email = models.EmailField()
+    first_name = models.CharField(max_length=150)
+    last_name = models.CharField(max_length=150)
+    pending_role_codes = models.JSONField(default=list)
+    token_hash = models.CharField(max_length=64, null=True, blank=True, unique=True)
+    expires_at = models.DateTimeField()
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    superseded_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="staff_invitations_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["intended_email"],
+                condition=(
+                    models.Q(accepted_at__isnull=True)
+                    & models.Q(revoked_at__isnull=True)
+                    & models.Q(superseded_at__isnull=True)
+                ),
+                name="staff_invitation_one_current_email",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Staff invitation for {self.intended_email}"
