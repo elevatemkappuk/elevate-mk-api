@@ -3,6 +3,7 @@ import secrets
 from datetime import timedelta
 
 from django.core.exceptions import ValidationError
+from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
@@ -11,7 +12,7 @@ from accounts.models import User
 from audit.models import AuditEvent
 from audit.services import record_audit_event
 from staff_access.exceptions import FinalCrmAdminProtectionError
-from staff_access.models import StaffInvitation, StaffRole, StaffRoleAssignment
+from staff_access.models import StaffEmailChangeRequest, StaffInvitation, StaffRole, StaffRoleAssignment
 
 
 def _normalize_invitation_email(email):
@@ -72,6 +73,70 @@ def cancel_staff_invitation(*, invitation, actor_user):
     return invitation
 
 
+def request_staff_email_change(*, actor_user, user_id, requested_email, expiry_hours=24):
+    from accounts.models import User
+    from staff_access.permissions import user_has_any_active_staff_role
+
+    if not user_has_any_active_staff_role(actor_user, (StaffRole.CRM_ADMIN,)):
+        raise PermissionError("Only an active CRM_ADMIN may request Staff email changes.")
+    requested_email = _normalize_invitation_email(requested_email)
+    target = User.objects.select_related("person").get(pk=user_id)
+    if target.person.record_type != "STAFF":
+        raise ValidationError({"user": "Only STAFF accounts may use the Staff email workflow."})
+    if User.objects.filter(email=requested_email).exclude(pk=target.pk).exists():
+        raise ValidationError({"email": "An account already uses this email address."})
+    raw_token = secrets.token_urlsafe(32)
+    with transaction.atomic():
+        StaffEmailChangeRequest.objects.filter(
+            user=target, verified_at__isnull=True, superseded_at__isnull=True,
+        ).update(superseded_at=timezone.now())
+        change = StaffEmailChangeRequest.objects.create(
+            user=target,
+            requested_email=requested_email,
+            token_hash=_invitation_token_hash(raw_token),
+            expires_at=timezone.now() + timedelta(hours=expiry_hours),
+            created_by=actor_user,
+        )
+    return change, raw_token
+
+
+def confirm_staff_email_change(*, request_id, raw_token):
+    from accounts.models import User
+    from accounts.revocation import revoke_user_credentials
+    from audit.models import AuditEvent
+    from audit.services import record_audit_event
+
+    with transaction.atomic():
+        change = StaffEmailChangeRequest.objects.select_for_update().select_related("user").get(pk=request_id)
+        if (
+            change.verified_at is not None
+            or change.superseded_at is not None
+            or change.expires_at <= timezone.now()
+            or not secrets.compare_digest(change.token_hash, _invitation_token_hash(raw_token))
+        ):
+            raise ValidationError("This email change request is invalid or has expired.")
+        user = User.objects.select_for_update().select_related("person").get(pk=change.user_id)
+        if User.objects.filter(email=change.requested_email).exclude(pk=user.pk).exists():
+            raise ValidationError({"email": "An account already uses this email address."})
+        previous_email = user.email
+        user.email = change.requested_email
+        user.person.primary_email = change.requested_email
+        user.person.save(update_fields=["primary_email", "updated_at"])
+        user.save(update_fields=["email"])
+        revoke_user_credentials(user=user, reason="staff_email_changed", actor_user=change.created_by)
+        change.verified_at = timezone.now()
+        change.save(update_fields=["verified_at", "updated_at"])
+        record_audit_event(
+            action=AuditEvent.Action.PERSON_UPDATED,
+            actor_user=change.created_by,
+            entity_type="Person",
+            entity_id=user.person_id,
+            changes={"primary_email": {"from": previous_email, "to": user.email}},
+            metadata={"source": "STAFF_EMAIL_VERIFICATION"},
+        )
+        return user
+
+
 def redeem_staff_invitation(*, public_id, raw_token, password):
     """Atomically consume an unexpired invitation and provision its User."""
     from accounts.models import User
@@ -79,6 +144,7 @@ def redeem_staff_invitation(*, public_id, raw_token, password):
     from audit.services import record_audit_event
     from people.models import Person
 
+    validate_password(password)
     with transaction.atomic():
         invitation = StaffInvitation.objects.select_for_update().get(public_id=public_id)
         if (

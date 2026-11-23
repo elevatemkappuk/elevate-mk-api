@@ -36,5 +36,6 @@ urlpatterns = [
     path('api/v1/', include('marketing_preferences.urls')),
     path('api/v1/', include('campaigns.urls')),
     path('api/v1/', include('community.urls')),
+    path('api/v1/', include('staff_access.urls')),
     path('api/v1/', include('brevo_marketing.urls')),
 ]

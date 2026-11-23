@@ -167,7 +167,7 @@ class PersonAdminTests(TestCase):
 
         self.assertEqual(record_type_field.choices, Person.RecordType.choices)
 
-    def test_person_admin_can_reclassify_existing_person(self):
+    def test_person_admin_cannot_reclassify_existing_person_directly(self):
         person = Person.objects.create(first_name="Taylor", last_name="Jordan")
         request = self.build_request()
 
@@ -175,7 +175,7 @@ class PersonAdminTests(TestCase):
         self.person_admin.save_model(request, person, form=None, change=True)
         person.refresh_from_db()
 
-        self.assertEqual(person.record_type, Person.RecordType.TECHNICAL)
+        self.assertEqual(person.record_type, Person.RecordType.COMMUNITY)
 
     def test_person_admin_reclassification_keeps_archived_at_independent(self):
         archived_at = timezone.now()
@@ -190,7 +190,7 @@ class PersonAdminTests(TestCase):
         self.person_admin.save_model(request, person, form=None, change=True)
         person.refresh_from_db()
 
-        self.assertEqual(person.record_type, Person.RecordType.TECHNICAL)
+        self.assertEqual(person.record_type, Person.RecordType.COMMUNITY)
         self.assertEqual(person.archived_at, archived_at)
 
 

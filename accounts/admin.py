@@ -1,5 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
+from django.core.exceptions import ValidationError
 
 from accounts.models import User
 
@@ -26,7 +27,35 @@ class UserAdmin(DjangoUserAdmin):
     )
     readonly_fields = ("last_login", "date_joined")
 
+    def has_add_permission(self, request):
+        from staff_access.admin import can_manage_staff_access
+
+        return can_manage_staff_access(request.user)
+
+    def has_change_permission(self, request, obj=None):
+        from staff_access.admin import can_manage_staff_access
+
+        return can_manage_staff_access(request.user)
+
+    def get_readonly_fields(self, request, obj=None):
+        readonly_fields = list(super().get_readonly_fields(request, obj))
+        if obj is not None:
+            readonly_fields.extend(["email", "person"])
+        if not request.user.is_superuser:
+            readonly_fields.extend(["is_superuser", "is_staff", "groups", "user_permissions"])
+        return tuple(dict.fromkeys(readonly_fields))
+
     def save_model(self, request, obj, form, change):
+        if change and obj.pk:
+            previous = type(obj).objects.select_related("person").get(pk=obj.pk)
+            # Authentication email and identity linkage are changed only by
+            # their verified lifecycle workflows, never by direct Admin POST.
+            obj.email = previous.email
+            obj.person = previous.person
+        if obj.person.record_type not in ("STAFF", "TECHNICAL"):
+            raise ValidationError("Django Admin User provisioning requires a STAFF or TECHNICAL Person.")
+        if obj.person.record_type == "TECHNICAL" and not request.user.is_superuser:
+            raise ValidationError("Only designated superusers may provision TECHNICAL Users.")
         obj._audit_actor_user = request.user
         obj._audit_request = request
         try:
