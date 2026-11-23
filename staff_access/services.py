@@ -85,6 +85,14 @@ def resend_staff_invitation(*, invitation, actor_user):
     if invitation.accepted_at or invitation.revoked_at:
         raise ValidationError("Only a pending Staff invitation can be resent.")
     with transaction.atomic():
+        invitation = StaffInvitation.objects.select_for_update().get(pk=invitation.pk)
+        from notifications.models import TransactionalEmailJob
+        old_job = TransactionalEmailJob.objects.select_for_update().filter(staff_invitation=invitation).first()
+        if old_job and old_job.status in (TransactionalEmailJob.Status.PENDING, TransactionalEmailJob.Status.PROCESSING):
+            old_job.status = TransactionalEmailJob.Status.CANCELLED
+            old_job.completed_at = timezone.now()
+            old_job.last_error_code = "INVITATION_REPLACED"
+            old_job.save(update_fields=["status", "completed_at", "last_error_code", "updated_at"])
         invitation.superseded_at = timezone.now()
         invitation.save(update_fields=["superseded_at", "updated_at"])
         replacement = StaffInvitation.objects.create(
@@ -110,14 +118,18 @@ def update_pending_staff_invitation_roles(*, invitation, actor_user, role_codes)
     if invitation.accepted_at or invitation.revoked_at or invitation.superseded_at:
         raise ValidationError("Only a current pending Staff invitation can be updated.")
     with transaction.atomic():
+        invitation = StaffInvitation.objects.select_for_update().get(pk=invitation.pk)
         invitation.pending_role_codes = role_codes
         invitation.token_hash = None
         invitation.expires_at = timezone.now() + timedelta(hours=72)
         invitation.save(update_fields=["pending_role_codes", "token_hash", "expires_at", "updated_at"])
         from notifications.models import TransactionalEmailJob
-        TransactionalEmailJob.objects.filter(staff_invitation=invitation, status__in=[TransactionalEmailJob.Status.PENDING, TransactionalEmailJob.Status.PROCESSING]).update(
-            status=TransactionalEmailJob.Status.CANCELLED, completed_at=timezone.now(), updated_at=timezone.now()
-        )
+        old_job = TransactionalEmailJob.objects.select_for_update().filter(staff_invitation=invitation).first()
+        if old_job and old_job.status in (TransactionalEmailJob.Status.PENDING, TransactionalEmailJob.Status.PROCESSING):
+            old_job.status = TransactionalEmailJob.Status.CANCELLED
+            old_job.completed_at = timezone.now()
+            old_job.last_error_code = "INVITATION_ROLES_UPDATED"
+            old_job.save(update_fields=["status", "completed_at", "last_error_code", "updated_at"])
         _queue_staff_invitation_email(invitation)
     return invitation
 
@@ -161,8 +173,17 @@ def cancel_staff_invitation(*, invitation, actor_user):
 
     if not user_has_any_active_staff_role(actor_user, (StaffRole.CRM_ADMIN,)):
         raise PermissionError("Only an active CRM_ADMIN may cancel Staff invitations.")
-    invitation.revoked_at = timezone.now()
-    invitation.save(update_fields=["revoked_at", "updated_at"])
+    from notifications.models import TransactionalEmailJob
+    with transaction.atomic():
+        invitation = StaffInvitation.objects.select_for_update().get(pk=invitation.pk)
+        job = TransactionalEmailJob.objects.select_for_update().filter(staff_invitation=invitation).first()
+        if job and job.status in (TransactionalEmailJob.Status.PENDING, TransactionalEmailJob.Status.PROCESSING):
+            job.status = TransactionalEmailJob.Status.CANCELLED
+            job.completed_at = timezone.now()
+            job.last_error_code = "INVITATION_CANCELLED"
+            job.save(update_fields=["status", "completed_at", "last_error_code", "updated_at"])
+        invitation.revoked_at = timezone.now()
+        invitation.save(update_fields=["revoked_at", "updated_at"])
     return invitation
 
 

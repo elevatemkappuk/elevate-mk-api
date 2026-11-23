@@ -1,5 +1,6 @@
 from django.core.exceptions import ValidationError
 from django.test import TestCase
+from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import urlparse
 from rest_framework.test import APIClient
@@ -41,7 +42,7 @@ class StaffInvitationTests(TestCase):
             last_name="Staff",
             role_codes=[StaffRole.CRM_VIEWER],
         )
-        with patch("notifications.jobs.send_transactional_email") as send:
+        with patch("notifications.jobs.send_transactional_email", return_value=SimpleNamespace(provider_message_id="test-id")) as send:
             process_next_transactional_email_job()
         token = urlparse(send.call_args.kwargs["template_params"]["activation_url"]).path.rstrip("/").split("/")[-1]
         invitation.refresh_from_db()
@@ -115,7 +116,7 @@ class StaffInvitationTests(TestCase):
         self.assertEqual(response.status_code, 201, response.data)
         invitation = StaffInvitation.objects.get(public_id=response.data["public_id"])
         self.assertNotIn("activation_token", response.data)
-        with patch("notifications.jobs.send_transactional_email") as send:
+        with patch("notifications.jobs.send_transactional_email", return_value=SimpleNamespace(provider_message_id="test-id")) as send:
             process_next_transactional_email_job()
         token = urlparse(send.call_args.kwargs["template_params"]["activation_url"]).path.rstrip("/").split("/")[-1]
         self.client.force_authenticate(None)
@@ -142,7 +143,7 @@ class StaffInvitationTests(TestCase):
             user_id=target.pk,
             requested_email="new.staff@example.com",
         )
-        with patch("notifications.jobs.send_transactional_email") as send:
+        with patch("notifications.jobs.send_transactional_email", return_value=SimpleNamespace(provider_message_id="test-id")) as send:
             process_next_transactional_email_job()
         token = urlparse(send.call_args.kwargs["template_params"]["verification_url"]).path.rstrip("/").split("/")[-1]
         confirm_staff_email_change(request_id=change.pk, raw_token=token)

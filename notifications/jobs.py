@@ -146,7 +146,9 @@ def _claim_next_job():
 
 @transaction.atomic
 def _prepare_send(job_id):
-    job = TransactionalEmailJob.objects.select_for_update().get(pk=job_id)
+    # Resource rows are always locked before their delivery job. Redemption,
+    # cancellation, and resend use the same order to avoid deadlocks.
+    job = TransactionalEmailJob.objects.get(pk=job_id)
     if job.job_type == TransactionalEmailJob.JobType.COMMUNITY_EMAIL_CHANGE:
         return _prepare_email_change_send(job)
     if job.job_type == TransactionalEmailJob.JobType.COMMUNITY_EMAIL_CHANGE_SECURITY:
@@ -157,6 +159,7 @@ def _prepare_send(job_id):
         return _prepare_staff_email_change_send(job)
     invitation_id = job.invitation_id
     invitation = CommunityAccountInvitation.objects.select_for_update().get(pk=invitation_id)
+    job = TransactionalEmailJob.objects.select_for_update().get(pk=job.pk)
     person = Person.objects.select_for_update().get(pk=invitation.person_id)
     user = get_user_model().objects.select_for_update().filter(person_id=person.id).first()
 
@@ -185,6 +188,7 @@ def _prepare_send(job_id):
 
 def _prepare_email_change_send(job):
     change_request = CommunityEmailChangeRequest.objects.select_for_update().select_related("person", "user").get(pk=job.email_change_request_id)
+    job = TransactionalEmailJob.objects.select_for_update().get(pk=job.pk)
     if not change_request.is_current or change_request.expires_at <= timezone.now():
         _cancel_job(job, "EMAIL_CHANGE_NOT_CURRENT")
         return None
@@ -208,6 +212,7 @@ def _prepare_email_change_send(job):
 
 def _prepare_email_change_security_send(job):
     change_request = CommunityEmailChangeRequest.objects.select_for_update().select_related("person", "user").get(pk=job.email_change_request_id)
+    job = TransactionalEmailJob.objects.select_for_update().get(pk=job.pk)
     if change_request.used_at is None:
         _cancel_job(job, "EMAIL_CHANGE_NOT_COMPLETED")
         return None
@@ -221,6 +226,7 @@ def _prepare_email_change_security_send(job):
 
 def _prepare_staff_invitation_send(job):
     invitation = StaffInvitation.objects.select_for_update().get(pk=job.staff_invitation_id)
+    job = TransactionalEmailJob.objects.select_for_update().get(pk=job.pk)
     if invitation.accepted_at or invitation.revoked_at or invitation.superseded_at or invitation.expires_at <= timezone.now():
         _cancel_job(job, "STAFF_INVITATION_NOT_CURRENT")
         return None
@@ -241,6 +247,7 @@ def _prepare_staff_invitation_send(job):
 
 def _prepare_staff_email_change_send(job):
     change = StaffEmailChangeRequest.objects.select_for_update().select_related("user__person").get(pk=job.staff_email_change_request_id)
+    job = TransactionalEmailJob.objects.select_for_update().get(pk=job.pk)
     if change.verified_at or change.superseded_at or change.expires_at <= timezone.now():
         _cancel_job(job, "STAFF_EMAIL_CHANGE_NOT_CURRENT")
         return None
