@@ -197,9 +197,14 @@ CSRF_TRUSTED_ORIGINS = env.list(
 )
 
 SESSION_COOKIE_HTTPONLY = True
+# Keep browser sessions host-only. CRM and Community use separate API
+# hostnames in deployed environments, so neither session nor CSRF state may
+# be widened to a parent domain.
+SESSION_COOKIE_DOMAIN = None
 SESSION_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_SAMESITE = env("SESSION_COOKIE_SAMESITE", default="Lax" if DEBUG else "None")
 CSRF_COOKIE_HTTPONLY = False
+CSRF_COOKIE_DOMAIN = None
 CSRF_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SAMESITE = env("CSRF_COOKIE_SAMESITE", default="Lax" if DEBUG else "None")
 COMMUNITY_JOIN_THROTTLE_RATE = env("COMMUNITY_JOIN_THROTTLE_RATE", default="10/hour")

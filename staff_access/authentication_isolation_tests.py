@@ -1,5 +1,6 @@
 from datetime import date
 
+from django.conf import settings
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
@@ -141,3 +142,50 @@ class CrmAuthenticationIsolationTests(TestCase):
         )
 
         self.assertIn(response.status_code, (401, 403))
+
+    def test_separate_browser_cookie_jars_preserve_both_sessions_and_independent_logout(self):
+        crm_client = self.session_client(self.staff_user)
+        community_client = APIClient()
+
+        response = community_client.post(
+            "/api/v1/community/login/",
+            {"email": self.non_staff_member.email, "password": self.password},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(crm_client.get(self.people_url).status_code, 200)
+        self.assertEqual(community_client.get("/api/v1/community/me/").status_code, 200)
+
+        self.assertEqual(crm_client.post("/api/v1/auth/logout/", {}, format="json").status_code, 204)
+        self.assertEqual(community_client.get("/api/v1/community/me/").status_code, 200)
+
+    def test_community_logout_does_not_invalidate_crm_session(self):
+        crm_client = self.session_client(self.staff_user)
+        community_client = APIClient()
+        response = community_client.post(
+            "/api/v1/community/login/",
+            {"email": self.non_staff_member.email, "password": self.password},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(community_client.post("/api/v1/auth/logout/", {}, format="json").status_code, 204)
+        self.assertEqual(crm_client.get(self.people_url).status_code, 200)
+
+    def test_session_contexts_cannot_cross_authenticate_surfaces(self):
+        crm_client = self.session_client(self.staff_user)
+        community_client = APIClient()
+        response = community_client.post(
+            "/api/v1/community/login/",
+            {"email": self.non_staff_member.email, "password": self.password},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        self.assertIn(community_client.get(self.people_url).status_code, (401, 403))
+        self.assertIn(crm_client.get("/api/v1/community/me/").status_code, (401, 403))
+
+    def test_session_and_csrf_cookies_remain_host_only(self):
+        self.assertIsNone(settings.SESSION_COOKIE_DOMAIN)
+        self.assertIsNone(settings.CSRF_COOKIE_DOMAIN)
