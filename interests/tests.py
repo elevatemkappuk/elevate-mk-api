@@ -123,18 +123,21 @@ class InterestApiTests(TestCase):
             password="testpass123",
             person_first_name="Admin",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.manager_user = User.objects.create_user(
             email="manager-interests@example.com",
             password="testpass123",
             person_first_name="Manager",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.viewer_user = User.objects.create_user(
             email="viewer-interests@example.com",
             password="testpass123",
             person_first_name="Viewer",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
 
         self.admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
@@ -366,12 +369,12 @@ class InterestApiTests(TestCase):
         response = self.client.get(self.get_person_interests_url(self.technical_admin_user.person_id))
         self.assertEqual(response.status_code, 404)
 
-    def test_person_interests_business_person_linked_to_crm_admin_returns_200(self):
+    def test_person_interests_staff_person_linked_to_crm_admin_returns_404(self):
         PersonInterest.objects.create(person=self.business_admin_person, interest=self.networking)
 
         self.authenticate(self.admin_user)
         response = self.client.get(self.get_person_interests_url(self.business_admin_person.id))
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 404)
 
     def test_person_interests_nonexistent_person_returns_404(self):
         self.authenticate(self.admin_user)

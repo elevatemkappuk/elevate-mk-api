@@ -216,7 +216,7 @@ The following is the current route inventory under `/api/v1/`. Authentication la
 
 ### Community account and membership endpoints
 
-These endpoints are separate from the Staff CRM People API. Join, industry lookup, login, password recovery, and activation are public flows; `community/me/` requires an authenticated Community session.
+These endpoints are separate from the Staff CRM People API. Join, industry lookup, login, password recovery, and activation are public flows; authenticated Community member endpoints accept either a versioned Django session or a valid revocation-aware mobile JWT. CRM-only endpoints remain session-only.
 
 | Method | Endpoint | Access |
 | --- | --- | --- |
@@ -227,28 +227,28 @@ These endpoints are separate from the Staff CRM People API. Join, industry looku
 | `POST` | `/api/v1/community/password-reset/confirm/` | Public; CSRF; uid/token required |
 | `GET` | `/api/v1/community/activate/{invitation_id}/{token}/` | Public; invitation token required |
 | `POST` | `/api/v1/community/activate/{invitation_id}/{token}/` | Public; invitation token required |
-| `GET` | `/api/v1/community/me/` | Authenticated Community session |
+| `GET` | `/api/v1/community/me/` | Authenticated Community session or valid mobile JWT |
 | `GET` | `/api/v1/community/account/` | Authenticated eligible Community member |
-| `POST` | `/api/v1/community/account/password/` | Authenticated eligible Community member; CSRF; scoped throttle |
-| `POST` | `/api/v1/community/account/email-change/` | Authenticated eligible Community member; CSRF; scoped throttle |
+| `POST` | `/api/v1/community/account/password/` | Authenticated eligible Community member; CSRF for session requests; scoped throttle |
+| `POST` | `/api/v1/community/account/email-change/` | Authenticated eligible Community member; CSRF for session requests; scoped throttle |
 | `POST` | `/api/v1/community/account/email-change/verify/` | Public-capable; CSRF; scoped throttle; request ID and token required |
-| `PATCH` | `/api/v1/community/account/mobile/` | Authenticated eligible Community member; CSRF; scoped throttle |
-| `PATCH` | `/api/v1/community/account/marketing-preference/` | Authenticated eligible Community member; CSRF; scoped throttle |
+| `PATCH` | `/api/v1/community/account/mobile/` | Authenticated eligible Community member; CSRF for session requests; scoped throttle |
+| `PATCH` | `/api/v1/community/account/marketing-preference/` | Authenticated eligible Community member; CSRF for session requests; scoped throttle |
 | `GET` | `/api/v1/community/profile/` | Authenticated eligible Community member |
-| `PATCH` | `/api/v1/community/profile/` | Authenticated eligible Community member; CSRF |
+| `PATCH` | `/api/v1/community/profile/` | Authenticated eligible Community member; CSRF for session requests |
 | `GET` | `/api/v1/community/profile/options/` | Authenticated eligible Community member |
-| `POST` | `/api/v1/community/profile/photo/` | Authenticated eligible Community member; multipart; CSRF |
-| `DELETE` | `/api/v1/community/profile/photo/` | Authenticated eligible Community member; CSRF |
-| `POST` | `/api/v1/community/profile/review-acknowledgement/` | Authenticated eligible Community member; CSRF |
+| `POST` | `/api/v1/community/profile/photo/` | Authenticated eligible Community member; multipart; CSRF for session requests |
+| `DELETE` | `/api/v1/community/profile/photo/` | Authenticated eligible Community member; CSRF for session requests |
+| `POST` | `/api/v1/community/profile/review-acknowledgement/` | Authenticated eligible Community member; CSRF for session requests |
 | `GET` | `/api/v1/community/posts/` | Authenticated eligible Community member; chronological, optional purpose filter |
-| `POST` | `/api/v1/community/posts/` | Authenticated eligible Community member; CSRF, scoped throttle, `Idempotency-Key` |
+| `POST` | `/api/v1/community/posts/` | Authenticated eligible Community member; CSRF for session requests, scoped throttle, `Idempotency-Key` |
 | `GET` | `/api/v1/community/posts/{public_id}/` | Authenticated eligible Community member with visibility to the post |
-| `PATCH` | `/api/v1/community/posts/{public_id}/` | Authenticated owner; CSRF |
-| `DELETE` | `/api/v1/community/posts/{public_id}/` | Authenticated owner; CSRF |
+| `PATCH` | `/api/v1/community/posts/{public_id}/` | Authenticated owner; CSRF for session requests |
+| `DELETE` | `/api/v1/community/posts/{public_id}/` | Authenticated owner; CSRF for session requests |
 | `GET` | `/api/v1/community/posts/{post_id}/replies/` | Authenticated eligible member with visibility to the post |
-| `POST` | `/api/v1/community/posts/{post_id}/replies/` | Authenticated eligible member with visibility to the post; CSRF, scoped throttle, `Idempotency-Key` |
-| `PATCH` | `/api/v1/community/posts/{post_id}/replies/{reply_id}/` | Authenticated reply owner; CSRF |
-| `DELETE` | `/api/v1/community/posts/{post_id}/replies/{reply_id}/` | Authenticated reply owner; CSRF |
+| `POST` | `/api/v1/community/posts/{post_id}/replies/` | Authenticated eligible member with visibility to the post; CSRF for session requests, scoped throttle, `Idempotency-Key` |
+| `PATCH` | `/api/v1/community/posts/{post_id}/replies/{reply_id}/` | Authenticated reply owner; CSRF for session requests |
+| `DELETE` | `/api/v1/community/posts/{post_id}/replies/{reply_id}/` | Authenticated reply owner; CSRF for session requests |
 
 Community Join returns the generic `202 Accepted` representation documented in [Community Platform](community-platform.md). It does not expose CRM identity evidence or create a User account. Successful activation creates the Community User account and establishes the authenticated Community session; activation and password-reset failures remain enumeration-safe.
 

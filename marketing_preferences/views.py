@@ -3,6 +3,7 @@ from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from accounts.authentication import CRM_SESSION_AUTHENTICATION_CLASSES
 from marketing_preferences.audience import (
     ELIGIBLE,
     annotate_email_marketing_classification,
@@ -36,6 +37,7 @@ class HasMarketingPreferenceWriteAccess(HasActiveStaffRoleCodes):
 
 
 class AudiencePreviewView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, HasMarketingPreferenceAccess]
     serializer_class = AudiencePreviewRequestSerializer
 
@@ -94,6 +96,7 @@ class AudiencePreviewView(generics.GenericAPIView):
 
 
 class PersonMarketingPreferenceView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated]
     serializer_class = MarketingPreferenceSerializer
 

@@ -276,20 +276,29 @@ class PersonAuditHistoryApiTests(TestCase):
         self.admin_user = User.objects.create_user(
             email="admin-audit@example.com",
             password="testpass123",
-            person_first_name="Admin",
-            person_last_name="Audit",
+            person=Person.objects.create(
+                first_name="Admin",
+                last_name="Audit",
+                record_type=Person.RecordType.STAFF,
+            ),
         )
         self.manager_user = User.objects.create_user(
             email="manager-audit@example.com",
             password="testpass123",
-            person_first_name="Manager",
-            person_last_name="Audit",
+            person=Person.objects.create(
+                first_name="Manager",
+                last_name="Audit",
+                record_type=Person.RecordType.STAFF,
+            ),
         )
         self.viewer_user = User.objects.create_user(
             email="viewer-audit@example.com",
             password="testpass123",
-            person_first_name="Viewer",
-            person_last_name="Audit",
+            person=Person.objects.create(
+                first_name="Viewer",
+                last_name="Audit",
+                record_type=Person.RecordType.STAFF,
+            ),
         )
         self.staff_without_crm_role = User.objects.create_user(
             email="django-staff-only@example.com",

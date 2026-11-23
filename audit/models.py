@@ -25,6 +25,8 @@ class AuditEvent(models.Model):
         LOGIN_SUCCEEDED = "LOGIN_SUCCEEDED", "Login succeeded"
         LOGIN_FAILED = "LOGIN_FAILED", "Login failed"
         LOGOUT = "LOGOUT", "Logout"
+        SESSION_EXPIRED = "SESSION_EXPIRED", "Session expired"
+        CREDENTIALS_REVOKED = "CREDENTIALS_REVOKED", "Credentials revoked"
         PERSON_CREATED = "PERSON_CREATED", "Person created"
         PERSON_UPDATED = "PERSON_UPDATED", "Person updated"
         PERSON_ARCHIVED = "PERSON_ARCHIVED", "Person archived"

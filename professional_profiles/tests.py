@@ -153,6 +153,7 @@ class ProfessionalProfileAdminTests(TestCase):
             password="testpass123",
             person_first_name="Admin",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.industry_admin = IndustryAdmin(Industry, self.site)
         self.profile_admin = ProfessionalProfileAdmin(ProfessionalProfile, self.site)
@@ -204,18 +205,21 @@ class IndustryApiTests(TestCase):
             password="testpass123",
             person_first_name="Admin",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.manager_user = User.objects.create_user(
             email="manager@example.com",
             password="testpass123",
             person_first_name="Manager",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.viewer_user = User.objects.create_user(
             email="viewer@example.com",
             password="testpass123",
             person_first_name="Viewer",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
 
         admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
@@ -302,18 +306,21 @@ class ProfessionalProfileApiTests(TestCase):
             password="testpass123",
             person_first_name="Admin",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.manager_user = User.objects.create_user(
             email="manager-profile@example.com",
             password="testpass123",
             person_first_name="Manager",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.viewer_user = User.objects.create_user(
             email="viewer-profile@example.com",
             password="testpass123",
             person_first_name="Viewer",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
 
         admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
@@ -469,18 +476,21 @@ class ProfessionalProfileCreateApiTests(TestCase):
             password="testpass123",
             person_first_name="Admin",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.manager_user = User.objects.create_user(
             email="manager-create@example.com",
             password="testpass123",
             person_first_name="Manager",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.viewer_user = User.objects.create_user(
             email="viewer-create@example.com",
             password="testpass123",
             person_first_name="Viewer",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
 
         admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
@@ -851,18 +861,21 @@ class ProfessionalProfileUpdateApiTests(TestCase):
             password="testpass123",
             person_first_name="Admin",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.manager_user = User.objects.create_user(
             email="manager-update@example.com",
             password="testpass123",
             person_first_name="Manager",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.viewer_user = User.objects.create_user(
             email="viewer-update@example.com",
             password="testpass123",
             person_first_name="Viewer",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
 
         admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)

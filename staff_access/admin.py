@@ -6,14 +6,27 @@ from django.utils.translation import ngettext
 from audit.models import AuditEvent
 from audit.services import record_audit_event
 from staff_access.exceptions import FinalCrmAdminProtectionError
-from staff_access.models import StaffRole, StaffRoleAssignment
+from staff_access.models import StaffInvitation, StaffRole, StaffRoleAssignment
 from staff_access.services import (
     ensure_staff_role_can_be_deactivated,
     revoke_staff_role_assignments,
 )
+from staff_access.permissions import user_has_any_active_staff_role
 
 
-def record_staff_role_audit_event(*, action, actor_user, assignment):
+def can_manage_staff_access(user):
+    return bool(
+        getattr(user, "is_superuser", False)
+        or user_has_any_active_staff_role(user, (StaffRole.CRM_ADMIN,))
+    )
+
+
+def record_staff_role_audit_event(*, action, actor_user, assignment, request=None):
+    request_id = None
+    ip_address = None
+    if request is not None:
+        request_id = request.headers.get("X-Request-ID") or request.META.get("HTTP_X_REQUEST_ID")
+        ip_address = request.META.get("REMOTE_ADDR")
     record_audit_event(
         action=action,
         actor_user=actor_user,
@@ -34,6 +47,8 @@ def record_staff_role_audit_event(*, action, actor_user, assignment):
             "staff_role_id": str(assignment.role_id),
             "staff_role_code": assignment.role.code,
         },
+        request_id=request_id,
+        ip_address=ip_address,
     )
 
 
@@ -75,6 +90,16 @@ class StaffRoleAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return False
 
+    def save_model(self, request, obj, form, change):
+        if change and obj.pk:
+            was_active = StaffRole.objects.filter(pk=obj.pk).values_list("is_active", flat=True).first()
+            if was_active and not obj.is_active:
+                obj.deactivate(actor_user=request.user, request=request)
+                obj.refresh_from_db()
+                return
+
+        super().save_model(request, obj, form, change)
+
     def get_actions(self, request):
         actions = super().get_actions(request)
         actions.pop("delete_selected", None)
@@ -103,6 +128,15 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
     list_filter = ("role", "is_active")
     autocomplete_fields = ("user", "role")
     readonly_fields = ("is_active", "assigned_at", "assigned_by", "revoked_at", "revoked_by", "created_at", "updated_at")
+
+    def has_add_permission(self, request):
+        return can_manage_staff_access(request.user)
+
+    def has_change_permission(self, request, obj=None):
+        return can_manage_staff_access(request.user)
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
     def get_fields(self, request, obj=None):
         if obj is None:
@@ -142,6 +176,7 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
                         action=AuditEvent.Action.STAFF_ROLE_REACTIVATED,
                         actor_user=request.user,
                         assignment=existing,
+                        request=request,
                     )
                     self.message_user(request, "Existing assignment reactivated.", level=messages.SUCCESS)
                 else:
@@ -159,6 +194,7 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
                 action=AuditEvent.Action.STAFF_ROLE_ASSIGNED,
                 actor_user=request.user,
                 assignment=assignment,
+                request=request,
             )
 
         obj.pk = assignment.pk
@@ -173,12 +209,15 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
                 assignments = revoke_staff_role_assignments(
                     assignments=queryset,
                     revoked_by=request.user,
+                    request=request,
+                    audit=False,
                 )
                 for assignment in assignments:
                     record_staff_role_audit_event(
                         action=AuditEvent.Action.STAFF_ROLE_REVOKED,
                         actor_user=request.user,
                         assignment=assignment,
+                        request=request,
                     )
         except FinalCrmAdminProtectionError as error:
             self.message_user(request, error.messages[0], level=messages.ERROR)
@@ -211,6 +250,7 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
                     action=AuditEvent.Action.STAFF_ROLE_REACTIVATED,
                     actor_user=request.user,
                     assignment=assignment,
+                    request=request,
                 )
                 updated += 1
         self.message_user(
@@ -223,3 +263,23 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
             % updated,
             level=messages.SUCCESS,
         )
+
+
+@admin.register(StaffInvitation)
+class StaffInvitationAdmin(admin.ModelAdmin):
+    list_display = ("intended_email", "pending_role_codes", "expires_at", "accepted_at", "revoked_at", "superseded_at")
+    search_fields = ("intended_email", "first_name", "last_name")
+    readonly_fields = (
+        "public_id", "intended_email", "first_name", "last_name", "pending_role_codes",
+        "token_hash", "expires_at", "accepted_at", "revoked_at", "superseded_at",
+        "created_by", "created_at", "updated_at",
+    )
+
+    def has_add_permission(self, request):
+        return can_manage_staff_access(request.user)
+
+    def has_change_permission(self, request, obj=None):
+        return can_manage_staff_access(request.user)
+
+    def has_delete_permission(self, request, obj=None):
+        return False

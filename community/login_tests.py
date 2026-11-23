@@ -89,7 +89,8 @@ class CommunityLoginApiTests(TestCase):
 
     def test_ineligible_authenticated_user_receives_access_unavailable_without_session(self):
         self.person.membership.status = Membership.Status.FORMER
-        self.person.membership.save(update_fields=["status"])
+        self.person.membership.ended_at = timezone.localdate()
+        self.person.membership.save(update_fields=["status", "ended_at"])
 
         response = self.login()
 
@@ -115,10 +116,7 @@ class CommunityLoginApiTests(TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.data["code"], "COMMUNITY_ACCESS_UNAVAILABLE")
 
-    def test_staff_user_with_active_membership_receives_no_staff_roles(self):
-        role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
-        StaffRoleAssignment.objects.assign_role(user=self.user, role=role)
-
+    def test_community_user_receives_no_staff_roles(self):
         response = self.login()
 
         self.assertEqual(response.status_code, 200)
@@ -127,7 +125,8 @@ class CommunityLoginApiTests(TestCase):
     def test_community_eligibility_remains_dynamic_after_login(self):
         self.assertEqual(self.login().status_code, 200)
         self.person.membership.status = Membership.Status.FORMER
-        self.person.membership.save(update_fields=["status"])
+        self.person.membership.ended_at = timezone.localdate()
+        self.person.membership.save(update_fields=["status", "ended_at"])
 
         response = self.client.get("/api/v1/community/me/")
 
@@ -138,13 +137,21 @@ class CommunityLoginApiTests(TestCase):
 
         response = self.client.get("/api/v1/people/")
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 401)
 
     def test_login_requires_csrf(self):
         response = self.login(client=self.csrf_client)
 
         self.assertEqual(response.status_code, 403)
         self.assertNotIn("_auth_user_id", self.csrf_client.session)
+
+    def test_legacy_unversioned_session_fails_closed(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get("/api/v1/community/me/")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertNotIn("_auth_user_id", self.client.session)
 
     def test_login_uses_dedicated_throttle_scope(self):
         self.assertEqual(CommunityLoginView.throttle_scope, "community_login")

@@ -39,11 +39,16 @@ class PeopleDirectoryQuery:
 
     def apply_record_state(self, queryset):
         state = self.params["record_state"]
+        record_types = self.params.get("record_type") or [
+            Person.RecordType.COMMUNITY.value,
+            Person.RecordType.STAFF.value,
+        ]
+        queryset = queryset.filter(record_type__in=record_types)
         if state == "archived":
-            return queryset.archived_business()
+            return queryset.filter(archived_at__isnull=False)
         if state == "all":
-            return queryset.business()
-        return queryset.active_business()
+            return queryset
+        return queryset.filter(archived_at__isnull=True)
 
     def apply_search(self, queryset):
         query = self.params.get("q", "").strip()

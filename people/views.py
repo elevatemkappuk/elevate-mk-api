@@ -10,6 +10,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from accounts.authentication import CRM_SESSION_AUTHENTICATION_CLASSES
 from audit.models import AuditEvent
 from audit.policies import build_person_audit_scope_q, filter_person_audit_visibility_for_user
 from audit.services import record_audit_event
@@ -27,6 +28,7 @@ from people.serializers import (
     IdentityCollisionResponseSerializer,
     PaginatedPersonListSerializer,
     PersonCreateSerializer,
+    PersonClassificationCorrectionSerializer,
     PersonDirectoryListSerializer,
     PersonListQuerySerializer,
     PersonListSerializer,
@@ -35,7 +37,7 @@ from people.serializers import (
     PersonBrevoIntegrationSerializer,
     PersonUpdateSerializer,
 )
-from people.services import CreateNewIdentityCollision, evaluate_create_new_identity
+from people.services import CreateNewIdentityCollision, correct_person_classification, evaluate_create_new_identity
 from external_references.services import enqueue_coalesced_person_sync_job, enqueue_person_sync_job
 from people.querying import PeopleDirectoryQuery
 from memberships.models import Membership
@@ -137,7 +139,12 @@ def identity_override_metadata(validated_data):
 
 class BusinessPersonQuerysetMixin:
     def get_business_people_queryset(self):
-        return Person.objects.business()
+        queryset = Person.objects.filter(
+            record_type__in=(Person.RecordType.COMMUNITY.value, Person.RecordType.STAFF.value)
+        )
+        if not user_has_any_active_staff_role(self.request.user, (StaffRole.CRM_ADMIN,)):
+            queryset = queryset.filter(record_type=Person.RecordType.COMMUNITY.value)
+        return queryset
 
     def get_business_person_or_404(self):
         person = self.get_business_people_queryset().filter(pk=self.kwargs["person_id"]).first()
@@ -147,6 +154,7 @@ class BusinessPersonQuerysetMixin:
 
 
 class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = PersonDirectoryListSerializer
     permission_classes = [IsAuthenticated, HasPeopleAccess]
     pagination_class = PeoplePagination
@@ -215,6 +223,8 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
             revoked_at__isnull=True,
             superseded_at__isnull=True,
         ).select_related("transactional_email_job").order_by("-created_at", "-id")
+        if not user_has_any_active_staff_role(self.request.user, (StaffRole.CRM_ADMIN,)):
+            params = {**params, "record_type": [Person.RecordType.COMMUNITY.value]}
         return PeopleDirectoryQuery(self.get_business_people_queryset(), params).apply().select_related(
             "user", "professional_profile", "membership",
         ).prefetch_related(
@@ -337,6 +347,7 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
 
 
 class PersonMemberCreateView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, HasPeopleWriteAccess]
 
     @extend_schema(
@@ -400,6 +411,7 @@ class PersonMemberCreateView(generics.GenericAPIView):
 
 
 class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = PersonListSerializer
     permission_classes = [IsAuthenticated, HasPeopleAccess]
     lookup_url_kwarg = "person_id"
@@ -484,6 +496,13 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
             if person.archived_at is not None:
                 raise PersonLifecycleConflict("Archived people cannot be edited.")
 
+            if "primary_email" in input_serializer.validated_data and hasattr(person, "user"):
+                requested_email = input_serializer.validated_data["primary_email"] or ""
+                if requested_email.strip().casefold() != (person.user.email or "").strip().casefold():
+                    raise serializers.ValidationError({
+                        "primary_email": "A Person linked to a User must change its authentication email through the verified account workflow."
+                    })
+
             allow_duplicate_mobile = input_serializer.validated_data.pop("allow_duplicate_mobile", False)
             changes = {}
             duplicate_policy = None
@@ -540,7 +559,32 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
         return Response(PersonListSerializer(person).data)
 
 
+class PersonClassificationCorrectionView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [IsAuthenticated, HasActiveStaffRoleCodes]
+    required_role_codes = (StaffRole.CRM_ADMIN,)
+    serializer_class = PersonClassificationCorrectionSerializer
+
+    def post(self, request, person_id):
+        input_serializer = self.get_serializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+        try:
+            person = correct_person_classification(
+                person_id=person_id,
+                target_record_type=input_serializer.validated_data["record_type"],
+                actor_user=request.user,
+                reason=input_serializer.validated_data["reason"],
+                request=request,
+            )
+        except Person.DoesNotExist:
+            raise NotFound("Not found.")
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(error.message_dict)
+        return Response(PersonListSerializer(person).data)
+
+
 class PersonArchiveView(BusinessPersonQuerysetMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, HasPeopleWriteAccess]
 
     @extend_schema(
@@ -603,6 +647,7 @@ class PersonRestoreView(PersonArchiveView):
 
 
 class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = PersonOverviewSerializer
     permission_classes = [IsAuthenticated, HasPeopleAccess]
     lookup_url_kwarg = "person_id"
@@ -745,6 +790,7 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
 
 
 class PersonBrevoIntegrationView(BusinessPersonQuerysetMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, HasPeopleAccess]
     serializer_class = PersonBrevoIntegrationSerializer
 
@@ -782,6 +828,7 @@ class PersonAuditHistoryPagination(PageNumberPagination):
 
 
 class PersonAuditHistoryView(BusinessPersonQuerysetMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = PersonAuditHistoryEventSerializer
     permission_classes = [IsAuthenticated, HasPeopleAccess]
     pagination_class = PersonAuditHistoryPagination

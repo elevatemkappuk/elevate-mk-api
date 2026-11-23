@@ -78,6 +78,8 @@ class CommunityActivationApiTests(TestCase):
         self.assertIsNotNone(self.invitation.used_at)
         self.assertEqual(self.job.status, TransactionalEmailJob.Status.CANCELLED)
         self.assertTrue(AuditEvent.objects.filter(action=AuditEvent.Action.COMMUNITY_ACCOUNT_ACTIVATED).exists())
+        self.assertEqual(self.client.session["elevate_auth_context"], "community")
+        self.assertEqual(self.client.session["elevate_auth_version"], user.auth_version)
 
         me = self.client.get("/api/v1/community/me/")
         self.assertEqual(me.status_code, 200)
@@ -203,9 +205,9 @@ class CommunityActivationApiTests(TestCase):
             format="json",
         )
 
-        self.assertEqual(self.client.get("/api/v1/people/").status_code, 403)
-        self.assertEqual(self.client.get(f"/api/v1/people/{self.person.id}/membership/").status_code, 403)
-        self.assertEqual(self.client.get(f"/api/v1/people/{self.person.id}/marketing-preference/").status_code, 403)
+        self.assertEqual(self.client.get("/api/v1/people/").status_code, 401)
+        self.assertEqual(self.client.get(f"/api/v1/people/{self.person.id}/membership/").status_code, 401)
+        self.assertEqual(self.client.get(f"/api/v1/people/{self.person.id}/marketing-preference/").status_code, 401)
 
     def test_activation_requires_csrf(self):
         csrf_client = APIClient(enforce_csrf_checks=True)

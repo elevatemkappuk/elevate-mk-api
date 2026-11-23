@@ -37,6 +37,9 @@ class Membership(models.Model):
     def clean(self):
         errors = {}
 
+        if self.person_id and self.person.record_type != Person.RecordType.COMMUNITY:
+            errors["person"] = "Only Community Persons may hold a Membership."
+
         if self.ended_at and self.ended_at < self.joined_at:
             errors["ended_at"] = "ended_at cannot be before joined_at."
 
@@ -48,3 +51,7 @@ class Membership(models.Model):
 
         if errors:
             raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)

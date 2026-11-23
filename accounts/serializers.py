@@ -11,6 +11,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.models import normalize_email_address
 from accounts.services import user_is_active_mobile_member
+from accounts.revocation import validate_mobile_token_claims
 from memberships.serializers import MembershipSerializer
 from staff_access.permissions import get_active_staff_role_codes_for_user
 
@@ -105,6 +106,8 @@ class MobileTokenRefreshSerializer(TokenRefreshSerializer):
         if not user_is_active_mobile_member(user):
             raise InvalidToken("Token is invalid or expired")
 
+        validate_mobile_token_claims(user=user, token=refresh)
+
         return super().validate(attrs)
 
 
@@ -132,7 +135,23 @@ class RefreshTokenLogoutSerializer(serializers.Serializer):
                 code="refresh_token_user_mismatch",
             )
 
+        try:
+            access_session_id = str(request.auth["mobile_session_id"])
+            refresh_session_id = str(refresh["mobile_session_id"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise InvalidRefreshTokenError(
+                {"detail": "The refresh token is invalid, expired, or already revoked."},
+                code=InvalidRefreshTokenError.default_code,
+            ) from error
+
+        if access_session_id != refresh_session_id:
+            raise serializers.ValidationError(
+                {"detail": "The refresh token does not belong to the authenticated device."},
+                code="refresh_token_session_mismatch",
+            )
+
         attrs["token"] = refresh
+        attrs["mobile_session_id"] = refresh_session_id
         return attrs
 
 

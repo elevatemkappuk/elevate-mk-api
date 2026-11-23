@@ -23,13 +23,21 @@ from skills.models import PersonSkill, Skill
 from tags.models import PersonTag, Tag
 
 
+def ensure_canonical_staff_roles():
+    """Restore migration-seeded role fixtures after TransactionTestCase flushes."""
+    for code, name in StaffRole.CANONICAL_ROLES:
+        StaffRole.objects.update_or_create(code=code, defaults={"name": name, "is_active": True})
+
+
 @override_settings(ROOT_URLCONF="config.urls")
 class PersonBrevoIntegrationApiTests(TestCase):
     def setUp(self):
+        ensure_canonical_staff_roles()
         self.client = APIClient()
         self.viewer = User.objects.create_user(
             email="brevo-viewer@example.com", password="testpass123",
             person_first_name="Brevo", person_last_name="Viewer",
+            person_record_type=Person.RecordType.STAFF,
         )
         StaffRoleAssignment.objects.assign_role(user=self.viewer, role=StaffRole.objects.get(code=StaffRole.CRM_VIEWER))
         self.person = Person.objects.create(first_name="Read", last_name="Only", primary_email="read@example.com")
@@ -159,7 +167,7 @@ class PersonAdminTests(TestCase):
 
         self.assertEqual(record_type_field.choices, Person.RecordType.choices)
 
-    def test_person_admin_can_reclassify_existing_person(self):
+    def test_person_admin_cannot_reclassify_existing_person_directly(self):
         person = Person.objects.create(first_name="Taylor", last_name="Jordan")
         request = self.build_request()
 
@@ -167,7 +175,7 @@ class PersonAdminTests(TestCase):
         self.person_admin.save_model(request, person, form=None, change=True)
         person.refresh_from_db()
 
-        self.assertEqual(person.record_type, Person.RecordType.TECHNICAL)
+        self.assertEqual(person.record_type, Person.RecordType.COMMUNITY)
 
     def test_person_admin_reclassification_keeps_archived_at_independent(self):
         archived_at = timezone.now()
@@ -182,13 +190,14 @@ class PersonAdminTests(TestCase):
         self.person_admin.save_model(request, person, form=None, change=True)
         person.refresh_from_db()
 
-        self.assertEqual(person.record_type, Person.RecordType.TECHNICAL)
+        self.assertEqual(person.record_type, Person.RecordType.COMMUNITY)
         self.assertEqual(person.archived_at, archived_at)
 
 
 @override_settings(ROOT_URLCONF="config.urls")
 class PeopleApiTests(TestCase):
     def setUp(self):
+        ensure_canonical_staff_roles()
         self.client = APIClient()
         self.url = "/api/v1/people/"
         self.detail_url = "/api/v1/people/{person_id}/"
@@ -204,18 +213,21 @@ class PeopleApiTests(TestCase):
             password="testpass123",
             person_first_name="Admin",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.manager_user = User.objects.create_user(
             email="manager@example.com",
             password="testpass123",
             person_first_name="Manager",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.viewer_user = User.objects.create_user(
             email="viewer@example.com",
             password="testpass123",
             person_first_name="Viewer",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
 
         self.admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
@@ -552,6 +564,7 @@ class PeopleApiTests(TestCase):
             set(response.data.keys()),
             {
                 "id",
+                "record_type",
                 "first_name",
                 "last_name",
                 "primary_email",
@@ -565,10 +578,10 @@ class PeopleApiTests(TestCase):
             },
         )
 
-    def test_detail_does_not_return_record_type(self):
+    def test_detail_returns_read_only_record_type(self):
         self.authenticate(self.admin_user)
         response = self.client.get(self.get_detail_url(self.active_business.id))
-        self.assertNotIn("record_type", response.data)
+        self.assertEqual(response.data["record_type"], Person.RecordType.COMMUNITY.value)
 
     def test_detail_does_not_return_auth_or_staff_internals(self):
         self.authenticate(self.admin_user)
@@ -583,6 +596,7 @@ class PeopleApiTests(TestCase):
 @override_settings(ROOT_URLCONF="config.urls")
 class PersonOverviewApiTests(TestCase):
     def setUp(self):
+        ensure_canonical_staff_roles()
         self.client = APIClient()
         self.url_template = "/api/v1/people/{person_id}/overview/"
 
@@ -597,18 +611,21 @@ class PersonOverviewApiTests(TestCase):
             password="testpass123",
             person_first_name="Admin",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.manager_user = User.objects.create_user(
             email="manager-overview@example.com",
             password="testpass123",
             person_first_name="Manager",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.viewer_user = User.objects.create_user(
             email="viewer-overview@example.com",
             password="testpass123",
             person_first_name="Viewer",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
 
         self.admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
@@ -1136,6 +1153,7 @@ class PersonOverviewApiTests(TestCase):
             set(response.data["person"].keys()),
             {
                 "id",
+                "record_type",
                 "first_name",
                 "last_name",
                 "primary_email",
@@ -1157,7 +1175,7 @@ class PersonOverviewApiTests(TestCase):
         self.authenticate(self.admin_user)
         response = self.client.get(self.get_url(self.active_member_person.id))
 
-        self.assertNotIn("record_type", response.data["person"])
+        self.assertEqual(response.data["person"]["record_type"], Person.RecordType.COMMUNITY)
         self.assertNotIn("user", response.data["person"])
         self.assertNotIn("is_staff", response.data["person"])
         self.assertNotIn("is_superuser", response.data["person"])
@@ -1175,7 +1193,7 @@ class PersonOverviewApiTests(TestCase):
         PersonTag.objects.create(person=self.active_member_person, tag=self.vip_tag, assigned_by=self.admin_user)
 
         self.authenticate(self.admin_user)
-        with self.assertNumQueries(7):
+        with self.assertNumQueries(8):
             response = self.client.get(self.get_url(self.active_member_person.id))
 
         self.assertEqual(response.status_code, 200)
@@ -1184,6 +1202,7 @@ class PersonOverviewApiTests(TestCase):
 @override_settings(ROOT_URLCONF="config.urls")
 class PersonWriteLifecycleApiTests(TestCase):
     def setUp(self):
+        ensure_canonical_staff_roles()
         self.client = APIClient()
         self.client.raise_request_exception = False
         self.create_url = "/api/v1/people/"
@@ -1191,14 +1210,17 @@ class PersonWriteLifecycleApiTests(TestCase):
         self.admin_user = User.objects.create_user(
             email="person-write-admin@example.com", password="testpass123",
             person_first_name="Admin", person_last_name="Writer",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.manager_user = User.objects.create_user(
             email="person-write-manager@example.com", password="testpass123",
             person_first_name="Manager", person_last_name="Writer",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.viewer_user = User.objects.create_user(
             email="person-write-viewer@example.com", password="testpass123",
             person_first_name="Viewer", person_last_name="Writer",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.nonstaff_user = User.objects.create_user(
             email="person-write-nonstaff@example.com", password="testpass123",
@@ -1684,6 +1706,7 @@ class PersonWriteLifecycleApiTests(TestCase):
 @override_settings(ROOT_URLCONF="config.urls")
 class PeopleDirectoryQueryApiTests(TestCase):
     def setUp(self):
+        ensure_canonical_staff_roles()
         self.client = APIClient()
         self.url = "/api/v1/people/"
         self.admin_user = User.objects.create_user(email="directory-admin@example.com", password="testpass123", person_first_name="Directory", person_last_name="Admin", person_record_type=Person.RecordType.TECHNICAL)

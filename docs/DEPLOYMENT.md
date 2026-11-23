@@ -168,11 +168,11 @@ follows:
 
 | Setting / Railway variable | Production | Staging |
 | --- | --- | --- |
-| `ALLOWED_HOSTS` | `elevate-mk-api-production.up.railway.app` | `elevate-mk-api-staging.up.railway.app` |
-| `CORS_ALLOWED_ORIGINS` | `https://<crm-production-domain>,https://community.elevatemk.org` | `https://elevate-mk-crm-staging.up.railway.app` |
-| `CSRF_TRUSTED_ORIGINS` | `https://<crm-production-domain>,https://community.elevatemk.org` | `https://elevate-mk-crm-staging.up.railway.app` |
-| `CRM_FRONTEND_URL` | `https://<crm-production-domain>` | `https://elevate-mk-crm-staging.up.railway.app` |
-| `COMMUNITY_FRONTEND_URL` | `https://community.elevatemk.org` | `http://localhost:4201` or the staging Community origin |
+| `ALLOWED_HOSTS` | `elevate-mk-api-production.up.railway.app,crm-api.elevatemk.org,community-api.elevatemk.org` | `elevate-mk-api-staging.up.railway.app,crm-api.staging.elevatemk.org,community-api.staging.elevatemk.org` |
+| `CORS_ALLOWED_ORIGINS` | `https://<crm-production-domain>,https://<community-production-domain>` | `https://<crm-staging-domain>,https://<community-staging-domain>` |
+| `CSRF_TRUSTED_ORIGINS` | `https://<crm-production-domain>,https://<community-production-domain>` | `https://<crm-staging-domain>,https://<community-staging-domain>` |
+| `CRM_FRONTEND_URL` | `https://<crm-production-domain>` | `https://<crm-staging-domain>` |
+| `COMMUNITY_FRONTEND_URL` | `https://<community-production-domain>` | `https://<community-staging-domain>` |
 | `COMMUNITY_PASSWORD_RESET_THROTTLE_RATE` | `5/hour` | `5/hour` |
 | `COMMUNITY_DIRECTORY_THROTTLE_RATE` | `60/hour` | `60/hour` |
 | `COMMUNITY_CONNECTIONS_THROTTLE_RATE` | `60/hour` | `60/hour` |
@@ -218,13 +218,16 @@ the API cookie. The endpoint remains safe and unauthenticated, while unsafe
 endpoints retain normal Django CSRF enforcement.
 
 For the current staging deployment, set these values on the backend Railway
-service:
+service. The CRM and Community API aliases route to this Django service and
+must remain host-only cookie origins; do not set either cookie Domain value.
 
 ```text
-ALLOWED_HOSTS=elevate-mk-api-staging.up.railway.app
-CORS_ALLOWED_ORIGINS=https://elevate-mk-crm-staging.up.railway.app
-CSRF_TRUSTED_ORIGINS=https://elevate-mk-crm-staging.up.railway.app
-CRM_FRONTEND_URL=https://elevate-mk-crm-staging.up.railway.app
+ALLOWED_HOSTS=elevate-mk-api-staging.up.railway.app,crm-api.staging.elevatemk.org,community-api.staging.elevatemk.org
+# Include the exact CRM and Community frontend origins configured for staging.
+CORS_ALLOWED_ORIGINS=https://<crm-staging-frontend>,https://<community-staging-frontend>
+CSRF_TRUSTED_ORIGINS=https://<crm-staging-frontend>,https://<community-staging-frontend>
+CRM_FRONTEND_URL=https://<crm-staging-frontend>
+COMMUNITY_FRONTEND_URL=https://<community-staging-frontend>
 DJANGO_DEBUG=False
 SECURE_SSL_REDIRECT=True
 CSRF_COOKIE_SAMESITE=None

@@ -6,6 +6,7 @@ from rest_framework.exceptions import APIException, NotFound
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from accounts.authentication import CRM_SESSION_AUTHENTICATION_CLASSES
 from audit.models import AuditEvent
 from audit.services import record_audit_event
 from people.models import Person
@@ -71,6 +72,7 @@ def get_profile_audit_changes(before_state, after_state):
 
 
 class IndustryListView(generics.ListAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = IndustryOptionSerializer
     permission_classes = [IsAuthenticated, HasProfessionalProfileAccess]
     pagination_class = None
@@ -108,6 +110,7 @@ class IndustryListView(generics.ListAPIView):
 
 
 class ProfessionalProfileDetailView(generics.RetrieveAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = ProfessionalProfileSerializer
     lookup_url_kwarg = "person_id"
     lookup_field = "person_id"

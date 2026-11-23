@@ -52,6 +52,10 @@ class CommunityAccountMobileApiTests(TestCase):
     def authenticate(self, client=None):
         target = client or self.client
         target.force_login(self.user)
+        session = target.session
+        session["elevate_auth_context"] = "community"
+        session["elevate_auth_version"] = self.user.auth_version
+        session.save()
         return target
 
     def payload(self, mobile=None, phone_region="GB"):
@@ -62,7 +66,8 @@ class CommunityAccountMobileApiTests(TestCase):
         self.assertEqual(response.status_code, 401)
         self.authenticate()
         self.person.membership.status = Membership.Status.FORMER
-        self.person.membership.save(update_fields=["status"])
+        self.person.membership.ended_at = timezone.localdate()
+        self.person.membership.save(update_fields=["status", "ended_at"])
         response = self.client.patch(self.url, self.payload(), format="json")
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.data["code"], "COMMUNITY_ACCESS_UNAVAILABLE")

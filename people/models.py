@@ -1,11 +1,22 @@
 import re
+from enum import Enum
 
 from django.db import models
 
 
 class PersonQuerySet(models.QuerySet):
+    def community(self):
+        return self.filter(record_type=Person.RecordType.COMMUNITY)
+
+    def active_community(self):
+        return self.community().filter(archived_at__isnull=True)
+
+    def archived_community(self):
+        return self.community().filter(archived_at__isnull=False)
+
     def business(self):
-        return self.filter(record_type=Person.RecordType.BUSINESS)
+        """Compatibility alias for the legacy business-domain queryset."""
+        return self.community()
 
     def active_business(self):
         return self.business().filter(archived_at__isnull=True)
@@ -15,9 +26,17 @@ class PersonQuerySet(models.QuerySet):
 
 
 class Person(models.Model):
-    class RecordType(models.TextChoices):
-        BUSINESS = "BUSINESS", "Business"
-        TECHNICAL = "TECHNICAL", "Technical"
+    class RecordType(str, Enum):
+        COMMUNITY = "COMMUNITY"
+        STAFF = "STAFF"
+        TECHNICAL = "TECHNICAL"
+        BUSINESS = "COMMUNITY"  # Transitional source-compatibility alias.
+
+    RecordType.choices = [
+        (RecordType.COMMUNITY.value, "Community"),
+        (RecordType.STAFF.value, "Staff"),
+        (RecordType.TECHNICAL.value, "Technical"),
+    ]
 
     class AgeRange(models.TextChoices):
         UNDER_25 = "UNDER_25", "Under 25"
@@ -37,7 +56,7 @@ class Person(models.Model):
     record_type = models.CharField(
         max_length=20,
         choices=RecordType.choices,
-        default=RecordType.BUSINESS,
+        default="COMMUNITY",
     )
     first_name = models.CharField(max_length=150)
     last_name = models.CharField(max_length=150)

@@ -110,6 +110,7 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 
 AUTH_USER_MODEL = 'accounts.User'
+TEST_RUNNER = 'config.test_runner.ElevateTestRunner'
 
 
 # Database
@@ -196,9 +197,14 @@ CSRF_TRUSTED_ORIGINS = env.list(
 )
 
 SESSION_COOKIE_HTTPONLY = True
+# Keep browser sessions host-only. CRM and Community use separate API
+# hostnames in deployed environments, so neither session nor CSRF state may
+# be widened to a parent domain.
+SESSION_COOKIE_DOMAIN = None
 SESSION_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_SAMESITE = env("SESSION_COOKIE_SAMESITE", default="Lax" if DEBUG else "None")
 CSRF_COOKIE_HTTPONLY = False
+CSRF_COOKIE_DOMAIN = None
 CSRF_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SAMESITE = env("CSRF_COOKIE_SAMESITE", default="Lax" if DEBUG else "None")
 COMMUNITY_JOIN_THROTTLE_RATE = env("COMMUNITY_JOIN_THROTTLE_RATE", default="10/hour")
@@ -290,6 +296,8 @@ MARKETING_SYNC_PROVIDER = env("MARKETING_SYNC_PROVIDER", default="BREVO")
 CRM_FRONTEND_URL = env("CRM_FRONTEND_URL", default="http://localhost:4200")
 COMMUNITY_FRONTEND_URL = env("COMMUNITY_FRONTEND_URL", default="http://localhost:4201")
 BREVO_COMMUNITY_ACTIVATION_TEMPLATE_ID = env("BREVO_COMMUNITY_ACTIVATION_TEMPLATE_ID", default="")
+BREVO_STAFF_INVITATION_TEMPLATE_ID = env("BREVO_STAFF_INVITATION_TEMPLATE_ID", default="")
+BREVO_STAFF_EMAIL_CHANGE_TEMPLATE_ID = env("BREVO_STAFF_EMAIL_CHANGE_TEMPLATE_ID", default="")
 
 
 def _positive_float_setting(name, default):

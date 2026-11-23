@@ -9,6 +9,8 @@ class TransactionalEmailJob(models.Model):
         COMMUNITY_ACTIVATION = "COMMUNITY_ACTIVATION", "Community activation"
         COMMUNITY_EMAIL_CHANGE = "COMMUNITY_EMAIL_CHANGE", "Community email change verification"
         COMMUNITY_EMAIL_CHANGE_SECURITY = "COMMUNITY_EMAIL_CHANGE_SECURITY", "Community email change security notification"
+        STAFF_INVITATION = "STAFF_INVITATION", "Staff invitation"
+        STAFF_EMAIL_CHANGE = "STAFF_EMAIL_CHANGE", "Staff email change verification"
 
     class Status(models.TextChoices):
         PENDING = "PENDING", "Pending"
@@ -27,6 +29,20 @@ class TransactionalEmailJob(models.Model):
     )
     email_change_request = models.ForeignKey(
         "community.CommunityEmailChangeRequest",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="transactional_email_jobs",
+    )
+    staff_invitation = models.OneToOneField(
+        "staff_access.StaffInvitation",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="transactional_email_job",
+    )
+    staff_email_change_request = models.ForeignKey(
+        "staff_access.StaffEmailChangeRequest",
         on_delete=models.PROTECT,
         null=True,
         blank=True,
@@ -61,8 +77,10 @@ class TransactionalEmailJob(models.Model):
         constraints = [
             models.CheckConstraint(
                 condition=(
-                    models.Q(invitation__isnull=False, email_change_request__isnull=True)
-                    | models.Q(invitation__isnull=True, email_change_request__isnull=False)
+                    models.Q(invitation__isnull=False, email_change_request__isnull=True, staff_invitation__isnull=True, staff_email_change_request__isnull=True)
+                    | models.Q(invitation__isnull=True, email_change_request__isnull=False, staff_invitation__isnull=True, staff_email_change_request__isnull=True)
+                    | models.Q(invitation__isnull=True, email_change_request__isnull=True, staff_invitation__isnull=False, staff_email_change_request__isnull=True)
+                    | models.Q(invitation__isnull=True, email_change_request__isnull=True, staff_invitation__isnull=True, staff_email_change_request__isnull=False)
                 ),
                 name="transactional_email_job_single_resource",
             ),

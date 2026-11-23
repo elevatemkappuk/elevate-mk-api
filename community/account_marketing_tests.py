@@ -51,6 +51,10 @@ class CommunityAccountMarketingPreferenceApiTests(TestCase):
     def authenticate(self, client=None):
         target = client or self.client
         target.force_login(self.user)
+        session = target.session
+        session["elevate_auth_context"] = "community"
+        session["elevate_auth_version"] = self.user.auth_version
+        session.save()
         return target
 
     def test_unauthenticated_and_ineligible_requests_are_rejected(self):
@@ -58,7 +62,8 @@ class CommunityAccountMarketingPreferenceApiTests(TestCase):
         self.assertEqual(response.status_code, 401)
         self.authenticate()
         self.membership.status = Membership.Status.FORMER
-        self.membership.save(update_fields=["status"])
+        self.membership.ended_at = timezone.localdate()
+        self.membership.save(update_fields=["status", "ended_at"])
         response = self.client.patch(self.url, {"email_marketing": True}, format="json")
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.data["code"], "COMMUNITY_ACCESS_UNAVAILABLE")

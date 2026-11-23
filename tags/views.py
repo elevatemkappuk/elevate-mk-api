@@ -7,6 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.serializers import ValidationError
 
+from accounts.authentication import CRM_SESSION_AUTHENTICATION_CLASSES
 from audit.models import AuditEvent
 from audit.services import record_audit_event
 from people.models import Person
@@ -38,6 +39,7 @@ class TagAssignmentConflict(APIException):
 
 
 class TagListView(generics.ListAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = TagSummarySerializer
     permission_classes = [IsAuthenticated, HasTagAccess]
     pagination_class = None
@@ -76,6 +78,7 @@ class TagListView(generics.ListAPIView):
 
 
 class PersonTagListView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = TagSummarySerializer
     pagination_class = None
 
@@ -264,6 +267,7 @@ class PersonTagListView(generics.GenericAPIView):
 
 
 class PersonTagRemoveView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = EmptyRequestSerializer
     permission_classes = [IsAuthenticated, HasTagWriteAccess]
 

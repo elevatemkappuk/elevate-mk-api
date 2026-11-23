@@ -3,6 +3,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.authentication import CRM_SESSION_AUTHENTICATION_CLASSES
 from staff_access.models import StaffRole
 from staff_access.permissions import HasActiveStaffRoleCodes
 from .queries import dashboard_projection
@@ -14,6 +15,7 @@ class HasDashboardAccess(HasActiveStaffRoleCodes):
 
 
 class DashboardView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, HasDashboardAccess]
 
     @extend_schema(

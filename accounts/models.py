@@ -1,5 +1,8 @@
+import uuid
+
 from django.contrib.auth.models import AbstractUser, UserManager as DjangoUserManager
-from django.db import models
+from django.db import models, transaction
+from django.utils import timezone
 
 from people.models import Person
 
@@ -23,7 +26,7 @@ class UserManager(DjangoUserManager):
         person_first_name = extra_fields.pop("person_first_name", None)
         person_last_name = extra_fields.pop("person_last_name", None)
         person_primary_email = extra_fields.pop("person_primary_email", None)
-        person_record_type = extra_fields.pop("person_record_type", Person.RecordType.BUSINESS)
+        person_record_type = extra_fields.pop("person_record_type", Person.RecordType.COMMUNITY)
         if person_primary_email:
             person_primary_email = normalize_email_address(person_primary_email)
 
@@ -71,6 +74,8 @@ class User(AbstractUser):
     last_name = None
     email = models.EmailField("email address", unique=True)
     person = models.OneToOneField(Person, on_delete=models.PROTECT, related_name="user")
+    auth_version = models.PositiveBigIntegerField(default=1)
+    crm_session_version = models.PositiveBigIntegerField(default=1)
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = []
@@ -78,8 +83,21 @@ class User(AbstractUser):
     objects = UserManager()
 
     def save(self, *args, **kwargs):
+        previous_is_active = None
+        if self.pk:
+            previous_is_active = type(self).objects.filter(pk=self.pk).values_list("is_active", flat=True).first()
         self.email = normalize_email_address(self.email)
-        super().save(*args, **kwargs)
+        with transaction.atomic(using=kwargs.get("using")):
+            super().save(*args, **kwargs)
+            if previous_is_active is not None and previous_is_active != self.is_active:
+                from accounts.revocation import handle_user_active_state_change
+
+                handle_user_active_state_change(
+                    user=self,
+                    was_active=previous_is_active,
+                    actor_user=getattr(self, "_audit_actor_user", None),
+                    request=getattr(self, "_audit_request", None),
+                )
 
     def get_full_name(self):
         return f"{self.person.first_name} {self.person.last_name}".strip()
@@ -93,3 +111,22 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.email
+
+
+class MobileAuthSession(models.Model):
+    """Server-authoritative lifecycle record for one mobile token pair."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="mobile_auth_sessions",
+    )
+    created_at = models.DateTimeField(default=timezone.now)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_reason = models.CharField(max_length=100, null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "revoked_at"], name="mobile_session_active_idx"),
+        ]
