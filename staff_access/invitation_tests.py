@@ -13,6 +13,9 @@ from staff_access.services import (
     create_staff_invitation,
     redeem_staff_invitation,
     request_staff_email_change,
+    update_pending_staff_invitation_roles,
+    offboard_staff_user,
+    reactivate_staff_user,
 )
 from notifications.jobs import process_next_transactional_email_job
 
@@ -84,6 +87,37 @@ class StaffInvitationTests(TestCase):
         first.refresh_from_db()
         self.assertIsNotNone(first.superseded_at)
         self.assertIsNone(second.superseded_at)
+
+    def test_role_update_replaces_even_after_previous_delivery_completed(self):
+        invitation = create_staff_invitation(
+            actor_user=self.actor, email="roles@example.com", first_name="Role", last_name="Change",
+            role_codes=[StaffRole.CRM_VIEWER],
+        )
+        with patch("notifications.jobs.send_transactional_email", return_value=SimpleNamespace(provider_message_id="test-id")):
+            process_next_transactional_email_job()
+        replacement = update_pending_staff_invitation_roles(
+            invitation=invitation, actor_user=self.actor, role_codes=[StaffRole.CRM_MANAGER],
+        )
+        invitation.refresh_from_db()
+        self.assertIsNotNone(invitation.superseded_at)
+        self.assertEqual(replacement.pending_role_codes, [StaffRole.CRM_MANAGER])
+        self.assertEqual(StaffInvitation.objects.filter(intended_email="roles@example.com").count(), 2)
+
+    def test_reactivation_uses_fresh_password_and_reuses_inactive_staff_identity(self):
+        target = User.objects.create_user(
+            email="reactivate@example.com", password="Old-password-123!",
+            person=Person.objects.create(first_name="Re", last_name="Activate", primary_email="reactivate@example.com", record_type=Person.RecordType.STAFF),
+        )
+        StaffRoleAssignment.objects.assign_role(user=target, role=StaffRole.objects.get(code=StaffRole.CRM_VIEWER))
+        offboard_staff_user(target_user=target, actor_user=self.actor)
+        invitation = reactivate_staff_user(target_user=target, actor_user=self.actor)
+        with patch("notifications.jobs.send_transactional_email", return_value=SimpleNamespace(provider_message_id="test-id")) as send:
+            process_next_transactional_email_job()
+        token = urlparse(send.call_args.kwargs["template_params"]["activation_url"]).path.rstrip("/").split("/")[-1]
+        redeemed = redeem_staff_invitation(public_id=invitation.public_id, raw_token=token, password="New-password-123!")
+        self.assertEqual(redeemed.pk, target.pk)
+        self.assertTrue(redeemed.check_password("New-password-123!"))
+        self.assertTrue(StaffRoleAssignment.objects.active().filter(user=target, role__code=StaffRole.CRM_VIEWER).exists())
 
     def test_invitation_rejects_passwords_that_fail_configured_validators(self):
         invitation = create_staff_invitation(

@@ -34,8 +34,9 @@ def create_staff_invitation(*, actor_user, email, first_name, last_name, role_co
     email = _normalize_invitation_email(email)
     if not email:
         raise ValidationError({"email": "An email address is required."})
-    if User.objects.filter(email=email).exists():
-        raise ValidationError({"email": "An account already uses this email address."})
+    existing_user = User.objects.select_related("person").filter(email=email).first()
+    if existing_user is not None and (existing_user.is_active or existing_user.person.record_type != Person.RecordType.STAFF):
+        raise ValidationError({"email": "An active or non-Staff account already uses this email address."})
     allowed_codes = StaffRole.canonical_codes()
     role_codes = list(dict.fromkeys(role_codes or []))
     if not role_codes or not set(role_codes).issubset(allowed_codes):
@@ -119,10 +120,8 @@ def update_pending_staff_invitation_roles(*, invitation, actor_user, role_codes)
         raise ValidationError("Only a current pending Staff invitation can be updated.")
     with transaction.atomic():
         invitation = StaffInvitation.objects.select_for_update().get(pk=invitation.pk)
-        invitation.pending_role_codes = role_codes
-        invitation.token_hash = None
-        invitation.expires_at = timezone.now() + timedelta(hours=72)
-        invitation.save(update_fields=["pending_role_codes", "token_hash", "expires_at", "updated_at"])
+        invitation.superseded_at = timezone.now()
+        invitation.save(update_fields=["superseded_at", "updated_at"])
         from notifications.models import TransactionalEmailJob
         old_job = TransactionalEmailJob.objects.select_for_update().filter(staff_invitation=invitation).first()
         if old_job and old_job.status in (TransactionalEmailJob.Status.PENDING, TransactionalEmailJob.Status.PROCESSING):
@@ -130,8 +129,17 @@ def update_pending_staff_invitation_roles(*, invitation, actor_user, role_codes)
             old_job.completed_at = timezone.now()
             old_job.last_error_code = "INVITATION_ROLES_UPDATED"
             old_job.save(update_fields=["status", "completed_at", "last_error_code", "updated_at"])
-        _queue_staff_invitation_email(invitation)
-    return invitation
+        replacement = StaffInvitation.objects.create(
+            intended_email=invitation.intended_email,
+            first_name=invitation.first_name,
+            last_name=invitation.last_name,
+            pending_role_codes=role_codes,
+            token_hash=None,
+            expires_at=timezone.now() + timedelta(hours=72),
+            created_by=actor_user,
+        )
+        _queue_staff_invitation_email(replacement)
+    return replacement
 
 
 def offboard_staff_user(*, target_user, actor_user, request=None):
@@ -154,6 +162,7 @@ def offboard_staff_user(*, target_user, actor_user, request=None):
 
 def reactivate_staff_user(*, target_user, actor_user):
     """Start a fresh invitation; never restores the old User or assignments."""
+    from staff_access.permissions import user_has_any_active_staff_role
     if not user_has_any_active_staff_role(actor_user, (StaffRole.CRM_ADMIN,)):
         raise PermissionError("Only an active CRM_ADMIN may reactivate Staff.")
     if target_user.person.record_type != "STAFF":
