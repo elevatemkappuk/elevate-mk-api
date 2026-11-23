@@ -307,6 +307,7 @@ def correct_person_classification(*, person_id, target_record_type, actor_user, 
     serializer.  This service is the single write boundary for the exceptional
     correction operation and keeps related identity/access state explicit.
     """
+    from accounts.models import User
     from accounts.revocation import revoke_user_credentials
     from audit.models import AuditEvent
     from audit.services import record_audit_event
@@ -323,7 +324,7 @@ def correct_person_classification(*, person_id, target_record_type, actor_user, 
         raise PermissionError("Only an active CRM_ADMIN may correct Person classification.")
 
     with transaction.atomic():
-        person = Person.objects.select_for_update().select_related("user").get(pk=person_id)
+        person = Person.objects.select_for_update().get(pk=person_id)
         previous_type = person.record_type
         if previous_type == target_record_type:
             return person
@@ -339,7 +340,7 @@ def correct_person_classification(*, person_id, target_record_type, actor_user, 
         person.record_type = target_record_type
         person.save(update_fields=["record_type", "updated_at"])
 
-        user = getattr(person, "user", None)
+        user = User.objects.select_for_update().filter(person_id=person.pk).first()
         if user is not None:
             revoke_user_credentials(
                 user=user,
