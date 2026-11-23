@@ -14,9 +14,9 @@ from staff_access.models import StaffRole, StaffRoleAssignment
 
 class ImportReconciliationApiTests(APITestCase):
     def setUp(self):
-        self.admin = self.create_user("admin@example.com")
-        self.manager = self.create_user("manager@example.com")
-        self.viewer = self.create_user("viewer@example.com")
+        self.admin = self.create_user("admin@example.com", person_record_type=Person.RecordType.STAFF)
+        self.manager = self.create_user("manager@example.com", person_record_type=Person.RecordType.STAFF)
+        self.viewer = self.create_user("viewer@example.com", person_record_type=Person.RecordType.STAFF)
         self.superuser = self.create_user("superuser@example.com", is_staff=True, is_superuser=True)
         self.crm_admin_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_ADMIN, defaults={"name": "CRM Administrator"})
         manager_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_MANAGER, defaults={"name": "CRM Manager"})

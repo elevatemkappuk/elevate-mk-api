@@ -65,6 +65,27 @@ class MembershipFormIngestionTests(TestCase):
         self.assertEqual({error["code"] for error in record.validation_errors}, {"invalid_email", "invalid_url"})
         self.assertEqual(record.raw_data["Email (preferably your personal email)"], "invalid")
 
+    def test_malformed_mobile_marks_only_that_row_invalid_and_preserves_source_value(self):
+        batch = ingest_membership_form(
+            workbook_bytes=workbook_bytes(rows=[
+                self.sample_row(**{"Mobile Number": "hello123"}),
+                self.sample_row(**{
+                    "Email (preferably your personal email)": "other@example.com",
+                    "Mobile Number": "07911 123 456",
+                }),
+            ]),
+            source_filename="mobile-review.xlsx",
+        )
+        records = list(batch.records.order_by("id"))
+
+        self.assertEqual(records[0].status, ImportRecord.Status.INVALID)
+        self.assertIn(
+            {"field": "mobile", "code": "INVALID_MOBILE", "message": "Mobile number needs review."},
+            records[0].validation_errors,
+        )
+        self.assertEqual(records[0].raw_data["Mobile Number"], "hello123")
+        self.assertEqual(records[1].status, ImportRecord.Status.STAGED)
+
     def test_unknown_age_range_marks_row_invalid_without_replacing_it_with_null(self):
         batch = ingest_membership_form(
             workbook_bytes=workbook_bytes(rows=[self.sample_row(**{"Age ": "18-24"})]),

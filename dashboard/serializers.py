@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_serializer
 from people.models import Person
 
 
@@ -32,6 +33,7 @@ class AgeRangeCountSerializer(LabelCountSerializer):
     value = serializers.ChoiceField(choices=Person.AgeRange.choices)
 
 
+@extend_schema_serializer(component_name="DashboardCommunityProfile")
 class CommunityProfileSerializer(serializers.Serializer):
     top_locations = LabelCountSerializer(many=True, max_length=5)
     top_industries = IndustryCountSerializer(many=True, max_length=5)
@@ -41,10 +43,18 @@ class CommunityProfileSerializer(serializers.Serializer):
 class AttentionSerializer(serializers.Serializer):
     imports_needing_review = serializers.IntegerField(min_value=0)
     archived_people = serializers.IntegerField(min_value=0)
+    campaigns_needing_attention = serializers.IntegerField(min_value=0)
+
+
+class MarketingSerializer(serializers.Serializer):
+    active_campaigns = serializers.IntegerField(min_value=0)
+    ready_in_brevo = serializers.IntegerField(min_value=0)
+    needs_attention = serializers.IntegerField(min_value=0)
 
 
 class DashboardSerializer(serializers.Serializer):
     overview = OverviewSerializer()
     growth = GrowthSerializer()
     community_profile = CommunityProfileSerializer()
+    marketing = MarketingSerializer()
     attention = AttentionSerializer()

@@ -1,4 +1,5 @@
 from django.contrib.admin.sites import AdminSite
+from datetime import timedelta
 from unittest import mock
 from django.test import override_settings
 from django.test import RequestFactory
@@ -8,8 +9,10 @@ from django.test import TestCase
 
 from accounts.models import User
 from audit.models import AuditEvent
+from community.models import CommunityAccountInvitation
 from interests.models import Interest, PersonInterest
 from memberships.models import Membership
+from notifications.models import TransactionalEmailJob
 from external_references.models import ExternalPersonSyncJob
 from people.admin import PersonAdmin
 from people.models import Person
@@ -18,6 +21,51 @@ from rest_framework.test import APIClient
 from staff_access.models import StaffRole, StaffRoleAssignment
 from skills.models import PersonSkill, Skill
 from tags.models import PersonTag, Tag
+
+
+def ensure_canonical_staff_roles():
+    """Restore migration-seeded role fixtures after TransactionTestCase flushes."""
+    for code, name in StaffRole.CANONICAL_ROLES:
+        StaffRole.objects.update_or_create(code=code, defaults={"name": name, "is_active": True})
+
+
+@override_settings(ROOT_URLCONF="config.urls")
+class PersonBrevoIntegrationApiTests(TestCase):
+    def setUp(self):
+        ensure_canonical_staff_roles()
+        self.client = APIClient()
+        self.viewer = User.objects.create_user(
+            email="brevo-viewer@example.com", password="testpass123",
+            person_first_name="Brevo", person_last_name="Viewer",
+            person_record_type=Person.RecordType.STAFF,
+        )
+        StaffRoleAssignment.objects.assign_role(user=self.viewer, role=StaffRole.objects.get(code=StaffRole.CRM_VIEWER))
+        self.person = Person.objects.create(first_name="Read", last_name="Only", primary_email="read@example.com")
+        self.url = f"/api/v1/people/{self.person.id}/brevo-integration/"
+
+    def test_viewer_can_read_safe_not_connected_projection(self):
+        self.client.force_authenticate(self.viewer)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["provider"], "BREVO")
+        self.assertEqual(response.data["integration"]["status"], "NOT_CONNECTED")
+        self.assertIsNone(response.data["integration"]["provider_profile_url"])
+        self.assertEqual(response.data["marketing_preference"]["state"], "UNKNOWN")
+
+    def test_non_crm_user_is_forbidden(self):
+        user = User.objects.create_user(
+            email="brevo-outsider@example.com", password="testpass123",
+            person_first_name="Brevo", person_last_name="Outsider",
+        )
+        self.client.force_authenticate(user)
+        self.assertEqual(self.client.get(self.url).status_code, 403)
+
+    def test_technical_person_is_not_exposed(self):
+        technical = Person.objects.create(
+            first_name="Technical", last_name="Only", record_type=Person.RecordType.TECHNICAL,
+        )
+        self.client.force_authenticate(self.viewer)
+        self.assertEqual(self.client.get(f"/api/v1/people/{technical.id}/brevo-integration/").status_code, 404)
 
 
 class PersonModelTests(TestCase):
@@ -119,7 +167,7 @@ class PersonAdminTests(TestCase):
 
         self.assertEqual(record_type_field.choices, Person.RecordType.choices)
 
-    def test_person_admin_can_reclassify_existing_person(self):
+    def test_person_admin_cannot_reclassify_existing_person_directly(self):
         person = Person.objects.create(first_name="Taylor", last_name="Jordan")
         request = self.build_request()
 
@@ -127,7 +175,7 @@ class PersonAdminTests(TestCase):
         self.person_admin.save_model(request, person, form=None, change=True)
         person.refresh_from_db()
 
-        self.assertEqual(person.record_type, Person.RecordType.TECHNICAL)
+        self.assertEqual(person.record_type, Person.RecordType.COMMUNITY)
 
     def test_person_admin_reclassification_keeps_archived_at_independent(self):
         archived_at = timezone.now()
@@ -142,13 +190,14 @@ class PersonAdminTests(TestCase):
         self.person_admin.save_model(request, person, form=None, change=True)
         person.refresh_from_db()
 
-        self.assertEqual(person.record_type, Person.RecordType.TECHNICAL)
+        self.assertEqual(person.record_type, Person.RecordType.COMMUNITY)
         self.assertEqual(person.archived_at, archived_at)
 
 
 @override_settings(ROOT_URLCONF="config.urls")
 class PeopleApiTests(TestCase):
     def setUp(self):
+        ensure_canonical_staff_roles()
         self.client = APIClient()
         self.url = "/api/v1/people/"
         self.detail_url = "/api/v1/people/{person_id}/"
@@ -164,18 +213,21 @@ class PeopleApiTests(TestCase):
             password="testpass123",
             person_first_name="Admin",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.manager_user = User.objects.create_user(
             email="manager@example.com",
             password="testpass123",
             person_first_name="Manager",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.viewer_user = User.objects.create_user(
             email="viewer@example.com",
             password="testpass123",
             person_first_name="Viewer",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
 
         self.admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
@@ -512,6 +564,7 @@ class PeopleApiTests(TestCase):
             set(response.data.keys()),
             {
                 "id",
+                "record_type",
                 "first_name",
                 "last_name",
                 "primary_email",
@@ -525,10 +578,10 @@ class PeopleApiTests(TestCase):
             },
         )
 
-    def test_detail_does_not_return_record_type(self):
+    def test_detail_returns_read_only_record_type(self):
         self.authenticate(self.admin_user)
         response = self.client.get(self.get_detail_url(self.active_business.id))
-        self.assertNotIn("record_type", response.data)
+        self.assertEqual(response.data["record_type"], Person.RecordType.COMMUNITY.value)
 
     def test_detail_does_not_return_auth_or_staff_internals(self):
         self.authenticate(self.admin_user)
@@ -543,6 +596,7 @@ class PeopleApiTests(TestCase):
 @override_settings(ROOT_URLCONF="config.urls")
 class PersonOverviewApiTests(TestCase):
     def setUp(self):
+        ensure_canonical_staff_roles()
         self.client = APIClient()
         self.url_template = "/api/v1/people/{person_id}/overview/"
 
@@ -557,18 +611,21 @@ class PersonOverviewApiTests(TestCase):
             password="testpass123",
             person_first_name="Admin",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.manager_user = User.objects.create_user(
             email="manager-overview@example.com",
             password="testpass123",
             person_first_name="Manager",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.viewer_user = User.objects.create_user(
             email="viewer-overview@example.com",
             password="testpass123",
             person_first_name="Viewer",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
 
         self.admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
@@ -675,6 +732,28 @@ class PersonOverviewApiTests(TestCase):
     def get_url(self, person_id):
         return self.url_template.format(person_id=person_id)
 
+    def create_invitation(self, person, status=TransactionalEmailJob.Status.PENDING, expires_at=None):
+        invitation = CommunityAccountInvitation.objects.create(
+            person=person,
+            intended_email=person.primary_email,
+            token_hash="hashed-token",
+            expires_at=expires_at or timezone.now() + timedelta(hours=48),
+        )
+        job = TransactionalEmailJob.objects.create(
+            invitation=invitation,
+            template_id="community-activation",
+            recipient_email=person.primary_email,
+            recipient_name=person.first_name,
+            first_name=person.first_name,
+            expires_in_hours=48,
+            status=status,
+        )
+        if status == TransactionalEmailJob.Status.SENT:
+            job.sent_at = timezone.now()
+            job.completed_at = job.sent_at
+            job.save(update_fields=["sent_at", "completed_at"])
+        return invitation, job
+
     def test_anonymous_user_receives_401(self):
         response = self.client.get(self.get_url(self.contact_person.id))
         self.assertEqual(response.status_code, 401)
@@ -731,6 +810,85 @@ class PersonOverviewApiTests(TestCase):
         self.assertEqual(response.data["tags"], [])
         self.assertEqual(response.data["relationship"]["type"], "CONTACT")
         self.assertEqual(response.data["relationship"]["label"], "Contact")
+        self.assertEqual(response.data["community_account"]["status"], "NOT_SET_UP")
+        self.assertIsNone(response.data["community_account"]["account_email"])
+
+    def test_active_community_account_returns_account_metadata_and_activation_timestamp(self):
+        user = User.objects.create_user(
+            email="active@example.com",
+            password="testpass123",
+            person=self.active_member_person,
+        )
+        user.last_login = timezone.now()
+        user.save(update_fields=["last_login"])
+        activation_time = timezone.now() - timedelta(minutes=10)
+        AuditEvent.objects.create(
+            actor_user=user,
+            action=AuditEvent.Action.COMMUNITY_ACCOUNT_ACTIVATED,
+            entity_type="User",
+            entity_id=str(user.id),
+            metadata={"source": "COMMUNITY_ACTIVATION", "person_id": str(self.active_member_person.id)},
+            occurred_at=activation_time,
+        )
+
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.active_member_person.id))
+        account = response.data["community_account"]
+
+        self.assertEqual(account["status"], "ACTIVE")
+        self.assertEqual(account["account_email"], "active@example.com")
+        self.assertEqual(account["account_created_at"], activation_time.isoformat().replace("+00:00", "Z"))
+        self.assertIsNotNone(account["last_login_at"])
+        self.assertNotIn("token", response.json().__str__().lower())
+
+    def test_active_account_with_null_last_login_is_still_active(self):
+        User.objects.create_user(email="null-login@example.com", password="testpass123", person=self.active_member_person)
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.active_member_person.id))
+        self.assertEqual(response.data["community_account"]["status"], "ACTIVE")
+        self.assertIsNone(response.data["community_account"]["last_login_at"])
+
+    def test_pending_community_account_exposes_safe_invitation_delivery_projection(self):
+        for status, expected_delivery in (
+            (TransactionalEmailJob.Status.SENT, "SENT"),
+            (TransactionalEmailJob.Status.PENDING, "NOT_SENT"),
+            (TransactionalEmailJob.Status.PROCESSING, "NOT_SENT"),
+            (TransactionalEmailJob.Status.DELIVERY_UNCERTAIN, "DELIVERY_UNCERTAIN"),
+            (TransactionalEmailJob.Status.FAILED, "FAILED"),
+        ):
+            with self.subTest(status=status):
+                person = Person.objects.create(first_name=f"Pending {status}", last_name="Member", primary_email=f"{status.lower()}@example.com")
+                Membership.objects.create(person=person, status=Membership.Status.ACTIVE, joined_at=timezone.localdate(), membership_source=Membership.Source.COMMUNITY_PLATFORM)
+                invitation, job = self.create_invitation(person, status=status)
+                self.authenticate(self.admin_user)
+                response = self.client.get(self.get_url(person.id))
+                account = response.data["community_account"]
+
+                self.assertEqual(account["status"], "SETUP_PENDING")
+                self.assertEqual(account["setup_email"], invitation.intended_email)
+                self.assertEqual(account["invitation_delivery_status"], expected_delivery)
+                self.assertEqual(account["invitation_expires_at"], invitation.expires_at.isoformat().replace("+00:00", "Z"))
+                self.assertEqual(account["invitation_sent_at"] is not None, status == TransactionalEmailJob.Status.SENT)
+                self.assertNotIn("provider_message_id", response.data)
+
+    def test_expired_invitation_is_not_setup_pending(self):
+        person = Person.objects.create(first_name="Expired", last_name="Member", primary_email="expired@example.com")
+        Membership.objects.create(person=person, status=Membership.Status.ACTIVE, joined_at=timezone.localdate(), membership_source=Membership.Source.COMMUNITY_PLATFORM)
+        self.create_invitation(person, expires_at=timezone.now() - timedelta(minutes=1))
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(person.id))
+        self.assertEqual(response.data["community_account"]["status"], "NOT_SET_UP")
+        self.assertIsNone(response.data["community_account"]["setup_email"])
+
+    def test_existing_user_without_current_community_access_is_access_unavailable(self):
+        user = User.objects.create_user(email="former-account@example.com", password="testpass123", person=self.former_member_person)
+        self.former_member_person.archived_at = timezone.now()
+        self.former_member_person.save(update_fields=["archived_at"])
+        self.authenticate(self.admin_user)
+        response = self.client.get(self.get_url(self.former_member_person.id))
+        account = response.data["community_account"]
+        self.assertEqual(account["status"], "ACCESS_UNAVAILABLE")
+        self.assertEqual(account["account_email"], user.email)
 
     def test_skills_are_included_in_deterministic_order_when_present(self):
         PersonSkill.objects.create(person=self.active_member_person, skill=self.software_development_skill)
@@ -995,6 +1153,7 @@ class PersonOverviewApiTests(TestCase):
             set(response.data["person"].keys()),
             {
                 "id",
+                "record_type",
                 "first_name",
                 "last_name",
                 "primary_email",
@@ -1016,7 +1175,7 @@ class PersonOverviewApiTests(TestCase):
         self.authenticate(self.admin_user)
         response = self.client.get(self.get_url(self.active_member_person.id))
 
-        self.assertNotIn("record_type", response.data["person"])
+        self.assertEqual(response.data["person"]["record_type"], Person.RecordType.COMMUNITY)
         self.assertNotIn("user", response.data["person"])
         self.assertNotIn("is_staff", response.data["person"])
         self.assertNotIn("is_superuser", response.data["person"])
@@ -1034,7 +1193,7 @@ class PersonOverviewApiTests(TestCase):
         PersonTag.objects.create(person=self.active_member_person, tag=self.vip_tag, assigned_by=self.admin_user)
 
         self.authenticate(self.admin_user)
-        with self.assertNumQueries(6):
+        with self.assertNumQueries(8):
             response = self.client.get(self.get_url(self.active_member_person.id))
 
         self.assertEqual(response.status_code, 200)
@@ -1043,6 +1202,7 @@ class PersonOverviewApiTests(TestCase):
 @override_settings(ROOT_URLCONF="config.urls")
 class PersonWriteLifecycleApiTests(TestCase):
     def setUp(self):
+        ensure_canonical_staff_roles()
         self.client = APIClient()
         self.client.raise_request_exception = False
         self.create_url = "/api/v1/people/"
@@ -1050,14 +1210,17 @@ class PersonWriteLifecycleApiTests(TestCase):
         self.admin_user = User.objects.create_user(
             email="person-write-admin@example.com", password="testpass123",
             person_first_name="Admin", person_last_name="Writer",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.manager_user = User.objects.create_user(
             email="person-write-manager@example.com", password="testpass123",
             person_first_name="Manager", person_last_name="Writer",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.viewer_user = User.objects.create_user(
             email="person-write-viewer@example.com", password="testpass123",
             person_first_name="Viewer", person_last_name="Writer",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.nonstaff_user = User.objects.create_user(
             email="person-write-nonstaff@example.com", password="testpass123",
@@ -1100,6 +1263,38 @@ class PersonWriteLifecycleApiTests(TestCase):
         self.assertEqual(event.actor_user, self.admin_user)
         self.assertEqual(event.metadata, {"person_id": str(person.id)})
 
+    def test_valid_local_mobile_is_preserved_on_create_and_blank_mobile_remains_valid(self):
+        self.authenticate(self.admin_user)
+
+        local = self.client.post(
+            self.create_url,
+            self.person_payload(primary_email="local@example.com", mobile="07911 123 456"),
+            format="json",
+        )
+        blank = self.client.post(
+            self.create_url,
+            self.person_payload(primary_email="blank@example.com", mobile=""),
+            format="json",
+        )
+
+        self.assertEqual(local.status_code, 201)
+        self.assertEqual(local.data["mobile"], "07911 123 456")
+        self.assertEqual(blank.status_code, 201)
+        self.assertEqual(blank.data["mobile"], "")
+
+    def test_malformed_mobile_is_rejected_before_person_creation(self):
+        self.authenticate(self.admin_user)
+
+        response = self.client.post(
+            self.create_url,
+            self.person_payload(primary_email="malformed@example.com", mobile="hello123"),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["mobile"], ["Enter a valid mobile number."])
+        self.assertFalse(Person.objects.filter(primary_email="malformed@example.com").exists())
+
     def test_profile_field_edit_enqueues_coalesced_brevo_profile_job(self):
         person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")
         self.authenticate(self.admin_user)
@@ -1114,6 +1309,90 @@ class PersonWriteLifecycleApiTests(TestCase):
         self.client.patch(self.detail_url(person.id), {"mobile": "+265991234567"}, format="json")
 
         self.assertEqual(ExternalPersonSyncJob.objects.filter(person=person, job_type="PERSON_PROFILE").count(), 1)
+
+    def test_malformed_mobile_update_is_rejected_without_sync_job_or_person_mutation(self):
+        person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com", mobile="07911123456")
+        self.authenticate(self.admin_user)
+
+        response = self.client.patch(self.detail_url(person.id), {"mobile": "123"}, format="json")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["mobile"], ["Enter a valid mobile number."])
+        person.refresh_from_db()
+        self.assertEqual(person.mobile, "07911123456")
+        self.assertFalse(ExternalPersonSyncJob.objects.filter(person=person).exists())
+
+    def test_mobile_override_does_not_bypass_malformed_mobile_validation(self):
+        Person.objects.create(first_name="Existing", last_name="Person", mobile="07911123456")
+        person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")
+        self.authenticate(self.admin_user)
+
+        response = self.client.patch(
+            self.detail_url(person.id),
+            {"mobile": "123", "allow_duplicate_mobile": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["mobile"], ["Enter a valid mobile number."])
+        self.assertFalse(ExternalPersonSyncJob.objects.filter(person=person).exists())
+
+    def test_unrelated_patch_does_not_revalidate_legacy_invalid_mobile(self):
+        person = Person.objects.create(first_name="Legacy", last_name="Person", primary_email="legacy@example.com", mobile="123")
+        self.authenticate(self.admin_user)
+
+        response = self.client.patch(self.detail_url(person.id), {"location": "Milton Keynes"}, format="json")
+
+        self.assertEqual(response.status_code, 200)
+        person.refresh_from_db()
+        self.assertEqual(person.mobile, "123")
+
+    def test_email_edit_enqueues_dedicated_migration_snapshot_without_profile_job(self):
+        person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")
+        self.authenticate(self.admin_user)
+
+        response = self.client.patch(
+            self.detail_url(person.id),
+            {"primary_email": "new@example.com"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        job = ExternalPersonSyncJob.objects.get(person=person)
+        self.assertEqual(job.provider, "BREVO")
+        self.assertEqual(job.job_type, "PERSON_EMAIL_MIGRATION")
+        self.assertEqual(job.previous_email, "amina@example.com")
+        self.assertEqual(job.requested_email, "new@example.com")
+        self.assertFalse(ExternalPersonSyncJob.objects.filter(person=person, job_type="PERSON_PROFILE").exists())
+
+    def test_combined_email_and_profile_edit_creates_separate_jobs(self):
+        person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")
+        self.authenticate(self.admin_user)
+
+        response = self.client.patch(
+            self.detail_url(person.id),
+            {"primary_email": "new@example.com", "first_name": "Sofia"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            set(ExternalPersonSyncJob.objects.filter(person=person).values_list("job_type", flat=True)),
+            {"PERSON_EMAIL_MIGRATION", "PERSON_PROFILE"},
+        )
+
+    def test_identical_email_edit_does_not_enqueue_email_migration(self):
+        person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")
+        self.authenticate(self.admin_user)
+
+        response = self.client.patch(
+            self.detail_url(person.id),
+            {"primary_email": "AMINA@example.com"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(ExternalPersonSyncJob.objects.filter(person=person, job_type="PERSON_EMAIL_MIGRATION").exists())
 
     def test_unrelated_or_identical_person_edit_does_not_enqueue_profile_job(self):
         person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")
@@ -1168,7 +1447,7 @@ class PersonWriteLifecycleApiTests(TestCase):
         self.assertIsNotNone(response.data["candidates"][0]["archived_at"])
         self.assertNotIn("record_type", response.data["candidates"][0])
 
-    def test_confirmed_contact_identity_overrides_require_current_reviewed_evidence(self):
+    def test_email_identity_collision_remains_blocking_even_with_override_payload(self):
         existing = Person.objects.create(first_name="Existing", last_name="Person", primary_email="existing@example.com")
         self.authenticate(self.admin_user)
         payload = self.person_payload(
@@ -1179,14 +1458,83 @@ class PersonWriteLifecycleApiTests(TestCase):
 
         response = self.client.post(self.create_url, payload, format="json")
 
-        self.assertEqual(response.status_code, 201)
-        created = Person.objects.get(pk=response.data["id"])
-        self.assertEqual(created.primary_email, "existing@example.com")
-        event = AuditEvent.objects.get(action=AuditEvent.Action.PERSON_CREATED, entity_id=str(created.id))
-        self.assertEqual(event.metadata["identity_collision"], "EMAIL_COLLISION")
-        self.assertEqual(event.metadata["identity_collision_person_ids"], [str(existing.id)])
-        self.assertNotIn("primary_email", event.metadata)
-        self.assertNotIn("mobile", event.metadata)
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["code"], "IDENTITY_COLLISION")
+        self.assertEqual(response.data["severity"], "BLOCKING")
+        self.assertEqual(response.data["match_reasons"], ["EMAIL"])
+        self.assertFalse(Person.objects.filter(primary_email="existing@example.com", first_name="Amina").exists())
+
+    def test_mobile_only_duplicate_create_is_a_warning_with_safe_match_data(self):
+        existing = Person.objects.create(first_name="Existing", last_name="Person", mobile="991000001")
+        self.authenticate(self.admin_user)
+
+        response = self.client.post(
+            self.create_url,
+            self.person_payload(primary_email="new@example.com", mobile="99 100-0001"),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["code"], "IDENTITY_COLLISION")
+        self.assertEqual(response.data["severity"], "WARNING")
+        self.assertEqual(response.data["match_reasons"], ["MOBILE"])
+        self.assertEqual(response.data["collision"]["collision"], "MOBILE_COLLISION")
+        self.assertEqual(response.data["candidates"][0]["id"], existing.id)
+        self.assertNotIn("primary_email", response.data["candidates"][0])
+        self.assertNotIn("mobile", response.data["candidates"][0])
+
+    def test_mobile_only_duplicate_update_requires_narrow_acknowledgement_and_is_audited(self):
+        existing = Person.objects.create(first_name="Existing", last_name="Person", mobile="991000001")
+        person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")
+        self.authenticate(self.admin_user)
+
+        warning = self.client.patch(self.detail_url(person.id), {"mobile": "99 100-0001"}, format="json")
+
+        self.assertEqual(warning.status_code, 409)
+        self.assertEqual(warning.data["code"], "duplicate_person")
+        self.assertEqual(warning.data["severity"], "WARNING")
+        self.assertEqual(warning.data["match_reasons"], ["MOBILE"])
+        self.assertEqual(warning.data["matches"][0]["id"], existing.id)
+        self.assertFalse(AuditEvent.objects.filter(action=AuditEvent.Action.PERSON_UPDATED, entity_id=str(person.id)).exists())
+
+        saved = self.client.patch(
+            self.detail_url(person.id),
+            {"mobile": "99 100-0001", "allow_duplicate_mobile": True},
+            format="json",
+        )
+
+        self.assertEqual(saved.status_code, 200)
+        event = AuditEvent.objects.get(action=AuditEvent.Action.PERSON_UPDATED, entity_id=str(person.id))
+        self.assertEqual(event.metadata["duplicate_mobile_override"], True)
+        self.assertEqual(event.metadata["duplicate_mobile_match_person_ids"], [str(existing.id)])
+
+    def test_mobile_override_does_not_bypass_email_collision(self):
+        existing = Person.objects.create(first_name="Existing", last_name="Person", primary_email="existing@example.com", mobile="991000001")
+        person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")
+        self.authenticate(self.admin_user)
+
+        response = self.client.patch(
+            self.detail_url(person.id),
+            {"primary_email": existing.primary_email, "mobile": "991000001", "allow_duplicate_mobile": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["code"], "IDENTITY_COLLISION")
+        self.assertEqual(response.data["severity"], "BLOCKING")
+        self.assertEqual(response.data["match_reasons"], ["EMAIL", "MOBILE"])
+
+    def test_mobile_warning_returns_multiple_safe_matches(self):
+        first = Person.objects.create(first_name="First", last_name="Person", mobile="991000001")
+        second = Person.objects.create(first_name="Second", last_name="Person", mobile="99 100-0001")
+        person = Person.objects.create(first_name="Amina", last_name="Zulu", primary_email="amina@example.com")
+        self.authenticate(self.admin_user)
+
+        response = self.client.patch(self.detail_url(person.id), {"mobile": "991000001"}, format="json")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual([match["id"] for match in response.data["matches"]], [first.id, second.id])
+        self.assertTrue(all(set(match) == {"id", "first_name", "last_name", "archived_at"} for match in response.data["matches"]))
 
     def test_stale_identity_override_is_rejected_without_creating_a_person(self):
         existing = Person.objects.create(first_name="Existing", last_name="Person", primary_email="existing@example.com")
@@ -1358,6 +1706,7 @@ class PersonWriteLifecycleApiTests(TestCase):
 @override_settings(ROOT_URLCONF="config.urls")
 class PeopleDirectoryQueryApiTests(TestCase):
     def setUp(self):
+        ensure_canonical_staff_roles()
         self.client = APIClient()
         self.url = "/api/v1/people/"
         self.admin_user = User.objects.create_user(email="directory-admin@example.com", password="testpass123", person_first_name="Directory", person_last_name="Admin", person_record_type=Person.RecordType.TECHNICAL)

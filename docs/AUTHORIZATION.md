@@ -152,3 +152,8 @@ Planned, not yet implemented:
 - Staff CRM resource endpoints
 - finer-grained operational permission policies beyond role-code checks
 - additional non-staff authorization domains
+
+The implemented anonymous Community join endpoint is an explicit public
+submission boundary, not a CRM authorization exception. It uses its own DTO,
+service, response projection, CSRF protection, and anonymous throttle. It does not
+grant access to People, Membership, ProfessionalProfile, audit, or other CRM APIs.

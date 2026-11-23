@@ -1,0 +1,40 @@
+from django.urls import path
+
+from community.views import CommunityAccountEmailChangeVerificationView, CommunityAccountEmailChangeView, CommunityAccountMarketingPreferenceView, CommunityAccountMobileView, CommunityAccountPasswordView, CommunityAccountView, CommunityActivationView, CommunityConnectionActionView, CommunityConnectionListView, CommunityConnectionRequestListView, CommunityDirectoryDetailView, CommunityDirectoryListView, CommunityIndustryListView, CommunityJoinView, CommunityLoginView, CommunityMeView, CommunityPasswordResetConfirmView, CommunityPasswordResetRequestView, CommunityPostCreateView, CommunityPostDetailView, CommunityPostReportView, CommunityReplyDetailView, CommunityReplyListCreateView, CommunityReplyReportView, CommunityModerationReportActionView, CommunityModerationReportDetailView, CommunityModerationReportListView, CommunityProfileView, CommunityProfileOptionsView, CommunityProfilePhotoView, CommunityProfileReviewAcknowledgementView
+
+
+urlpatterns = [
+    path("community/industries/", CommunityIndustryListView.as_view(), name="community-industry-list"),
+    path("community/password-reset/", CommunityPasswordResetRequestView.as_view(), name="community-password-reset"),
+    path("community/password-reset/confirm/", CommunityPasswordResetConfirmView.as_view(), name="community-password-reset-confirm"),
+    path("community/join/", CommunityJoinView.as_view(), name="community-join"),
+    path("community/login/", CommunityLoginView.as_view(), name="community-login"),
+    path("community/activate/<uuid:invitation_id>/<str:token>/", CommunityActivationView.as_view(), name="community-activate"),
+    path("community/me/", CommunityMeView.as_view(), name="community-me"),
+    path("community/account/", CommunityAccountView.as_view(), name="community-account"),
+    path("community/account/password/", CommunityAccountPasswordView.as_view(), name="community-account-password"),
+    path("community/account/email-change/", CommunityAccountEmailChangeView.as_view(), name="community-account-email-change"),
+    path("community/account/email-change/verify/", CommunityAccountEmailChangeVerificationView.as_view(), name="community-account-email-change-verify"),
+    path("community/account/mobile/", CommunityAccountMobileView.as_view(), name="community-account-mobile"),
+    path("community/account/marketing-preference/", CommunityAccountMarketingPreferenceView.as_view(), name="community-account-marketing-preference"),
+    path("community/profile/", CommunityProfileView.as_view(), name="community-profile"),
+    path("community/profile/options/", CommunityProfileOptionsView.as_view(), name="community-profile-options"),
+    path("community/profile/photo/", CommunityProfilePhotoView.as_view(), name="community-profile-photo"),
+    path("community/profile/review-acknowledgement/", CommunityProfileReviewAcknowledgementView.as_view(), name="community-profile-review-acknowledgement"),
+    path("community/directory/", CommunityDirectoryListView.as_view(), name="community-directory-list"),
+    path("community/directory/<uuid:directory_id>/", CommunityDirectoryDetailView.as_view(), name="community-directory-detail"),
+    path("community/connections/", CommunityConnectionListView.as_view(), name="community-connections-list"),
+    path("community/connections/requests/", CommunityConnectionRequestListView.as_view(), name="community-connection-requests"),
+    path("community/connections/<uuid:public_id>/accept/", CommunityConnectionActionView.as_view(), {"action": "accept"}, name="community-connection-accept"),
+    path("community/connections/<uuid:public_id>/decline/", CommunityConnectionActionView.as_view(), {"action": "decline"}, name="community-connection-decline"),
+    path("community/connections/<uuid:public_id>/", CommunityConnectionActionView.as_view(), name="community-connection-remove"),
+    path("community/posts/", CommunityPostCreateView.as_view(), name="community-post-list"),
+    path("community/posts/<uuid:public_id>/", CommunityPostDetailView.as_view(), name="community-post-detail"),
+    path("community/posts/<uuid:post_id>/report/", CommunityPostReportView.as_view(), name="community-post-report"),
+    path("community/posts/<uuid:post_id>/replies/", CommunityReplyListCreateView.as_view(), name="community-post-replies"),
+    path("community/posts/<uuid:post_id>/replies/<uuid:reply_id>/report/", CommunityReplyReportView.as_view(), name="community-post-reply-report"),
+    path("community/posts/<uuid:post_id>/replies/<uuid:reply_id>/", CommunityReplyDetailView.as_view(), name="community-post-reply-detail"),
+    path("community/moderation/reports/", CommunityModerationReportListView.as_view(), name="community-moderation-report-list"),
+    path("community/moderation/reports/<uuid:report_id>/", CommunityModerationReportDetailView.as_view(), name="community-moderation-report-detail"),
+    path("community/moderation/reports/<uuid:report_id>/<str:action>/", CommunityModerationReportActionView.as_view(), name="community-moderation-report-action"),
+]

@@ -1,6 +1,6 @@
 # Elevate MK Database
 Status: Living Documentation
-Last Updated: 2026-09-02
+Last Updated: 2026-10-01
 
 ## Scope
 This document describes the Elevate-owned database/domain structures currently implemented in the Django API codebase.
@@ -28,6 +28,9 @@ The current Elevate-owned models are:
 - `events.Event`
 - `events.EventParticipation`
 - `events.ExternalEventReference`
+- `community.JoinSubmissionReceipt`
+- `community.CommunityAccountInvitation`
+- `community.CommunityProfile`
 
 ## Historical Import Staging
 
@@ -123,6 +126,231 @@ External provider or Community platform
 - an EventParticipation is one Person's participation in one Event. The Eventbrite historical buyer import creates one participation per buyer/Event even when an order has multiple tickets; it intentionally does not infer guests or individual registrations from Order ID.
 - EventParticipation is fully isolated from Membership: it never creates, changes, reactivates, ends, or otherwise mutates Membership. A contact, ACTIVE Member, FORMER Member, or archived Person may be referenced without lifecycle changes.
 - no Events API or Staff CRM Events UI exists in V1; Django Admin is technical inspection only.
+
+## Community Domain
+
+The Community domain owns the durable state created by native Community onboarding and account activation. It extends the authoritative `people.Person` record without moving identity, membership, or authentication ownership into the Community app.
+
+```text
+Person 1 ---- 0..1 CommunityProfile
+Person 1 ---- 0..* CommunityAccountInvitation
+```
+
+- `JoinSubmissionReceipt` stores only idempotency key hash, canonical request digest, outcome, and timestamps; raw submission PII is not persisted there.
+- `CommunityAccountInvitation` stores the activation lifecycle for a Person. Only the token hash is persisted; raw activation tokens are never stored.
+- A Person may have at most one current, non-used, non-revoked, non-superseded invitation.
+- `CommunityProfile` is the Community-owned presentation/onboarding extension of a Person and is created at most once per Person.
+- `person_preexisted_community` records whether the Person already existed when the Community profile was established. It is not user-editable.
+- A pre-existing Community profile requires review until `review_acknowledged_at` is recorded; a newly created profile does not.
+- `CommunityProfile.bio` is optional plain text with a maximum length of 400 characters.
+
+## Model: `community.JoinSubmissionReceipt`
+Database table: `community_joinsubmissionreceipt`
+
+Purpose:
+- Provides durable idempotency protection for anonymous Community join submissions without retaining raw request data.
+
+### Fields
+| Field | Type | Null / Blank | Default / Automatic | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
+| `key_hash` | `CharField(max_length=64)` | not null | none | Unique one-way hash of the client idempotency key |
+| `request_digest` | `CharField(max_length=64)` | not null | none | Digest of canonical validated submission data |
+| `status` | `CharField(max_length=20)` | not null | none | Currently `ACCEPTED` |
+| `created_at` | `DateTimeField` | not null | `auto_now_add=True` | Set automatically on create |
+| `updated_at` | `DateTimeField` | not null | `auto_now=True` | Updated automatically on save |
+
+### Constraints and Behavior
+
+- `key_hash` is unique.
+- Rows are ordered newest first by `created_at`, then `id`.
+- The table contains no submitted name, email, mobile, location, job, consent, or other raw PII.
+- Reuse of a key with the same canonical digest replays safely; reuse with a different digest is rejected.
+
+## Model: `community.CommunityAccountInvitation`
+Database table: `community_communityaccountinvitation`
+
+Purpose:
+- Represents the durable invitation and activation lifecycle for one Community account associated with a Person.
+
+### Fields
+| Field | Type | Null / Blank | Default / Automatic | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
+| `public_id` | `UUIDField` | not null | `uuid.uuid4` | Public invitation identifier; unique and immutable |
+| `person` | `ForeignKey(people.Person)` | not null | none | Required Person; `PROTECT` on delete |
+| `intended_email` | `EmailField` | not null | none | Email intended for activation delivery |
+| `token_hash` | `CharField(max_length=64)` | null, blank | none | One-way activation token hash; raw token is not stored |
+| `created_at` | `DateTimeField` | not null | `auto_now_add=True` | Invitation creation time |
+| `expires_at` | `DateTimeField` | not null | none | Invitation expiry time |
+| `used_at` | `DateTimeField` | null, blank | none | Set when activation succeeds |
+| `revoked_at` | `DateTimeField` | null, blank | none | Set when invitation is revoked |
+| `superseded_at` | `DateTimeField` | null, blank | none | Set when replaced by a later invitation |
+| `updated_at` | `DateTimeField` | not null | `auto_now=True` | Updated automatically on save |
+
+### Constraints and Behavior
+
+- `public_id` is unique.
+- Default ordering is newest first by `created_at`, then `id`.
+- Indexes support token-hash lookup and Person/lifecycle-state lookup.
+- A conditional unique constraint permits only one current invitation per Person where `used_at`, `revoked_at`, and `superseded_at` are all null.
+- `is_current` requires all three lifecycle timestamps to be null.
+- `is_usable` additionally requires a stored token hash and an expiry later than the current time.
+- Invitation activation does not restore archived Persons or reactivate former Memberships.
+
+## Model: `community.CommunityEmailChangeRequest`
+
+Database table: `community_communityemailchangerequest`
+
+Purpose:
+- Stores the request-only lifecycle for an authenticated member's verified
+  email change. It does not itself change either canonical email field.
+
+### Fields
+| Field | Type | Null / Blank | Default / Automatic | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | `BigAutoField` | not null | auto-created primary key | Internal row identity |
+| `public_id` | `UUIDField` | not null | `uuid.uuid4` | Public verification-request identifier; unique and immutable |
+| `person` | `ForeignKey(people.Person)` | not null | none | Canonical Person; `PROTECT` |
+| `user` | `ForeignKey(accounts.User)` | not null | none | Authenticated Community owner; `PROTECT` |
+| `previous_email` | `EmailField` | not null | none | Normalized email at request time |
+| `requested_email` | `EmailField` | not null | none | Normalized proposed new email |
+| `token_hash` | `CharField(max_length=64)` | null, blank | none | SHA-256 hash; raw token is never persisted |
+| `created_at` / `updated_at` | `DateTimeField` | not null | automatic | Lifecycle timestamps |
+| `expires_at` | `DateTimeField` | not null | none | Default 60-minute validity |
+| `used_at` | `DateTimeField` | null, blank | none | Reserved for later completion flow |
+| `revoked_at` | `DateTimeField` | null, blank | none | Lifecycle invalidation marker |
+| `superseded_at` | `DateTimeField` | null, blank | none | Set when a later request replaces it |
+
+### Constraints and behavior
+
+- A conditional unique constraint permits one current request per Person while
+  `used_at`, `revoked_at`, and `superseded_at` are null.
+- `token_hash` is indexed; raw verification tokens and complete URLs are not
+  stored in the request or audit metadata.
+- Durable `notifications.TransactionalEmailJob` rows reference the request;
+  one request may have its verification-delivery job and, after completion,
+  its old-email security-notification job. Each job still requires exactly one
+  of an activation invitation or email-change request.
+- A5.1 creates the request without changing canonical emails. A5.2 completion
+  atomically updates both canonical email fields, marks `used_at`, and queues
+  the migration/security work.
+
+### A5.2 completion invariants
+
+- The verification endpoint performs the final snapshot, eligibility, collision,
+  and advisory-lock checks inside one transaction.
+- `used_at` is written only with the canonical identity update. A used request
+  cannot be completed again.
+- The migration job stores immutable previous/requested email snapshots;
+  notification jobs store no token or URL.
+
+## Model: `community.CommunityProfile`
+Database table: `community_communityprofile`
+
+Purpose:
+- Stores Community-owned presentation and onboarding state for a Person.
+
+### Fields
+| Field | Type | Null / Blank | Default / Automatic | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | `BigAutoField` | not null | auto-created primary key | Django default primary key |
+| `person` | `OneToOneField(people.Person)` | not null | none | Required Person; `PROTECT` on delete |
+| `asset_namespace_id` | `UUIDField` | not null | random UUID; unique; immutable | Stable non-PII storage namespace for Community profile-owned assets; not an authentication identifier |
+| `directory_id` | `UUIDField` | not null | random UUID; unique; immutable | Stable non-sequential member-facing Directory/QR route identifier; separate from asset storage ownership |
+| `directory_visible` | `BooleanField` | not null | `True` | Whole-profile Directory visibility; eligible profiles are discoverable by default and members may opt out |
+| `email_visible` | `BooleanField` | not null | `False` | Independent opt-in for canonical Person email in future Directory projection |
+| `mobile_visible` | `BooleanField` | not null | `False` | Independent opt-in for canonical Person mobile in future Directory projection |
+| `bio` | `TextField(max_length=400)` | not null, blank allowed | empty string | Optional plain-text Community bio |
+| `photo` | `ImageField` | null, blank allowed | none | Opaque generated reference to the normalized private profile-photo object under the profile-owned asset namespace |
+| `person_preexisted_community` | `BooleanField` | not null | `False` | Immutable provenance flag; not editable by users |
+| `review_acknowledged_at` | `DateTimeField` | null, blank | none | Set when required review is acknowledged |
+| `created_at` | `DateTimeField` | not null | `auto_now_add=True` | Set automatically on create |
+| `updated_at` | `DateTimeField` | not null | `auto_now=True` | Updated automatically on save |
+
+### Constraints and Behavior
+
+- The one-to-one relationship permits at most one Community profile per Person.
+- `bio` is limited to 400 characters and is validated as plain text.
+- `review_required` is true only when `person_preexisted_community=True` and `review_acknowledged_at` is null.
+- A new Community profile defaults to no review requirement.
+- CommunityProfile is not a replacement for Person, Membership, User, or ProfessionalProfile data.
+- Directory and contact-sharing preferences are Community-owned settings. Canonical email and mobile remain on Person and are not copied.
+- Eligible Community profiles are discoverable by default. Email and mobile sharing remain hidden by default and require independent opt-in. Disabling Directory visibility does not clear the independent contact preferences.
+- D2 Directory reads enforce the eligible active Community account, active Membership, non-archived BUSINESS Person, CommunityProfile, and `directory_visible` conditions in the queryset before serialization. Directory DTOs never expose `asset_namespace_id` or internal database identifiers.
+
+### Profile V1 composition and ownership
+
+Authenticated Community My Profile is composed from this CommunityProfile
+extension together with canonical shared records:
+
+- `Person` for name and location;
+- `ProfessionalProfile` for professional fields and canonical Industry;
+- `Membership` for the existing Elevate relationship;
+- `PersonSkill`/`Skill` and `PersonInterest`/`Interest` for taxonomy
+  relationships.
+
+CommunityProfile owns only Community-specific extension state: `bio`, the
+normalized profile-photo reference,
+`person_preexisted_community` provenance flag, review acknowledgement state,
+and timestamps. It does not duplicate canonical Person, professional,
+membership, taxonomy, account, or provider data.
+
+The authenticated self-service Profile V1 mutation boundary is:
+
+- Person: `first_name`, `last_name`, `location`;
+- ProfessionalProfile: `job_title`, `company`, `industry`, `career_stage`,
+  `linkedin_url`;
+- CommunityProfile: `bio`;
+- relationships: `skills`, `interests`.
+
+Email, mobile, demographics, membership state, marketing preferences, tags,
+notes, staff roles, account state, provider state, and review provenance are
+not writable through Profile V1. Profile writes and their append-only
+`COMMUNITY_SELF_SERVICE` audit events are transactional. Effective first/last
+name changes also create the existing coalesced asynchronous `PERSON_PROFILE`
+sync job; the job stores no profile snapshot.
+
+## Model: `community.CommunityConnection`
+
+`CommunityConnection` stores one mutual Community relationship between two
+canonical `people.Person` records. It is not owned by `User`, does not copy
+contact data, and does not represent a follower/following relationship.
+
+### Fields
+
+| Field | Type | Null/blank | Default | Meaning |
+| --- | --- | --- | --- | --- |
+| `public_id` | `UUIDField` | not null | random UUID; unique; immutable | Client-facing relationship identifier |
+| `person_low` | `ForeignKey(Person)` | not null | — | Lower Person key in the canonical unordered pair |
+| `person_high` | `ForeignKey(Person)` | not null | — | Higher Person key in the canonical unordered pair |
+| `requester` | `ForeignKey(Person)` | not null | — | Person who made the current request; recipient is derived as the other pair member |
+| `status` | `CharField` | not null | — | `PENDING`, `ACCEPTED`, `DECLINED`, or `DISCONNECTED` |
+| `requested_at` | `DateTimeField` | not null | current time | Current request timestamp |
+| `accepted_at` | `DateTimeField` | nullable | null | Acceptance timestamp |
+| `declined_at` | `DateTimeField` | nullable | null | Decline timestamp |
+| `disconnected_at` | `DateTimeField` | nullable | null | Removal timestamp |
+| `created_at` | `DateTimeField` | not null | automatic | Row creation time |
+| `updated_at` | `DateTimeField` | not null | automatic | Last state update time |
+
+### Constraints and behavior
+
+- `(person_low, person_high)` is unique, so A-B and B-A cannot become separate rows.
+- Database checks prevent self-pairs and non-canonical ordering.
+- A database check requires `requester` to be one of the two pair participants.
+- Person foreign keys use `PROTECT`.
+- Indexes support participant/status and requester/status request queries.
+- `recipient` is derived from the pair and persisted `requester`; it is not a second stored relationship field.
+- Declined and disconnected rows remain for provenance and audit continuity. A later request reopens the existing pair row.
+- Current effective access requires both participants to remain eligible Community members.
+- Contact values, directory IDs, profile data, User IDs, Membership IDs, provider data, and audit payloads are not stored on this model.
+
+### Concurrency
+
+Connection mutations run in a transaction, lock both Person rows in ascending
+primary-key order, then lock the pair row before applying a transition. The
+database uniqueness constraint remains the final protection against concurrent
+pair creation.
 
 Django-managed framework tables also exist because this project uses Django authentication, permissions, content types, admin, and server-side sessions. Those framework tables are not documented field-by-field here.
 

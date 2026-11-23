@@ -10,6 +10,7 @@ from memberships.models import Membership
 from people.models import Person
 from professional_profiles.models import Industry, ProfessionalProfile
 from staff_access.models import StaffRole, StaffRoleAssignment
+from campaigns.models import Campaign
 from .queries import dashboard_projection
 
 
@@ -46,7 +47,7 @@ class DashboardTests(APITestCase):
             assignment = StaffRoleAssignment.objects.assign_role(user=self.user, role=role)
             response = self.client.get("/api/v1/dashboard/")
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(set(response.data), {"overview", "growth", "community_profile", "attention"})
+            self.assertEqual(set(response.data), {"overview", "growth", "community_profile", "marketing", "attention"})
             self.assertEqual(self.client.post("/api/v1/dashboard/", {}).status_code, 405)
             StaffRoleAssignment.objects.filter(pk=assignment.pk).update(is_active=False)
             self.assertEqual(self.client.get("/api/v1/dashboard/").status_code, 403)
@@ -56,13 +57,30 @@ class DashboardTests(APITestCase):
         self.member(self.person())
         self.member(self.person(), status=Membership.Status.FORMER)
         self.member(self.person(archived_at=timezone.now()))
-        self.member(self.person(record_type=Person.RecordType.TECHNICAL))
+        self.person(record_type=Person.RecordType.TECHNICAL)
         self.person(record_type=Person.RecordType.TECHNICAL, archived_at=timezone.now())
         for status in ImportBatch.Status.values:
             ImportBatch.objects.create(source_type="MEMBERSHIP_FORM", source_filename="test.xlsx", source_fingerprint=status, status=status)
         result = self.projection()
         self.assertEqual(result["overview"], {"total_people": 3, "active_members": 1, "contacts": 1, "former_members": 1})
-        self.assertEqual(result["attention"], {"imports_needing_review": 1, "archived_people": 1})
+        self.assertEqual(result["attention"], {"imports_needing_review": 1, "archived_people": 1, "campaigns_needing_attention": 0})
+
+    def test_marketing_counts_use_active_campaign_lifecycle_states(self):
+        statuses = [
+            Campaign.Status.DRAFT,
+            Campaign.Status.PREPARED,
+            Campaign.Status.RECONCILIATION_REQUIRED,
+            Campaign.Status.PROVIDER_FAILED,
+            Campaign.Status.SNAPSHOT_READY,
+        ]
+        for index, status in enumerate(statuses):
+            Campaign.objects.create(name=f"Campaign {index}", status=status, created_by=self.user)
+        Campaign.objects.create(name="Archived prepared", status=Campaign.Status.PREPARED, created_by=self.user, archived_at=timezone.now())
+
+        result = self.projection()
+
+        self.assertEqual(result["marketing"], {"active_campaigns": 5, "ready_in_brevo": 1, "needs_attention": 2})
+        self.assertEqual(result["attention"]["campaigns_needing_attention"], 2)
 
     def test_six_month_window_zeros_and_distinct_authoritative_dates(self):
         person = self.person()
@@ -70,7 +88,7 @@ class DashboardTests(APITestCase):
         membership = self.member(person, joined=date(2025, 10, 2))
         Membership.objects.filter(pk=membership.pk).update(created_at=datetime(2026, 3, 1, tzinfo=dt_timezone.utc))
         self.member(self.person(archived_at=timezone.now()), joined=date(2026, 1, 12), status=Membership.Status.FORMER)
-        self.member(self.person(record_type="TECHNICAL"), joined=date(2025, 10, 2))
+        self.person(record_type="TECHNICAL")
         self.member(self.person(), joined=date(2025, 9, 30))
         self.member(self.person(), joined=date(2026, 4, 1))
         Person.objects.exclude(pk=person.pk).update(created_at=datetime(2020, 1, 1, tzinfo=dt_timezone.utc))
@@ -117,7 +135,7 @@ class DashboardTests(APITestCase):
 
     def test_empty_projection_is_zero_filled_with_bounded_queries(self):
         # The user account's TECHNICAL Person does not enter the projection.
-        with self.assertNumQueries(8):
+        with self.assertNumQueries(9):
             result = self.projection()
         self.assertEqual(result["overview"]["total_people"], 0)
         self.assertTrue(all(row["count"] == 0 for series in result["growth"].values() for row in series))

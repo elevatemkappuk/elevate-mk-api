@@ -5,6 +5,7 @@ from django.core.validators import URLValidator, validate_email
 from django.core.exceptions import ValidationError
 
 from people.models import Person
+from people.services import is_plausible_crm_mobile
 
 
 def json_safe(value):
@@ -69,4 +70,6 @@ def normalize_membership_form_row(raw_data, headers):
             URLValidator(schemes=["http", "https"])(normalized["linkedin_url"])
         except ValidationError:
             errors.append({"field": "linkedin_url", "code": "invalid_url", "message": "LinkedIn URL is not valid."})
+    if normalized["mobile"] and not is_plausible_crm_mobile(normalized["mobile"]):
+        errors.append({"field": "mobile", "code": "INVALID_MOBILE", "message": "Mobile number needs review."})
     return normalized, errors

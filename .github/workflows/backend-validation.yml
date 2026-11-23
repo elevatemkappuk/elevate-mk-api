@@ -79,6 +79,34 @@ jobs:
           brevo_marketing.tests.BrevoSyncJobTests.test_worker_processes_brevo_job_and_completes_business_outcomes
           brevo_marketing.tests.BrevoMarketingWebhookTests.test_authenticated_unsubscribe_records_brevo_opt_out_without_echo_job
           marketing_preferences.test_audience_preview.AudiencePreviewApiTests.test_authorization_matches_people_read_access
+          community.tests.CommunityJoinApiTests
+          community.activation_tests.CommunityActivationApiTests
+          community.password_reset_tests.CommunityPasswordResetRequestTests
+          community.password_reset_tests.CommunityPasswordResetConfirmTests
+          # Community Account Management V1 representative invariants.
+          community.account_tests.CommunityAccountSummaryTests.test_returns_canonical_email_masked_mobile_and_configured_password
+          community.account_tests.CommunityAccountSummaryTests.test_ineligible_authenticated_account_is_rejected
+          community.account_password_tests.CommunityAccountPasswordApiTests.test_valid_change_updates_hash_preserves_session_and_audits_without_secrets
+          community.account_mobile_tests.CommunityAccountMobileApiTests.test_genuine_add_change_and_removal_audit_and_enqueue_profile_sync
+          community.account_mobile_tests.CommunityAccountMobileApiTests.test_collision_with_e164_or_legacy_equivalent_mobile_is_blocked_safely
+          community.account_marketing_tests.CommunityAccountMarketingPreferenceApiTests.test_unknown_to_true_is_opted_in_with_authoritative_summary_and_side_effects
+          community.account_marketing_tests.CommunityAccountMarketingPreferenceApiTests.test_unknown_to_false_is_opted_out_without_page_load_mutation
+          community.account_marketing_tests.CommunityAccountMarketingPreferenceApiTests.test_repeated_same_state_is_idempotent_for_same_self_service_actor
+          community.account_email_change_tests.CommunityAccountEmailChangeApiTests.test_inconsistent_identity_and_all_person_user_collisions_are_generic
+          community.account_email_change_tests.CommunityAccountEmailChangeApiTests.test_valid_request_is_normalized_durable_and_does_not_change_identity
+          community.email_change_verification_tests.CommunityEmailChangeVerificationApiTests.test_valid_logged_out_verification_updates_both_identities_and_queues_durable_work
+          community.email_change_verification_tests.CommunityEmailChangeVerificationApiTests.test_authenticated_verification_logs_out_current_session_without_auto_login
+          community.email_change_verification_tests.CommunityEmailChangeVerificationApiTests.test_completion_does_not_call_provider_and_security_job_uses_only_safe_params
+          notifications.worker_tests.TransactionalEmailWorkerTests.test_generic_provider_failure_becomes_delivery_uncertain
+          community.profile_tests.CommunityProfileApiTests
+          community.directory_tests.CommunityDirectoryApiTests.test_list_projects_viewer_relative_relationship_states_and_self_is_not_connectable
+          community.directory_tests.CommunityDirectoryApiTests.test_relationship_projection_does_not_add_one_query_per_returned_member
+          community.directory_tests.CommunityDirectoryApiTests.test_search_filters_pagination_and_invalid_taxonomy
+          community.connection_tests.CommunityConnectionApiTests.test_public_contact_flags_are_independent_and_connection_only_contact_is_removed
+          community.connection_tests.CommunityConnectionApiTests.test_hidden_accepted_profile_is_available_only_to_connection
+          community.connection_tests.CommunityConnectionApiTests.test_self_hidden_and_ineligible_targets_are_rejected
+          community.connection_tests.CommunityConnectionApiTests.test_detail_relationship_states_and_contact_privacy
+          community.connection_tests.CommunityConnectionApiTests.test_pending_declined_and_disconnected_relationships_do_not_grant_hidden_access
           --noinput -v 1
-        # Intentionally limited deployment-contract coverage; this does not replace
-        # the full backend test suite, which will be implemented separately.
+        # Keep this as a fast representative gate; the full backend suite runs
+        # separately on master pull requests and manual dispatch.

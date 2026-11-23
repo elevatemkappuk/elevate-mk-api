@@ -9,6 +9,7 @@ from data_imports.adapters.eventbrite import EventbriteStructureError, iter_even
 from data_imports.models import ImportBatch, ImportRecord
 from data_imports.services.fingerprints import fingerprint_bytes, fingerprint_source_row
 from data_imports.services.normalization import clean_text, normalize_mobile
+from people.services import is_plausible_crm_mobile
 
 
 def ingest_eventbrite_workbook(*, workbook_bytes, source_filename, created_by=None):
@@ -76,6 +77,8 @@ def normalize_eventbrite_row(raw_data, headers):
             validate_email(normalized["person"]["email"])
         except ValidationError:
             errors.append(_error("person.email", "invalid_email", "Email address is not valid."))
+    if normalized["person"]["mobile"] and not is_plausible_crm_mobile(normalized["person"]["mobile"]):
+        errors.append(_error("person.mobile", "INVALID_MOBILE", "Mobile number needs review."))
     for field, path in (("external_event_id", "event.external_event_id"), ("name", "event.name")):
         if not normalized["event"][field]:
             errors.append(_error(path, "required", "This value is required."))

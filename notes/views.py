@@ -7,6 +7,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from accounts.authentication import CRM_SESSION_AUTHENTICATION_CLASSES
 from audit.models import AuditEvent
 from audit.services import record_audit_event
 from notes.models import InternalNote
@@ -86,6 +87,7 @@ class BusinessPersonNotesMixin:
 
 
 class PersonNoteListView(BusinessPersonNotesMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = InternalNoteSerializer
     pagination_class = NotesPagination
 
@@ -253,6 +255,7 @@ class PersonNoteListView(BusinessPersonNotesMixin, generics.GenericAPIView):
 
 
 class PersonNoteUpdateView(BusinessPersonNotesMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = InternalNoteSerializer
     permission_classes = [IsAuthenticated, HasNotesAccess]
 
@@ -326,6 +329,7 @@ class PersonNoteUpdateView(BusinessPersonNotesMixin, generics.GenericAPIView):
 
 
 class PersonNoteArchiveView(BusinessPersonNotesMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = InternalNoteSerializer
     permission_classes = [IsAuthenticated, HasNotesAccess]
 
@@ -392,6 +396,7 @@ class PersonNoteArchiveView(BusinessPersonNotesMixin, generics.GenericAPIView):
 
 
 class PersonNoteRestoreView(BusinessPersonNotesMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = InternalNoteSerializer
     permission_classes = [IsAuthenticated, HasNotesAccess]
 

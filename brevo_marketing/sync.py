@@ -4,14 +4,15 @@ from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import transaction
 
+from audit.models import AuditEvent
 from brevo_marketing.client import BrevoContact, BrevoMarketingClient
-from brevo_marketing.exceptions import BrevoMarketingIdentityConflictError
+from brevo_marketing.exceptions import BrevoMarketingIdentityConflictError, BrevoMarketingValidationError, is_invalid_phone_error
 from external_references.models import ExternalPersonReference
 from external_references.services import attach_person_reference
 from marketing_preferences.models import MarketingPreference
 from marketing_preferences.services import get_effective_marketing_preference
 from people.models import Person
-from people.services import normalize_mobile
+from people.services import PhoneNormalizationStatus, normalize_phone_for_provider
 
 
 BREVO_PROVIDER = "BREVO"
@@ -36,6 +37,9 @@ class BrevoPersonSyncOutcome:
     SKIPPED_NO_MARKETING_CONTACT = "SKIPPED_NO_MARKETING_CONTACT"
     UPDATED_PERSON_PROFILE = "UPDATED_PERSON_PROFILE"
     PROFILE_ALREADY_SYNCHRONIZED = "PROFILE_ALREADY_SYNCHRONIZED"
+    EMAIL_MIGRATION_UPDATED = "EMAIL_MIGRATION_UPDATED"
+    EMAIL_MIGRATION_ALREADY_SYNCHRONIZED = "EMAIL_MIGRATION_ALREADY_SYNCHRONIZED"
+    EMAIL_MIGRATION_SUPERSEDED = "EMAIL_MIGRATION_SUPERSEDED"
 
 
 @dataclass(frozen=True)
@@ -57,28 +61,50 @@ def _approved_attributes(person):
         "FIRSTNAME": person.first_name,
         "LASTNAME": person.last_name,
     }
-    sms = _safe_brevo_sms(person.mobile)
-    if sms:
-        attributes["SMS"] = sms
+    mobile = normalize_phone_for_provider(person.mobile)
+    if mobile.status == PhoneNormalizationStatus.NORMALIZED:
+        attributes["SMS"] = mobile.e164
     return attributes
-
-
-def _safe_brevo_sms(value):
-    """Return only an already-international mobile value; never infer a country."""
-    normalized = normalize_mobile(value)
-    if not normalized:
-        return None
-    if normalized.startswith("+"):
-        digits = normalized[1:]
-        return normalized if digits.isdigit() and 7 <= len(digits) <= 15 else None
-    if normalized.startswith("00"):
-        digits = normalized[2:]
-        return normalized if digits.isdigit() and 7 <= len(digits) <= 15 else None
-    return None
 
 
 def _same_approved_attributes(contact: BrevoContact, person):
     return all(contact.attributes.get(key, "") == value for key, value in _approved_attributes(person).items())
+
+
+def _attributes_without_sms(attributes):
+    return {key: value for key, value in attributes.items() if key != "SMS"}
+
+
+def _create_contact_with_optional_sms_fallback(*, client, email, attributes, list_id):
+    try:
+        return client.create_contact(email=email, attributes=attributes, list_id=list_id)
+    except BrevoMarketingValidationError as error:
+        if "SMS" not in attributes or not attributes["SMS"] or not is_invalid_phone_error(error):
+            raise
+        return client.create_contact(
+            email=email,
+            attributes=_attributes_without_sms(attributes),
+            list_id=list_id,
+        )
+
+
+def _update_contact_with_optional_sms_fallback(*, client, contact_id, attributes=None, list_id=None, email_blacklisted=None):
+    try:
+        client.update_contact(
+            contact_id=contact_id,
+            attributes=attributes,
+            list_id=list_id,
+            email_blacklisted=email_blacklisted,
+        )
+    except BrevoMarketingValidationError as error:
+        if not attributes or not attributes.get("SMS") or not is_invalid_phone_error(error):
+            raise
+        client.update_contact(
+            contact_id=contact_id,
+            attributes=_attributes_without_sms(attributes),
+            list_id=list_id,
+            email_blacklisted=email_blacklisted,
+        )
 
 
 def _provider_state(contact, list_id):
@@ -110,7 +136,11 @@ def synchronize_person_to_brevo(*, person_id, client=None, actor_user=None):
         return BrevoPersonSyncResult(person_id=person.id, outcome=BrevoPersonSyncOutcome.SKIPPED_CONSENT_UNKNOWN, reason="MARKETING_CONSENT_UNKNOWN")
 
     client = client or BrevoMarketingClient.from_settings(require_marketing_list=True)
-    mobile_reason = "MOBILE_OMITTED_UNSAFE_FORMAT" if person.mobile and not _safe_brevo_sms(person.mobile) else None
+    mobile = normalize_phone_for_provider(person.mobile)
+    mobile_reason = "MOBILE_OMITTED_UNSAFE_FORMAT" if mobile.status in {
+        PhoneNormalizationStatus.AMBIGUOUS,
+        PhoneNormalizationStatus.INVALID,
+    } else None
     list_id = client.get_marketing_list_id()
     existing_reference = ExternalPersonReference.objects.select_for_update().filter(
         person=person,
@@ -133,7 +163,12 @@ def synchronize_person_to_brevo(*, person_id, client=None, actor_user=None):
                 outcome=BrevoPersonSyncOutcome.SKIPPED_CONSENT_OPTED_OUT_NO_CONTACT,
                 reason="NO_BREVO_CONTACT",
             )
-        contact = client.create_contact(email=email, attributes=_approved_attributes(person), list_id=list_id)
+        contact = _create_contact_with_optional_sms_fallback(
+            client=client,
+            email=email,
+            attributes=_approved_attributes(person),
+            list_id=list_id,
+        )
         operation = BrevoPersonSyncOutcome.CREATED_MARKETING_CONTACT
     else:
         if contact.email and contact.email != email:
@@ -171,7 +206,8 @@ def synchronize_person_to_brevo(*, person_id, client=None, actor_user=None):
             needs_attributes = not _same_approved_attributes(contact, person)
             needs_list = list_id not in contact.list_ids
             if needs_attributes or needs_list:
-                client.update_contact(
+                _update_contact_with_optional_sms_fallback(
+                    client=client,
                     contact_id=contact.contact_id,
                     attributes=_approved_attributes(person) if needs_attributes else None,
                     list_id=list_id if needs_list else None,
@@ -195,7 +231,125 @@ def synchronize_person_to_brevo(*, person_id, client=None, actor_user=None):
         contact_id=contact.contact_id,
         reference_id=reference.id,
         provider_state=_provider_state(contact, list_id),
-        reason=mobile_reason,
+        reason=protected_state if operation == BrevoPersonSyncOutcome.SKIPPED_PROTECTED_PROVIDER_STATE else mobile_reason,
+    )
+
+
+def _known_person_emails(person_id, previous_email, requested_email):
+    emails = {
+        value.strip().casefold()
+        for value in (previous_email, requested_email)
+        if value and value.strip()
+    }
+    for event in AuditEvent.objects.filter(entity_type="Person", entity_id=str(person_id)).only("changes"):
+        change = (event.changes or {}).get("primary_email") or {}
+        for value in (change.get("from"), change.get("to")):
+            if value and str(value).strip():
+                emails.add(str(value).strip().casefold())
+    return emails
+
+
+@transaction.atomic
+def synchronize_person_email_to_brevo(*, job, client=None):
+    """Safely migrate an existing Brevo contact's email by stable contact ID."""
+    person = Person.objects.select_for_update().get(pk=job.person_id)
+    requested_email = (job.requested_email or "").strip().casefold()
+    previous_email = (job.previous_email or "").strip().casefold()
+
+    if requested_email != _safe_email(person):
+        return BrevoPersonSyncResult(
+            person_id=person.id,
+            outcome=BrevoPersonSyncOutcome.EMAIL_MIGRATION_SUPERSEDED,
+            reason="CRM_EMAIL_CHANGED_AGAIN",
+        )
+    if person.record_type != Person.RecordType.BUSINESS:
+        return BrevoPersonSyncResult(person_id=person.id, outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED, reason="NOT_BUSINESS")
+    if person.archived_at is not None:
+        return BrevoPersonSyncResult(person_id=person.id, outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED, reason="ARCHIVED")
+    try:
+        validate_email(requested_email)
+    except ValidationError:
+        return BrevoPersonSyncResult(person_id=person.id, outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED, reason="CRM_EMAIL_INVALID")
+
+    preference = get_effective_marketing_preference(person=person)
+    if preference.state != MarketingPreference.State.OPTED_IN:
+        return BrevoPersonSyncResult(
+            person_id=person.id,
+            outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED,
+            reason=f"MARKETING_CONSENT_{preference.state}",
+        )
+
+    reference = ExternalPersonReference.objects.select_for_update().filter(
+        person=person,
+        provider=BREVO_PROVIDER,
+        reference_type=MARKETING_CONTACT_REFERENCE_TYPE,
+        status=ExternalPersonReference.Status.ACTIVE,
+    ).first()
+    if reference is None:
+        return BrevoPersonSyncResult(person_id=person.id, outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED, reason="NO_ACTIVE_BREVO_REFERENCE")
+
+    client = client or BrevoMarketingClient.from_settings()
+    contact = client.get_contact_by_id(reference.external_id)
+    if contact is None:
+        return BrevoPersonSyncResult(
+            person_id=person.id,
+            outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED,
+            reference_id=reference.id,
+            reason="BREVO_CONTACT_NOT_FOUND_FOR_REFERENCE",
+        )
+    if contact.email not in _known_person_emails(person.id, previous_email, requested_email):
+        return BrevoPersonSyncResult(
+            person_id=person.id,
+            outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED,
+            contact_id=contact.contact_id,
+            reference_id=reference.id,
+            reason="BREVO_CONTACT_EMAIL_IDENTITY_UNKNOWN",
+        )
+    if contact.email_blacklisted or contact.list_unsubscribed:
+        return BrevoPersonSyncResult(
+            person_id=person.id,
+            outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED,
+            contact_id=contact.contact_id,
+            reference_id=reference.id,
+            reason="BREVO_CONTACT_RESTRICTED",
+        )
+
+    target = client.get_contact(requested_email)
+    if target is not None and target.contact_id != contact.contact_id:
+        return BrevoPersonSyncResult(
+            person_id=person.id,
+            outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED,
+            contact_id=contact.contact_id,
+            reference_id=reference.id,
+            reason="BREVO_TARGET_EMAIL_ALREADY_OWNED",
+        )
+    if contact.email == requested_email:
+        return BrevoPersonSyncResult(
+            person_id=person.id,
+            outcome=BrevoPersonSyncOutcome.EMAIL_MIGRATION_ALREADY_SYNCHRONIZED,
+            contact_id=contact.contact_id,
+            reference_id=reference.id,
+        )
+
+    try:
+        client.update_contact(contact_id=contact.contact_id, attributes={"EMAIL": requested_email})
+    except BrevoMarketingValidationError as error:
+        raise BrevoMarketingIdentityConflictError("Brevo rejected the email identity migration.") from error
+
+    verified = client.get_contact_by_id(contact.contact_id)
+    if verified is None or verified.email != requested_email:
+        return BrevoPersonSyncResult(
+            person_id=person.id,
+            outcome=BrevoPersonSyncOutcome.RECONCILIATION_REQUIRED,
+            contact_id=contact.contact_id,
+            reference_id=reference.id,
+            reason="BREVO_EMAIL_MIGRATION_NOT_VERIFIED",
+        )
+    return BrevoPersonSyncResult(
+        person_id=person.id,
+        outcome=BrevoPersonSyncOutcome.EMAIL_MIGRATION_UPDATED,
+        contact_id=verified.contact_id,
+        reference_id=reference.id,
     )
 
 
@@ -255,15 +409,14 @@ def synchronize_person_profile_to_brevo(*, person_id, client=None):
         "FIRSTNAME": person.first_name or "",
         "LASTNAME": person.last_name or "",
     }
+    mobile = normalize_phone_for_provider(person.mobile)
     mobile_reason = None
-    if not person.mobile:
+    if mobile.status == PhoneNormalizationStatus.EMPTY:
         attributes["SMS"] = ""
+    elif mobile.status == PhoneNormalizationStatus.NORMALIZED:
+        attributes["SMS"] = mobile.e164
     else:
-        safe_sms = _safe_brevo_sms(person.mobile)
-        if safe_sms:
-            attributes["SMS"] = safe_sms
-        else:
-            mobile_reason = "MOBILE_OMITTED_UNSAFE_FORMAT"
+        mobile_reason = "MOBILE_OMITTED_UNSAFE_FORMAT"
 
     changed_attributes = {
         key: value
@@ -271,7 +424,11 @@ def synchronize_person_profile_to_brevo(*, person_id, client=None):
         if (contact.attributes.get(key) or "") != value
     }
     if changed_attributes:
-        client.update_contact(contact_id=contact.contact_id, attributes=changed_attributes)
+        _update_contact_with_optional_sms_fallback(
+            client=client,
+            contact_id=contact.contact_id,
+            attributes=changed_attributes,
+        )
         outcome = BrevoPersonSyncOutcome.UPDATED_PERSON_PROFILE
     else:
         outcome = BrevoPersonSyncOutcome.PROFILE_ALREADY_SYNCHRONIZED

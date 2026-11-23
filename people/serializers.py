@@ -6,6 +6,8 @@ from rest_framework import serializers
 from memberships.models import Membership
 from memberships.serializers import MembershipSerializer
 from people.models import Person
+from community.services import build_community_account_projection, get_community_account_status
+from people.services import is_plausible_crm_mobile
 from professional_profiles.models import ProfessionalProfile
 from professional_profiles.serializers import ProfessionalProfileSerializer
 from skills.models import Skill
@@ -59,6 +61,10 @@ class PersonListQuerySerializer(serializers.Serializer):
     interest = serializers.ListField(child=serializers.IntegerField(min_value=1), required=False)
     skill = serializers.ListField(child=serializers.IntegerField(min_value=1), required=False)
     tag = serializers.ListField(child=serializers.IntegerField(min_value=1), required=False)
+    record_type = serializers.ListField(
+        child=serializers.ChoiceField(choices=Person.RecordType.choices),
+        required=False,
+    )
     record_state = serializers.ChoiceField(
         choices=(
             (RECORD_STATE_ACTIVE, "Active BUSINESS people"),
@@ -85,6 +91,7 @@ class PersonListSerializer(serializers.ModelSerializer):
         model = Person
         fields = (
             "id",
+            "record_type",
             "first_name",
             "last_name",
             "primary_email",
@@ -103,9 +110,10 @@ class PersonDirectoryListSerializer(PersonListSerializer):
 
     job_title = serializers.SerializerMethodField()
     relationship = serializers.SerializerMethodField()
+    community_account_status = serializers.SerializerMethodField()
 
     class Meta(PersonListSerializer.Meta):
-        fields = PersonListSerializer.Meta.fields + ("job_title", "relationship")
+        fields = PersonListSerializer.Meta.fields + ("job_title", "relationship", "community_account_status")
 
     @extend_schema_field(serializers.CharField(allow_null=True, max_length=255))
     def get_job_title(self, instance):
@@ -123,6 +131,10 @@ class PersonDirectoryListSerializer(PersonListSerializer):
             Membership.Status.ACTIVE: "ACTIVE_MEMBER",
             Membership.Status.FORMER: "FORMER_MEMBER",
         }[membership.status]
+
+    @extend_schema_field(serializers.ChoiceField(choices=("ACTIVE", "SETUP_PENDING", "NOT_SET_UP", "ACCESS_UNAVAILABLE")))
+    def get_community_account_status(self, instance):
+        return get_community_account_status(person=instance)
 
 
 class StrictPersonWriteSerializer(serializers.Serializer):
@@ -143,6 +155,11 @@ class StrictPersonWriteSerializer(serializers.Serializer):
         required=False,
         allow_blank=True,
     )
+
+    def validate_mobile(self, value):
+        if not is_plausible_crm_mobile(value):
+            raise serializers.ValidationError("Enter a valid mobile number.")
+        return value
 
     def validate(self, attrs):
         unknown_fields = set(self.initial_data.keys()) - set(self.fields.keys())
@@ -183,8 +200,14 @@ class PersonCreateSerializer(IdentityOverrideCreateSerializerMixin, StrictPerson
 
 
 class PersonUpdateSerializer(StrictPersonWriteSerializer):
+    allow_duplicate_mobile = serializers.BooleanField(required=False, default=False, write_only=True)
     first_name = serializers.CharField(max_length=150, required=False)
     last_name = serializers.CharField(max_length=150, required=False)
+
+
+class PersonClassificationCorrectionSerializer(serializers.Serializer):
+    record_type = serializers.ChoiceField(choices=Person.RecordType.choices)
+    reason = serializers.CharField(max_length=500, allow_blank=False, trim_whitespace=True)
 
 
 class PersonMemberCreateSerializer(IdentityOverrideCreateSerializerMixin, StrictPersonWriteSerializer):
@@ -195,11 +218,13 @@ class PersonMemberCreateSerializer(IdentityOverrideCreateSerializerMixin, Strict
 class DuplicatePersonMatchSerializer(serializers.ModelSerializer):
     class Meta:
         model = Person
-        fields = ("id", "first_name", "last_name", "primary_email", "mobile", "archived_at")
+        fields = ("id", "first_name", "last_name", "archived_at")
 
 
 class IdentityCollisionResponseSerializer(serializers.Serializer):
     code = serializers.ChoiceField(choices=("IDENTITY_COLLISION", "IDENTITY_COLLISION_STALE"))
+    severity = serializers.ChoiceField(choices=("BLOCKING", "WARNING"))
+    match_reasons = serializers.ListField(child=serializers.ChoiceField(choices=("EMAIL", "MOBILE")))
     detail = serializers.CharField()
     collision = ReviewedIdentityCollisionSerializer()
     candidates = DuplicatePersonMatchSerializer(many=True)
@@ -236,6 +261,20 @@ class PersonRelationshipSerializer(serializers.Serializer):
     label = serializers.CharField()
 
 
+class CommunityAccountSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=("ACTIVE", "SETUP_PENDING", "NOT_SET_UP", "ACCESS_UNAVAILABLE"))
+    account_email = serializers.EmailField(allow_null=True)
+    setup_email = serializers.EmailField(allow_null=True)
+    account_created_at = serializers.DateTimeField(allow_null=True)
+    last_login_at = serializers.DateTimeField(allow_null=True)
+    invitation_sent_at = serializers.DateTimeField(allow_null=True)
+    invitation_expires_at = serializers.DateTimeField(allow_null=True)
+    invitation_delivery_status = serializers.ChoiceField(
+        choices=("SENT", "NOT_SENT", "DELIVERY_UNCERTAIN", "FAILED"),
+        allow_null=True,
+    )
+
+
 class PersonOverviewSerializer(serializers.Serializer):
     person = PersonListSerializer(source="*")
     relationship = serializers.SerializerMethodField()
@@ -245,12 +284,17 @@ class PersonOverviewSerializer(serializers.Serializer):
     interests = serializers.SerializerMethodField()
     tags = serializers.SerializerMethodField()
     marketing_preference = serializers.SerializerMethodField()
+    community_account = serializers.SerializerMethodField()
 
     @extend_schema_field(MarketingPreferenceSerializer)
     def get_marketing_preference(self, instance):
         return MarketingPreferenceSerializer(
             get_effective_marketing_preference(person=instance)
         ).data
+
+    @extend_schema_field(CommunityAccountSerializer)
+    def get_community_account(self, instance):
+        return CommunityAccountSerializer(build_community_account_projection(person=instance)).data
 
     @extend_schema_field(PersonRelationshipSerializer)
     def get_relationship(self, instance):
@@ -344,3 +388,29 @@ class PersonOverviewSerializer(serializers.Serializer):
                 is_active=True,
             ).order_by("display_order", "name", "id")
         )
+
+
+class BrevoIntegrationStateSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=("CONNECTED", "RESTRICTED", "CONTACT_MISSING", "IDENTITY_CONFLICT", "NOT_CONNECTED", "UNKNOWN"))
+    reason_code = serializers.CharField(allow_null=True)
+    title = serializers.CharField()
+    explanation = serializers.CharField()
+    can_reconcile = serializers.BooleanField()
+    provider_profile_url = serializers.URLField(allow_null=True)
+
+
+class PersonBrevoIntegrationSerializer(serializers.Serializer):
+    provider = serializers.CharField()
+    marketing_preference = serializers.SerializerMethodField()
+    integration = BrevoIntegrationStateSerializer()
+
+    @extend_schema_field(MarketingPreferenceSerializer)
+    def get_marketing_preference(self, instance):
+        preference = instance["marketing_preference"]
+        return {
+            "channel": preference.channel,
+            "state": preference.state,
+            "source": preference.source,
+            "recorded_at": preference.recorded_at,
+            "recorded_by_id": preference.actor_user_id,
+        }

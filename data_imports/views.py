@@ -11,6 +11,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from accounts.authentication import CRM_SESSION_AUTHENTICATION_CLASSES
 from data_imports.models import ImportBatch, ImportRecord
 from data_imports.serializers import (
     IMPORT_BATCH_COUNT_ANNOTATIONS,
@@ -100,6 +101,7 @@ class ImportBatchQuerysetMixin:
 
 
 class ImportBatchListView(ImportBatchQuerysetMixin, generics.ListAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = ImportBatchSerializer
     permission_classes = [IsAuthenticated, HasImportReconciliationAccess]
 
@@ -120,6 +122,7 @@ class ImportBatchListView(ImportBatchQuerysetMixin, generics.ListAPIView):
 
 
 class MembershipFormUploadView(ImportBatchQuerysetMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, HasImportReconciliationAccess]
     parser_classes = [MultiPartParser, FormParser]
 
@@ -171,6 +174,7 @@ class MembershipFormUploadView(ImportBatchQuerysetMixin, generics.GenericAPIView
 
 
 class EventbriteUploadView(ImportBatchQuerysetMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, HasImportReconciliationAccess]
     parser_classes = [MultiPartParser, FormParser]
 
@@ -223,6 +227,7 @@ class EventbriteUploadView(ImportBatchQuerysetMixin, generics.GenericAPIView):
 
 
 class ImportBatchAnalyzeView(ImportBatchQuerysetMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = ImportBatchSerializer
     permission_classes = [IsAuthenticated, HasImportReconciliationAccess]
 
@@ -254,6 +259,7 @@ class ImportBatchAnalyzeView(ImportBatchQuerysetMixin, generics.GenericAPIView):
 
 
 class ImportBatchDetailView(ImportBatchQuerysetMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = ImportBatchSerializer
     permission_classes = [IsAuthenticated, HasImportReconciliationAccess]
 
@@ -275,6 +281,7 @@ class ImportBatchDetailView(ImportBatchQuerysetMixin, generics.GenericAPIView):
 
 
 class ImportBatchImportView(ImportBatchQuerysetMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = ImportBatchImportResponseSerializer
     permission_classes = [IsAuthenticated, HasImportReconciliationAccess]
 
@@ -350,6 +357,7 @@ class ImportBatchImportView(ImportBatchQuerysetMixin, generics.GenericAPIView):
 
 
 class ImportReviewQueueView(ImportBatchQuerysetMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = ImportReviewRecordSerializer
     permission_classes = [IsAuthenticated, HasImportReconciliationAccess]
     pagination_class = ImportReviewPagination
@@ -391,6 +399,7 @@ class ImportReviewQueueView(ImportBatchQuerysetMixin, generics.GenericAPIView):
 
 
 class ImportRecordListView(ImportBatchQuerysetMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = ImportRecordPreviewSerializer
     permission_classes = [IsAuthenticated, HasImportReconciliationAccess]
     pagination_class = ImportReviewPagination
@@ -436,6 +445,7 @@ class ImportRecordListView(ImportBatchQuerysetMixin, generics.GenericAPIView):
 
 
 class ImportReviewDetailView(ImportBatchQuerysetMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = ImportReviewDetailSerializer
     permission_classes = [IsAuthenticated, HasImportReconciliationAccess]
 
@@ -464,6 +474,7 @@ class ImportReviewDetailView(ImportBatchQuerysetMixin, generics.GenericAPIView):
 
 
 class ImportReviewResolveView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = ImportReviewDetailSerializer
     permission_classes = [IsAuthenticated, HasImportReconciliationAccess]
 

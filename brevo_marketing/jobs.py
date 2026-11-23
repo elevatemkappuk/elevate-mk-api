@@ -6,6 +6,7 @@ from threading import Event
 import re
 
 from django.db import transaction
+from django.db.models import Case, IntegerField, When
 from django.utils import timezone
 
 from brevo_marketing.exceptions import (
@@ -23,6 +24,7 @@ from brevo_marketing.routing import BREVO_PROVIDER
 from brevo_marketing.sync import (
     BrevoPersonSyncOutcome,
     synchronize_person_profile_to_brevo,
+    synchronize_person_email_to_brevo,
     synchronize_person_to_brevo,
 )
 from external_references.models import ExternalPersonSyncJob
@@ -30,6 +32,7 @@ from external_references.models import ExternalPersonSyncJob
 
 EMAIL_MARKETING_PREFERENCE_SYNC = "EMAIL_MARKETING_PREFERENCE"
 PERSON_PROFILE_SYNC = "PERSON_PROFILE"
+PERSON_EMAIL_MIGRATION_SYNC = "PERSON_EMAIL_MIGRATION"
 STALE_PROCESSING_AFTER = timedelta(minutes=15)
 RETRY_BACKOFF_MINUTES = (1, 5, 15, 60)
 MAX_STORED_ERROR_LENGTH = 500
@@ -119,7 +122,11 @@ def process_next_brevo_sync_job(*, client=None):
         return None
 
     try:
-        if job.job_type == PERSON_PROFILE_SYNC:
+        if job.job_type == PERSON_EMAIL_MIGRATION_SYNC:
+            result = synchronize_person_email_to_brevo(job=job, client=client)
+        elif job.job_type == PERSON_PROFILE_SYNC:
+            if _email_migration_is_pending(job.person_id):
+                return _defer_for_email_migration(job)
             result = synchronize_person_profile_to_brevo(person_id=job.person_id, client=client)
         else:
             result = synchronize_person_to_brevo(person_id=job.person_id, client=client)
@@ -148,7 +155,7 @@ def _claim_next_job():
     stale_before = now - STALE_PROCESSING_AFTER
     ExternalPersonSyncJob.objects.filter(
         provider=BREVO_PROVIDER,
-        job_type__in=(EMAIL_MARKETING_PREFERENCE_SYNC, PERSON_PROFILE_SYNC),
+        job_type__in=(EMAIL_MARKETING_PREFERENCE_SYNC, PERSON_PROFILE_SYNC, PERSON_EMAIL_MIGRATION_SYNC),
         status=ExternalPersonSyncJob.Status.PROCESSING,
         locked_at__lt=stale_before,
     ).update(
@@ -160,10 +167,16 @@ def _claim_next_job():
     )
     job = ExternalPersonSyncJob.objects.select_for_update().filter(
         provider=BREVO_PROVIDER,
-        job_type__in=(EMAIL_MARKETING_PREFERENCE_SYNC, PERSON_PROFILE_SYNC),
+        job_type__in=(EMAIL_MARKETING_PREFERENCE_SYNC, PERSON_PROFILE_SYNC, PERSON_EMAIL_MIGRATION_SYNC),
         status=ExternalPersonSyncJob.Status.PENDING,
         available_at__lte=now,
-    ).order_by("available_at", "id").first()
+    ).annotate(
+        email_migration_priority=Case(
+            When(job_type=PERSON_EMAIL_MIGRATION_SYNC, then=0),
+            default=1,
+            output_field=IntegerField(),
+        )
+    ).order_by("available_at", "email_migration_priority", "id").first()
     if job is None:
         return None
     job.status = ExternalPersonSyncJob.Status.PROCESSING
@@ -181,6 +194,31 @@ def _mark_succeeded(job):
     job.completed_at = timezone.now()
     job.locked_at = None
     job.save(update_fields=["status", "completed_at", "locked_at", "updated_at"])
+
+
+def _email_migration_is_pending(person_id):
+    return ExternalPersonSyncJob.objects.filter(
+        person_id=person_id,
+        provider=BREVO_PROVIDER,
+        job_type=PERSON_EMAIL_MIGRATION_SYNC,
+        status__in=(ExternalPersonSyncJob.Status.PENDING, ExternalPersonSyncJob.Status.PROCESSING),
+    ).exists()
+
+
+@transaction.atomic
+def _defer_for_email_migration(job):
+    job.status = ExternalPersonSyncJob.Status.PENDING
+    job.available_at = timezone.now() + timedelta(seconds=1)
+    job.locked_at = None
+    job.last_error_code = "BREVO_EMAIL_MIGRATION_PENDING"
+    job.last_error_message = "Profile synchronization deferred until email migration converges."
+    job.save(update_fields=["status", "available_at", "locked_at", "last_error_code", "last_error_message", "updated_at"])
+    return BrevoJobProcessResult(
+        job_id=job.id,
+        status=ExternalPersonSyncJob.Status.PENDING,
+        attempts=job.attempts,
+        error_code="BREVO_EMAIL_MIGRATION_PENDING",
+    )
 
 
 @transaction.atomic

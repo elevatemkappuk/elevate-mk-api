@@ -13,9 +13,9 @@ from staff_access.models import StaffRole, StaffRoleAssignment
 
 class ImportRecordPreviewApiTests(APITestCase):
     def setUp(self):
-        self.admin = self.create_user("admin@example.com")
-        self.manager = self.create_user("manager@example.com")
-        self.viewer = self.create_user("viewer@example.com")
+        self.admin = self.create_user("admin@example.com", person_record_type=Person.RecordType.STAFF)
+        self.manager = self.create_user("manager@example.com", person_record_type=Person.RecordType.STAFF)
+        self.viewer = self.create_user("viewer@example.com", person_record_type=Person.RecordType.STAFF)
         self.superuser = self.create_user("superuser@example.com", is_staff=True, is_superuser=True)
         admin_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_ADMIN, defaults={"name": "CRM Administrator"})
         manager_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_MANAGER, defaults={"name": "CRM Manager"})
@@ -131,6 +131,7 @@ class ImportRecordPreviewApiTests(APITestCase):
                 {"field": "gender", "code": "unsupported_gender", "message": "internal: Prefer not to say"},
                 {"field": "email", "code": "invalid_email", "message": "internal validation exception"},
                 {"field": "linkedin_url", "code": "invalid_url", "message": "internal URL validator exception"},
+                {"field": "mobile", "code": "INVALID_MOBILE", "message": "internal mobile validation"},
                 {"field": "mobile", "code": "unexpected", "message": "must never be exposed"},
             ],
         )
@@ -146,6 +147,7 @@ class ImportRecordPreviewApiTests(APITestCase):
                 {"field": "gender", "code": "unsupported_gender", "message": "Gender is not supported."},
                 {"field": "email", "code": "invalid_email", "message": "Email address is not valid."},
                 {"field": "linkedin_url", "code": "invalid_url", "message": "LinkedIn URL is not valid."},
+                {"field": "mobile", "code": "INVALID_MOBILE", "message": "Mobile number needs review."},
             ],
         )
         self.assertNotIn("raw_data", record)

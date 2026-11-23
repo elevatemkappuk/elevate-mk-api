@@ -151,18 +151,21 @@ class InternalNoteApiTests(TestCase):
             password="testpass123",
             person_first_name="Admin",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.manager_user = User.objects.create_user(
             email="manager-notes@example.com",
             password="testpass123",
             person_first_name="Manager",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.viewer_user = User.objects.create_user(
             email="viewer-notes@example.com",
             password="testpass123",
             person_first_name="Viewer",
             person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.other_author = User.objects.create_user(
             email="other-author@example.com",

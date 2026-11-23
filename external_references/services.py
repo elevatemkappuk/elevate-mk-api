@@ -7,7 +7,10 @@ from external_references.models import ExternalPersonReference, ExternalPersonSy
 from people.models import Person
 
 
-def enqueue_person_sync_job(*, person, provider, job_type, source_event_id, available_at=None):
+def enqueue_person_sync_job(
+    *, person, provider, job_type, source_event_id, available_at=None,
+    previous_email=None, requested_email=None,
+):
     """Create one durable sync job for a source-domain event, idempotently."""
     job, _ = ExternalPersonSyncJob.objects.get_or_create(
         provider=provider,
@@ -16,6 +19,8 @@ def enqueue_person_sync_job(*, person, provider, job_type, source_event_id, avai
         defaults={
             "person": person,
             "available_at": available_at or timezone.now(),
+            "previous_email": previous_email,
+            "requested_email": requested_email,
         },
     )
     if job.person_id != person.id:

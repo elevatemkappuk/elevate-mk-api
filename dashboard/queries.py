@@ -6,6 +6,7 @@ from django.db.models.functions import Collate, TruncMonth
 from django.utils import timezone
 
 from data_imports.models import ImportBatch
+from campaigns.models import Campaign
 from memberships.models import Membership
 from people.models import Person
 
@@ -54,6 +55,15 @@ def dashboard_projection():
         "professional_profile__industry_id",
     )[:5]
     age_counts = dict(people.values("age_range").annotate(count=Count("id")).values_list("age_range", "count"))
+    active_campaigns = Campaign.objects.filter(archived_at__isnull=True)
+    campaign_counts = active_campaigns.aggregate(
+        active_campaigns=Count("id"),
+        ready_in_brevo=Count("id", filter=Q(status=Campaign.Status.PREPARED)),
+        needs_attention=Count(
+            "id",
+            filter=Q(status__in=(Campaign.Status.RECONCILIATION_REQUIRED, Campaign.Status.PROVIDER_FAILED)),
+        ),
+    )
     return {
         "overview": overview,
         "growth": {"people_by_month": series(people_months), "members_by_month": series(member_months)},
@@ -62,8 +72,14 @@ def dashboard_projection():
             "top_industries": [{"id": row["professional_profile__industry_id"], "label": row["label"], "count": row["count"]} for row in industries],
             "age_ranges": [{"value": value, "label": label, "count": age_counts.get(value, 0)} for value, label in Person.AgeRange.choices],
         },
+        "marketing": {
+            "active_campaigns": campaign_counts["active_campaigns"],
+            "ready_in_brevo": campaign_counts["ready_in_brevo"],
+            "needs_attention": campaign_counts["needs_attention"],
+        },
         "attention": {
             "imports_needing_review": ImportBatch.objects.filter(status=ImportBatch.Status.READY_FOR_REVIEW).count(),
             "archived_people": Person.objects.archived_business().count(),
+            "campaigns_needing_attention": campaign_counts["needs_attention"],
         },
     }

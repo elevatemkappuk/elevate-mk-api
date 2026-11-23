@@ -10,10 +10,12 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from accounts.authentication import CRM_SESSION_AUTHENTICATION_CLASSES
 from audit.models import AuditEvent
 from audit.policies import build_person_audit_scope_q, filter_person_audit_visibility_for_user
 from audit.services import record_audit_event
-from brevo_marketing.jobs import PERSON_PROFILE_SYNC
+from brevo_marketing.jobs import PERSON_EMAIL_MIGRATION_SYNC, PERSON_PROFILE_SYNC
+from brevo_marketing.inspection import inspect_person_brevo_integration
 from audit.serializers import (
     PaginatedPersonAuditHistorySerializer,
     PersonAuditHistoryEventSerializer,
@@ -26,19 +28,22 @@ from people.serializers import (
     IdentityCollisionResponseSerializer,
     PaginatedPersonListSerializer,
     PersonCreateSerializer,
+    PersonClassificationCorrectionSerializer,
     PersonDirectoryListSerializer,
     PersonListQuerySerializer,
     PersonListSerializer,
     PersonMemberCreateSerializer,
     PersonOverviewSerializer,
+    PersonBrevoIntegrationSerializer,
     PersonUpdateSerializer,
 )
-from people.services import evaluate_create_new_identity, find_business_duplicate_people
-from external_references.services import enqueue_coalesced_person_sync_job
+from people.services import CreateNewIdentityCollision, correct_person_classification, evaluate_create_new_identity
+from external_references.services import enqueue_coalesced_person_sync_job, enqueue_person_sync_job
 from people.querying import PeopleDirectoryQuery
 from memberships.models import Membership
+from community.models import CommunityAccountInvitation
 from staff_access.models import StaffRole
-from staff_access.permissions import HasActiveStaffRoleCodes
+from staff_access.permissions import HasActiveStaffRoleCodes, user_has_any_active_staff_role
 from skills.models import PersonSkill
 from tags.models import PersonTag
 
@@ -78,14 +83,19 @@ class DuplicatePersonConflict(APIException):
     status_code = status.HTTP_409_CONFLICT
     default_code = "duplicate_person"
 
-    def __init__(self, matches):
-        super().__init__(
-            {
-                "detail": "A possible existing Person was found.",
+    def __init__(self, policy):
+        response_detail = {
+                "detail": "Another Person already uses this mobile number.",
                 "code": self.default_code,
-                "matches": DuplicatePersonMatchSerializer(matches, many=True).data,
-            }
-        )
+                "severity": policy.severity,
+                "match_reasons": list(policy.match_reasons),
+                "matches": DuplicatePersonMatchSerializer(
+                    Person.objects.business().filter(pk__in=policy.matched_person_ids).order_by("last_name", "first_name", "id"),
+                    many=True,
+                ).data,
+        }
+        super().__init__(response_detail)
+        self.detail = response_detail
 
 
 class IdentityCollisionConflict(APIException):
@@ -102,6 +112,8 @@ class IdentityCollisionConflict(APIException):
         response_detail = {
             "detail": detail,
             "code": "IDENTITY_COLLISION_STALE" if stale else self.default_code,
+            "severity": policy.severity,
+            "match_reasons": list(policy.match_reasons),
             "collision": {
                 "collision": policy.collision.value,
                 "person_ids": list(policy.matched_person_ids),
@@ -127,7 +139,12 @@ def identity_override_metadata(validated_data):
 
 class BusinessPersonQuerysetMixin:
     def get_business_people_queryset(self):
-        return Person.objects.business()
+        queryset = Person.objects.filter(
+            record_type__in=(Person.RecordType.COMMUNITY.value, Person.RecordType.STAFF.value)
+        )
+        if not user_has_any_active_staff_role(self.request.user, (StaffRole.CRM_ADMIN,)):
+            queryset = queryset.filter(record_type=Person.RecordType.COMMUNITY.value)
+        return queryset
 
     def get_business_person_or_404(self):
         person = self.get_business_people_queryset().filter(pk=self.kwargs["person_id"]).first()
@@ -137,6 +154,7 @@ class BusinessPersonQuerysetMixin:
 
 
 class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = PersonDirectoryListSerializer
     permission_classes = [IsAuthenticated, HasPeopleAccess]
     pagination_class = PeoplePagination
@@ -147,6 +165,7 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
         description=(
             "Returns BUSINESS Person records for the Staff CRM People directory. "
             "Includes read-only job_title from ProfessionalProfile and relationship from Membership. "
+            "Includes the read-only backend-derived community_account_status lifecycle state. "
             "TECHNICAL persons are excluded for all record_state values. "
             "Supports repeated relationship, location, industry, career_stage, interest, skill, and tag filters: "
             "values are ORed within a category and categories combine with AND. "
@@ -184,6 +203,7 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
                             "archived_at": None,
                             "created_at": "2026-08-29T12:00:00Z",
                             "updated_at": "2026-08-29T12:00:00Z",
+                            "community_account_status": "ACTIVE",
                         }
                     ],
                 },
@@ -198,8 +218,21 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
 
     def get_queryset(self):
         params = getattr(self, "validated_query_params", self.get_validated_query_params())
+        current_community_invitations = CommunityAccountInvitation.objects.filter(
+            used_at__isnull=True,
+            revoked_at__isnull=True,
+            superseded_at__isnull=True,
+        ).select_related("transactional_email_job").order_by("-created_at", "-id")
+        if not user_has_any_active_staff_role(self.request.user, (StaffRole.CRM_ADMIN,)):
+            params = {**params, "record_type": [Person.RecordType.COMMUNITY.value]}
         return PeopleDirectoryQuery(self.get_business_people_queryset(), params).apply().select_related(
-            "professional_profile", "membership",
+            "user", "professional_profile", "membership",
+        ).prefetch_related(
+            Prefetch(
+                "community_account_invitations",
+                queryset=current_community_invitations,
+                to_attr="current_community_invitations",
+            ),
         )
 
     def get_validated_query_params(self):
@@ -266,6 +299,7 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
         policy = evaluate_create_new_identity(
             primary_email=validated_data.get("primary_email", ""),
             mobile=validated_data.get("mobile", ""),
+            mobile_only_override=True,
         )
         if validated_data.get("confirm_identity_override"):
             reviewed_collision = validated_data.get("reviewed_collision", {})
@@ -275,20 +309,27 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
             }
             if not policy.matches_reviewed_evidence(reviewed_evidence):
                 raise IdentityCollisionConflict(policy, stale=True)
+            if policy.collision != CreateNewIdentityCollision.MOBILE_COLLISION:
+                raise IdentityCollisionConflict(policy)
             return
 
         if policy.requires_review:
             raise IdentityCollisionConflict(policy)
 
     @staticmethod
-    def raise_if_duplicate(*, primary_email="", mobile="", exclude_person_id=None, **_unused):
-        matches = find_business_duplicate_people(
+    def raise_if_duplicate(*, primary_email="", mobile="", exclude_person_id=None, allow_duplicate_mobile=False, **_unused):
+        policy = evaluate_create_new_identity(
             primary_email=primary_email,
             mobile=mobile,
             exclude_person_id=exclude_person_id,
         )
-        if matches:
-            raise DuplicatePersonConflict(matches)
+        if policy.collision == CreateNewIdentityCollision.NO_BLOCKING_COLLISION:
+            return policy
+        if policy.collision == CreateNewIdentityCollision.MOBILE_COLLISION and allow_duplicate_mobile:
+            return policy
+        if policy.collision == CreateNewIdentityCollision.MOBILE_COLLISION:
+            raise DuplicatePersonConflict(policy)
+        raise IdentityCollisionConflict(policy)
 
     @staticmethod
     def record_person_audit(action, actor_user, person, changes, metadata=None):
@@ -306,6 +347,7 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
 
 
 class PersonMemberCreateView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, HasPeopleWriteAccess]
 
     @extend_schema(
@@ -369,6 +411,7 @@ class PersonMemberCreateView(generics.GenericAPIView):
 
 
 class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = PersonListSerializer
     permission_classes = [IsAuthenticated, HasPeopleAccess]
     lookup_url_kwarg = "person_id"
@@ -453,7 +496,16 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
             if person.archived_at is not None:
                 raise PersonLifecycleConflict("Archived people cannot be edited.")
 
+            if "primary_email" in input_serializer.validated_data and hasattr(person, "user"):
+                requested_email = input_serializer.validated_data["primary_email"] or ""
+                if requested_email.strip().casefold() != (person.user.email or "").strip().casefold():
+                    raise serializers.ValidationError({
+                        "primary_email": "A Person linked to a User must change its authentication email through the verified account workflow."
+                    })
+
+            allow_duplicate_mobile = input_serializer.validated_data.pop("allow_duplicate_mobile", False)
             changes = {}
+            duplicate_policy = None
             for field, new_value in input_serializer.validated_data.items():
                 old_value = getattr(person, field)
                 if old_value != new_value:
@@ -462,10 +514,11 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
             if changes:
                 changed_identity_fields = {"primary_email", "mobile"}.intersection(changes)
                 if changed_identity_fields:
-                    PeopleListView.raise_if_duplicate(
+                    duplicate_policy = PeopleListView.raise_if_duplicate(
                         primary_email=person.primary_email if "primary_email" not in changes else changes["primary_email"]["to"],
                         mobile=person.mobile if "mobile" not in changes else changes["mobile"]["to"],
                         exclude_person_id=person.id,
+                        allow_duplicate_mobile=allow_duplicate_mobile,
                     )
                 for field, change in changes.items():
                     setattr(person, field, change["to"])
@@ -474,10 +527,28 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
                 except DjangoValidationError as error:
                     raise serializers.ValidationError(error.message_dict)
                 person.save(update_fields=[*changes.keys(), "updated_at"])
+                audit_metadata = None
+                if allow_duplicate_mobile and duplicate_policy.collision == CreateNewIdentityCollision.MOBILE_COLLISION:
+                    audit_metadata = {
+                        "duplicate_mobile_override": True,
+                        "duplicate_mobile_match_person_ids": [str(person_id) for person_id in duplicate_policy.matched_person_ids],
+                    }
                 audit_event = PeopleListView.record_person_audit(
-                    AuditEvent.Action.PERSON_UPDATED, request.user, person, changes
+                    AuditEvent.Action.PERSON_UPDATED, request.user, person, changes, audit_metadata
                 )
-                if set(changes).intersection({"primary_email", "first_name", "last_name", "mobile"}):
+                if "primary_email" in changes:
+                    previous_email = (changes["primary_email"]["from"] or "").strip().casefold()
+                    requested_email = (changes["primary_email"]["to"] or "").strip().casefold()
+                if "primary_email" in changes and previous_email != requested_email:
+                    enqueue_person_sync_job(
+                        person=person,
+                        provider="BREVO",
+                        job_type=PERSON_EMAIL_MIGRATION_SYNC,
+                        source_event_id=audit_event.id,
+                        previous_email=previous_email,
+                        requested_email=requested_email,
+                    )
+                if set(changes).intersection({"first_name", "last_name", "mobile"}):
                     enqueue_coalesced_person_sync_job(
                         person=person,
                         provider="BREVO",
@@ -488,7 +559,32 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
         return Response(PersonListSerializer(person).data)
 
 
+class PersonClassificationCorrectionView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [IsAuthenticated, HasActiveStaffRoleCodes]
+    required_role_codes = (StaffRole.CRM_ADMIN,)
+    serializer_class = PersonClassificationCorrectionSerializer
+
+    def post(self, request, person_id):
+        input_serializer = self.get_serializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+        try:
+            person = correct_person_classification(
+                person_id=person_id,
+                target_record_type=input_serializer.validated_data["record_type"],
+                actor_user=request.user,
+                reason=input_serializer.validated_data["reason"],
+                request=request,
+            )
+        except Person.DoesNotExist:
+            raise NotFound("Not found.")
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(error.message_dict)
+        return Response(PersonListSerializer(person).data)
+
+
 class PersonArchiveView(BusinessPersonQuerysetMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, HasPeopleWriteAccess]
 
     @extend_schema(
@@ -551,6 +647,7 @@ class PersonRestoreView(PersonArchiveView):
 
 
 class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = PersonOverviewSerializer
     permission_classes = [IsAuthenticated, HasPeopleAccess]
     lookup_url_kwarg = "person_id"
@@ -670,15 +767,54 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
             is_active=True,
             tag__is_active=True,
         ).order_by("tag__display_order", "tag__name", "tag__id")
+        current_community_invitations = CommunityAccountInvitation.objects.filter(
+            used_at__isnull=True,
+            revoked_at__isnull=True,
+            superseded_at__isnull=True,
+        ).select_related("transactional_email_job").order_by("-created_at", "-id")
         return self.get_business_people_queryset().select_related(
+            "user",
             "membership",
             "professional_profile",
             "professional_profile__industry",
         ).prefetch_related(
+            Prefetch(
+                "community_account_invitations",
+                queryset=current_community_invitations,
+                to_attr="current_community_invitations",
+            ),
             Prefetch("person_skills", queryset=active_person_skills, to_attr="active_person_skills"),
             Prefetch("person_interests", queryset=active_person_interests, to_attr="active_person_interests"),
             Prefetch("person_tags", queryset=active_person_tags, to_attr="active_person_tags"),
         )
+
+
+class PersonBrevoIntegrationView(BusinessPersonQuerysetMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [IsAuthenticated, HasPeopleAccess]
+    serializer_class = PersonBrevoIntegrationSerializer
+
+    @extend_schema(
+        operation_id="person_brevo_integration_retrieve",
+        summary="Inspect a Person's Brevo integration",
+        description=(
+            "Returns a safe, read-only Brevo integration projection. It never synchronizes a contact, changes consent, "
+            "changes a reference, changes list membership, or creates provider work."
+        ),
+        responses={200: PersonBrevoIntegrationSerializer},
+        tags=["People", "Brevo"],
+    )
+    def get(self, request, *args, **kwargs):
+        person = self.get_business_person_or_404()
+        inspection = inspect_person_brevo_integration(
+            person=person,
+            can_reconcile=user_has_any_active_staff_role(request.user, (StaffRole.CRM_ADMIN,)),
+        )
+        return Response(self.get_serializer({
+            "provider": "BREVO",
+            "marketing_preference": inspection.marketing_preference,
+            "integration": inspection.integration,
+        }).data)
 
 
 class PersonAuditHistoryPagination(PageNumberPagination):
@@ -692,6 +828,7 @@ class PersonAuditHistoryPagination(PageNumberPagination):
 
 
 class PersonAuditHistoryView(BusinessPersonQuerysetMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = PersonAuditHistoryEventSerializer
     permission_classes = [IsAuthenticated, HasPeopleAccess]
     pagination_class = PersonAuditHistoryPagination

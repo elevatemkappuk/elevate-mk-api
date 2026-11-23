@@ -78,8 +78,8 @@ class MarketingPreferenceApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.person = Person.objects.create(first_name="Ava", last_name="Example")
-        self.viewer = User.objects.create_user(email="viewer@example.com", password="password123", person_first_name="View", person_last_name="User")
-        self.manager = User.objects.create_user(email="manager@example.com", password="password123", person_first_name="Manage", person_last_name="User")
+        self.viewer = User.objects.create_user(email="viewer@example.com", password="password123", person_first_name="View", person_last_name="User", person_record_type=Person.RecordType.STAFF)
+        self.manager = User.objects.create_user(email="manager@example.com", password="password123", person_first_name="Manage", person_last_name="User", person_record_type=Person.RecordType.STAFF)
         StaffRoleAssignment.objects.assign_role(user=self.viewer, role=StaffRole.objects.get(code=StaffRole.CRM_VIEWER))
         StaffRoleAssignment.objects.assign_role(user=self.manager, role=StaffRole.objects.get(code=StaffRole.CRM_MANAGER))
         self.url = f"/api/v1/people/{self.person.id}/marketing-preference/"

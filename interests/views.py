@@ -6,6 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.serializers import ValidationError
 
+from accounts.authentication import CRM_SESSION_AUTHENTICATION_CLASSES
 from audit.models import AuditEvent
 from audit.services import record_audit_event
 from interests.models import Interest, PersonInterest
@@ -37,6 +38,7 @@ class InterestAssignmentConflict(APIException):
 
 
 class InterestListView(generics.ListAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = InterestSummarySerializer
     permission_classes = [IsAuthenticated, HasInterestAccess]
     pagination_class = None
@@ -74,6 +76,7 @@ class InterestListView(generics.ListAPIView):
 
 
 class PersonInterestListView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = InterestSummarySerializer
     pagination_class = None
 
@@ -219,6 +222,7 @@ class PersonInterestListView(generics.GenericAPIView):
 
 
 class PersonInterestDetailView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, HasInterestWriteAccess]
 
     @extend_schema(

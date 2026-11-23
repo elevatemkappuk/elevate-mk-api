@@ -6,6 +6,7 @@ from rest_framework.exceptions import APIException, NotFound
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from accounts.authentication import CRM_SESSION_AUTHENTICATION_CLASSES
 from audit.models import AuditEvent
 from audit.services import record_audit_event
 from memberships.models import Membership
@@ -37,6 +38,7 @@ class MembershipConflict(APIException):
 
 
 class PersonMembershipView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = MembershipSerializer
     permission_classes = [IsAuthenticated]
 
@@ -219,6 +221,7 @@ class EndMembershipConflict(APIException):
 
 
 class PersonMembershipEndView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = MembershipSerializer
     permission_classes = [IsAuthenticated, HasMembershipWriteAccess]
 
