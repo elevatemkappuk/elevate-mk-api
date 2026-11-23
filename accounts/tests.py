@@ -140,6 +140,14 @@ class AuthenticationApiTests(TestCase):
             joined_at=date(2024, 1, 1),
             membership_source=Membership.Source.STAFF,
         )
+        self.staff_user = User.objects.create_user(
+            email="staff@example.com",
+            password=self.password,
+            person=Person.objects.create(
+                first_name="Staff", last_name="Example", primary_email="staff@example.com",
+                record_type=Person.RecordType.STAFF,
+            ),
+        )
         self.csrf_url = "/api/v1/auth/csrf/"
         self.login_url = "/api/v1/auth/login/"
         self.token_url = "/api/v1/auth/token/"
@@ -209,11 +217,11 @@ class AuthenticationApiTests(TestCase):
         self.assertIn("_auth_user_id", self.client.session)
 
     def test_staff_user_receives_active_role_codes_in_login_response(self):
-        StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role)
+        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.admin_role)
 
         response = self.client.post(
             self.login_url,
-            {"email": "member@example.com", "password": self.password},
+            {"email": "staff@example.com", "password": self.password},
             format="json",
         )
 
@@ -679,10 +687,10 @@ class AuthenticationApiTests(TestCase):
         self.assertNotIn("password", response.data)
 
     def test_staff_user_receives_active_role_codes_in_me(self):
-        StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role)
+        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.admin_role)
         self.client.post(
             self.login_url,
-            {"email": "member@example.com", "password": self.password},
+            {"email": "staff@example.com", "password": self.password},
             format="json",
         )
 
@@ -692,11 +700,11 @@ class AuthenticationApiTests(TestCase):
         self.assertEqual(response.data["staff_roles"], [StaffRole.CRM_ADMIN])
 
     def test_multiple_active_roles_are_returned_deterministically(self):
-        StaffRoleAssignment.objects.assign_role(user=self.user, role=self.manager_role)
-        StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role)
+        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.manager_role)
+        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.admin_role)
         self.client.post(
             self.login_url,
-            {"email": "member@example.com", "password": self.password},
+            {"email": "staff@example.com", "password": self.password},
             format="json",
         )
 
@@ -708,18 +716,17 @@ class AuthenticationApiTests(TestCase):
         )
 
     def test_revoked_roles_are_excluded_from_me(self):
-        assignment = StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role)
+        assignment = StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.admin_role)
         other_admin = User.objects.create_user(
             email="other-admin@example.com",
             password="testpass123",
-            person_first_name="Other",
-            person_last_name="Admin",
+            person=Person.objects.create(first_name="Other", last_name="Admin", record_type=Person.RecordType.STAFF),
         )
         StaffRoleAssignment.objects.assign_role(user=other_admin, role=self.admin_role)
         assignment.revoke()
         self.client.post(
             self.login_url,
-            {"email": "member@example.com", "password": self.password},
+            {"email": "staff@example.com", "password": self.password},
             format="json",
         )
 
@@ -730,10 +737,10 @@ class AuthenticationApiTests(TestCase):
     def test_inactive_staff_roles_are_excluded_from_me(self):
         self.viewer_role.is_active = False
         self.viewer_role.save(update_fields=["is_active"])
-        StaffRoleAssignment.objects.assign_role(user=self.user, role=self.viewer_role)
+        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.viewer_role)
         self.client.post(
             self.login_url,
-            {"email": "member@example.com", "password": self.password},
+            {"email": "staff@example.com", "password": self.password},
             format="json",
         )
 

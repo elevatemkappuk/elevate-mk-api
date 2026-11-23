@@ -110,6 +110,7 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 
 AUTH_USER_MODEL = 'accounts.User'
+TEST_RUNNER = 'config.test_runner.ElevateTestRunner'
 
 
 # Database
