@@ -54,6 +54,9 @@ class UserAdmin(DjangoUserAdmin):
             obj.person = previous.person
         if obj.person.record_type not in ("STAFF", "TECHNICAL"):
             raise ValidationError("Django Admin User provisioning requires a STAFF or TECHNICAL Person.")
+        person_email = (obj.person.primary_email or "").strip().lower()
+        if (obj.email or "").strip().lower() != person_email:
+            raise ValidationError("User email must match the linked Person primary email.")
         if obj.person.record_type == "TECHNICAL" and not request.user.is_superuser:
             raise ValidationError("Only designated superusers may provision TECHNICAL Users.")
         obj._audit_actor_user = request.user

@@ -30,7 +30,13 @@ class StaffInvitationResponseSerializer(serializers.Serializer):
     public_id = serializers.UUIDField()
     intended_email = serializers.EmailField()
     expires_at = serializers.DateTimeField()
-    activation_token = serializers.CharField(write_only=True)
+
+
+class StaffInvitationRoleUpdateSerializer(serializers.Serializer):
+    role_codes = serializers.ListField(
+        child=serializers.ChoiceField(choices=StaffRole.CANONICAL_ROLES),
+        allow_empty=False,
+    )
 
 
 class StaffEmailChangeRequestSerializer(serializers.Serializer):
@@ -40,3 +46,7 @@ class StaffEmailChangeRequestSerializer(serializers.Serializer):
 
 class StaffEmailChangeConfirmSerializer(serializers.Serializer):
     token = serializers.CharField()
+
+
+class StaffLifecycleSerializer(serializers.Serializer):
+    user_id = serializers.IntegerField(min_value=1)

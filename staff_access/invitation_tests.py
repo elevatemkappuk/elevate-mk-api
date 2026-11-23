@@ -1,5 +1,7 @@
 from django.core.exceptions import ValidationError
 from django.test import TestCase
+from unittest.mock import patch
+from urllib.parse import urlparse
 from rest_framework.test import APIClient
 
 from accounts.models import User
@@ -11,6 +13,7 @@ from staff_access.services import (
     redeem_staff_invitation,
     request_staff_email_change,
 )
+from notifications.jobs import process_next_transactional_email_job
 
 
 class StaffInvitationTests(TestCase):
@@ -31,13 +34,17 @@ class StaffInvitationTests(TestCase):
         )
 
     def test_invitation_stores_only_token_digest_and_redeems_once(self):
-        invitation, token = create_staff_invitation(
+        invitation = create_staff_invitation(
             actor_user=self.actor,
             email="new.staff@example.com",
             first_name="New",
             last_name="Staff",
             role_codes=[StaffRole.CRM_VIEWER],
         )
+        with patch("notifications.jobs.send_transactional_email") as send:
+            process_next_transactional_email_job()
+        token = urlparse(send.call_args.kwargs["template_params"]["activation_url"]).path.rstrip("/").split("/")[-1]
+        invitation.refresh_from_db()
         self.assertNotEqual(invitation.token_hash, token)
         user = redeem_staff_invitation(
             public_id=invitation.public_id,
@@ -59,14 +66,14 @@ class StaffInvitationTests(TestCase):
             )
 
     def test_new_invitation_supersedes_current_invitation(self):
-        first, _ = create_staff_invitation(
+        first = create_staff_invitation(
             actor_user=self.actor,
             email="same@example.com",
             first_name="Same",
             last_name="Person",
             role_codes=[StaffRole.CRM_VIEWER],
         )
-        second, _ = create_staff_invitation(
+        second = create_staff_invitation(
             actor_user=self.actor,
             email="same@example.com",
             first_name="Same",
@@ -78,7 +85,7 @@ class StaffInvitationTests(TestCase):
         self.assertIsNone(second.superseded_at)
 
     def test_invitation_rejects_passwords_that_fail_configured_validators(self):
-        invitation, token = create_staff_invitation(
+        invitation = create_staff_invitation(
             actor_user=self.actor,
             email="weak-password@example.com",
             first_name="Weak",
@@ -88,7 +95,7 @@ class StaffInvitationTests(TestCase):
         with self.assertRaises(ValidationError):
             redeem_staff_invitation(
                 public_id=invitation.public_id,
-                raw_token=token,
+                raw_token="not-delivered",
                 password="123",
             )
         self.assertFalse(User.objects.filter(email="weak-password@example.com").exists())
@@ -107,7 +114,10 @@ class StaffInvitationTests(TestCase):
         )
         self.assertEqual(response.status_code, 201, response.data)
         invitation = StaffInvitation.objects.get(public_id=response.data["public_id"])
-        token = response.data["activation_token"]
+        self.assertNotIn("activation_token", response.data)
+        with patch("notifications.jobs.send_transactional_email") as send:
+            process_next_transactional_email_job()
+        token = urlparse(send.call_args.kwargs["template_params"]["activation_url"]).path.rstrip("/").split("/")[-1]
         self.client.force_authenticate(None)
         redeemed = self.client.post(
             f"/api/v1/staff/invitations/{invitation.public_id}/{token}/redeem/",
@@ -127,11 +137,14 @@ class StaffInvitationTests(TestCase):
             ),
         )
         previous_version = target.auth_version
-        change, token = request_staff_email_change(
+        change = request_staff_email_change(
             actor_user=self.actor,
             user_id=target.pk,
             requested_email="new.staff@example.com",
         )
+        with patch("notifications.jobs.send_transactional_email") as send:
+            process_next_transactional_email_job()
+        token = urlparse(send.call_args.kwargs["template_params"]["verification_url"]).path.rstrip("/").split("/")[-1]
         confirm_staff_email_change(request_id=change.pk, raw_token=token)
         target.refresh_from_db()
         self.assertEqual(target.email, "new.staff@example.com")

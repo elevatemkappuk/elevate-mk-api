@@ -12,6 +12,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from community.models import CommunityAccountInvitation, CommunityEmailChangeRequest
+from staff_access.models import StaffEmailChangeRequest, StaffInvitation
 from community.services import build_community_activation_url, build_community_email_change_verification_url
 from notifications.exceptions import TransactionalEmailConfigurationError, TransactionalEmailError
 from notifications.models import TransactionalEmailJob
@@ -150,6 +151,10 @@ def _prepare_send(job_id):
         return _prepare_email_change_send(job)
     if job.job_type == TransactionalEmailJob.JobType.COMMUNITY_EMAIL_CHANGE_SECURITY:
         return _prepare_email_change_security_send(job)
+    if job.job_type == TransactionalEmailJob.JobType.STAFF_INVITATION:
+        return _prepare_staff_invitation_send(job)
+    if job.job_type == TransactionalEmailJob.JobType.STAFF_EMAIL_CHANGE:
+        return _prepare_staff_email_change_send(job)
     invitation_id = job.invitation_id
     invitation = CommunityAccountInvitation.objects.select_for_update().get(pk=invitation_id)
     person = Person.objects.select_for_update().get(pk=invitation.person_id)
@@ -211,6 +216,46 @@ def _prepare_email_change_security_send(job):
         "recipient_name": job.recipient_name,
         "template_id": job.template_id,
         "template_params": {"first_name": job.first_name},
+    }
+
+
+def _prepare_staff_invitation_send(job):
+    invitation = StaffInvitation.objects.select_for_update().get(pk=job.staff_invitation_id)
+    if invitation.accepted_at or invitation.revoked_at or invitation.superseded_at or invitation.expires_at <= timezone.now():
+        _cancel_job(job, "STAFF_INVITATION_NOT_CURRENT")
+        return None
+    raw_token = secrets.token_urlsafe(32)
+    invitation.token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+    invitation.save(update_fields=["token_hash", "updated_at"])
+    return {
+        "recipient_email": job.recipient_email,
+        "recipient_name": job.recipient_name,
+        "template_id": job.template_id,
+        "template_params": {
+            "first_name": job.first_name,
+            "activation_url": f"{settings.CRM_FRONTEND_URL.rstrip('/')}/staff/activate/{invitation.public_id}/{raw_token}",
+            "expires_in_hours": job.expires_in_hours,
+        },
+    }
+
+
+def _prepare_staff_email_change_send(job):
+    change = StaffEmailChangeRequest.objects.select_for_update().select_related("user__person").get(pk=job.staff_email_change_request_id)
+    if change.verified_at or change.superseded_at or change.expires_at <= timezone.now():
+        _cancel_job(job, "STAFF_EMAIL_CHANGE_NOT_CURRENT")
+        return None
+    raw_token = secrets.token_urlsafe(32)
+    change.token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+    change.save(update_fields=["token_hash", "updated_at"])
+    return {
+        "recipient_email": job.recipient_email,
+        "recipient_name": job.recipient_name,
+        "template_id": job.template_id,
+        "template_params": {
+            "first_name": job.first_name,
+            "verification_url": f"{settings.CRM_FRONTEND_URL.rstrip('/')}/staff/email-change/{change.pk}/{raw_token}",
+            "expires_in_hours": job.expires_in_hours,
+        },
     }
 
 

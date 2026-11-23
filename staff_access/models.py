@@ -208,7 +208,7 @@ class StaffEmailChangeRequest(models.Model):
         related_name="staff_email_change_requests",
     )
     requested_email = models.EmailField()
-    token_hash = models.CharField(max_length=64, unique=True)
+    token_hash = models.CharField(max_length=64, null=True, blank=True, unique=True)
     expires_at = models.DateTimeField()
     verified_at = models.DateTimeField(null=True, blank=True)
     superseded_at = models.DateTimeField(null=True, blank=True)
