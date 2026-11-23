@@ -273,7 +273,13 @@ class EventbriteUploadApiTests(APITestCase):
 
     @staticmethod
     def create_user(email):
-        return User.objects.create_user(email=email, password="safe-password", person_first_name="Event", person_last_name="Admin")
+        return User.objects.create_user(
+            email=email,
+            password="safe-password",
+            person_first_name="Event",
+            person_last_name="Admin",
+            person_record_type=Person.RecordType.STAFF,
+        )
 
     def upload(self, payload):
         file = BytesIO(payload)

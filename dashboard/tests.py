@@ -57,7 +57,7 @@ class DashboardTests(APITestCase):
         self.member(self.person())
         self.member(self.person(), status=Membership.Status.FORMER)
         self.member(self.person(archived_at=timezone.now()))
-        self.member(self.person(record_type=Person.RecordType.TECHNICAL))
+        self.person(record_type=Person.RecordType.TECHNICAL)
         self.person(record_type=Person.RecordType.TECHNICAL, archived_at=timezone.now())
         for status in ImportBatch.Status.values:
             ImportBatch.objects.create(source_type="MEMBERSHIP_FORM", source_filename="test.xlsx", source_fingerprint=status, status=status)
@@ -88,7 +88,7 @@ class DashboardTests(APITestCase):
         membership = self.member(person, joined=date(2025, 10, 2))
         Membership.objects.filter(pk=membership.pk).update(created_at=datetime(2026, 3, 1, tzinfo=dt_timezone.utc))
         self.member(self.person(archived_at=timezone.now()), joined=date(2026, 1, 12), status=Membership.Status.FORMER)
-        self.member(self.person(record_type="TECHNICAL"), joined=date(2025, 10, 2))
+        self.person(record_type="TECHNICAL")
         self.member(self.person(), joined=date(2025, 9, 30))
         self.member(self.person(), joined=date(2026, 4, 1))
         Person.objects.exclude(pk=person.pk).update(created_at=datetime(2020, 1, 1, tzinfo=dt_timezone.utc))

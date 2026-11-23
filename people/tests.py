@@ -1153,6 +1153,7 @@ class PersonOverviewApiTests(TestCase):
             set(response.data["person"].keys()),
             {
                 "id",
+                "record_type",
                 "first_name",
                 "last_name",
                 "primary_email",
@@ -1174,7 +1175,7 @@ class PersonOverviewApiTests(TestCase):
         self.authenticate(self.admin_user)
         response = self.client.get(self.get_url(self.active_member_person.id))
 
-        self.assertNotIn("record_type", response.data["person"])
+        self.assertEqual(response.data["person"]["record_type"], Person.RecordType.COMMUNITY)
         self.assertNotIn("user", response.data["person"])
         self.assertNotIn("is_staff", response.data["person"])
         self.assertNotIn("is_superuser", response.data["person"])
@@ -1192,7 +1193,7 @@ class PersonOverviewApiTests(TestCase):
         PersonTag.objects.create(person=self.active_member_person, tag=self.vip_tag, assigned_by=self.admin_user)
 
         self.authenticate(self.admin_user)
-        with self.assertNumQueries(7):
+        with self.assertNumQueries(8):
             response = self.client.get(self.get_url(self.active_member_person.id))
 
         self.assertEqual(response.status_code, 200)

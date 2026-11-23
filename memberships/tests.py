@@ -48,7 +48,7 @@ class MembershipModelTests(TestCase):
             membership_source=Membership.Source.WEBSITE_FORM,
         )
 
-        with self.assertRaises(IntegrityError):
+        with self.assertRaises(ValidationError):
             Membership.objects.create(
                 person=person,
                 status=Membership.Status.FORMER,

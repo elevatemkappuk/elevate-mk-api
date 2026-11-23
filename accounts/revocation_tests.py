@@ -27,6 +27,13 @@ class AuthenticationRevocationTests(TestCase):
             joined_at=date(2024, 1, 1),
             membership_source=Membership.Source.COMMUNITY_PLATFORM,
         )
+        self.staff_user = User.objects.create_user(
+            email="staff@example.com",
+            password=self.password,
+            person_first_name="Staff",
+            person_last_name="User",
+            person_record_type="STAFF",
+        )
         self.client = APIClient()
 
     def token_pair(self, client=None):
@@ -38,11 +45,12 @@ class AuthenticationRevocationTests(TestCase):
         self.assertEqual(response.status_code, 200, response.data)
         return response.data
 
-    def login_session(self, path="/api/v1/auth/login/"):
+    def login_session(self, path="/api/v1/auth/login/", user=None):
         client = APIClient()
+        user = user or self.user
         response = client.post(
             path,
-            {"email": self.user.email, "password": self.password},
+            {"email": user.email, "password": self.password},
             format="json",
         )
         self.assertEqual(response.status_code, 200, response.data)
@@ -164,8 +172,8 @@ class AuthenticationRevocationTests(TestCase):
 
     def test_staff_role_removal_invalidates_crm_session_until_fresh_login(self):
         role = StaffRole.objects.get(code=StaffRole.CRM_MANAGER)
-        assignment = StaffRoleAssignment.objects.assign_role(user=self.user, role=role)
-        crm_client = self.login_session()
+        assignment = StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=role)
+        crm_client = self.login_session(user=self.staff_user)
         self.assertEqual(crm_client.get("/api/v1/people/").status_code, 200)
 
         assignment.revoke()
@@ -174,7 +182,7 @@ class AuthenticationRevocationTests(TestCase):
         assignment.reactivate()
         self.assertEqual(crm_client.get("/api/v1/people/").status_code, 401)
 
-        fresh_client = self.login_session()
+        fresh_client = self.login_session(user=self.staff_user)
         self.assertEqual(fresh_client.get("/api/v1/people/").status_code, 200)
 
     def test_mobile_logout_revokes_only_the_current_device_session(self):
@@ -249,7 +257,8 @@ class AuthenticationRevocationTests(TestCase):
     def test_mobile_jwt_is_rejected_by_community_endpoints_after_membership_ends(self):
         tokens = self.token_pair()
         self.user.person.membership.status = Membership.Status.FORMER
-        self.user.person.membership.save(update_fields=["status"])
+        self.user.person.membership.ended_at = date.today()
+        self.user.person.membership.save(update_fields=["status", "ended_at"])
 
         self.assertEqual(
             self.client.get(

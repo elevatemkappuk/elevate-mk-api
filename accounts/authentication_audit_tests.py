@@ -28,8 +28,15 @@ class AuthenticationAuditTests(TestCase):
             joined_at=date(2024, 1, 1),
             membership_source=Membership.Source.COMMUNITY_PLATFORM,
         )
+        self.staff_user = User.objects.create_user(
+            email="staff-audit@example.com",
+            password=self.password,
+            person_first_name="Staff",
+            person_last_name="Audit",
+            person_record_type="STAFF",
+        )
         StaffRoleAssignment.objects.assign_role(
-            user=self.user,
+            user=self.staff_user,
             role=StaffRole.objects.get(code=StaffRole.CRM_MANAGER),
         )
         self.client = APIClient()
@@ -125,15 +132,15 @@ class AuthenticationAuditTests(TestCase):
         self.assertNotIn(token_response.data["refresh"], str({"metadata": event.metadata, "changes": event.changes}))
 
     def test_domain_staff_role_revocation_is_audited_without_token_data(self):
-        assignment = StaffRoleAssignment.objects.get(user=self.user)
+        assignment = StaffRoleAssignment.objects.get(user=self.staff_user)
 
-        assignment.revoke(revoked_by=self.user)
+        assignment.revoke(revoked_by=self.staff_user)
 
         event = AuditEvent.objects.get(
             action=AuditEvent.Action.STAFF_ROLE_REVOKED,
             entity_type="StaffRoleAssignment",
             entity_id=str(assignment.id),
         )
-        self.assertEqual(event.actor_user, self.user)
+        self.assertEqual(event.actor_user, self.staff_user)
         self.assertTrue(event.metadata["target_user_id"])
         self.assertNotIn("token", str({"metadata": event.metadata, "changes": event.changes}).lower())

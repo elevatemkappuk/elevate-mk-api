@@ -24,9 +24,16 @@ class CrmSessionExpirationTests(TestCase):
             password=self.password,
             person_first_name="Staff",
             person_last_name="User",
+            person_record_type="STAFF",
+        )
+        self.community_user = User.objects.create_user(
+            email="community@example.com",
+            password=self.password,
+            person_first_name="Community",
+            person_last_name="User",
         )
         Membership.objects.create(
-            person=self.user.person,
+            person=self.community_user.person,
             status=Membership.Status.ACTIVE,
             joined_at=date(2024, 1, 1),
             membership_source=Membership.Source.COMMUNITY_PLATFORM,
@@ -94,7 +101,13 @@ class CrmSessionExpirationTests(TestCase):
         self.assertEqual(client.get("/api/v1/people/").status_code, 401)
 
     def test_community_session_is_not_subject_to_crm_expiration(self):
-        client = self.login_session("/api/v1/community/login/")
+        client = APIClient()
+        response = client.post(
+            "/api/v1/community/login/",
+            {"email": self.community_user.email, "password": self.password},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
         now = time.time()
         self.set_session_times(
             client,

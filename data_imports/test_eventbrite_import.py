@@ -314,12 +314,14 @@ class EventbriteImportApiTests(APITestCase):
             password="safe-password",
             person_first_name="Event",
             person_last_name="Admin",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.manager = User.objects.create_user(
             email="event-import-manager@example.com",
             password="safe-password",
             person_first_name="Event",
             person_last_name="Manager",
+            person_record_type=Person.RecordType.STAFF,
         )
         admin_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_ADMIN, defaults={"name": "CRM Administrator"})
         manager_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_MANAGER, defaults={"name": "CRM Manager"})

@@ -18,18 +18,14 @@ class CrmAuthenticationIsolationTests(TestCase):
             password=self.password,
             person_first_name="CRM",
             person_last_name="Staff",
-        )
-        Membership.objects.create(
-            person=self.staff_user.person,
-            status=Membership.Status.ACTIVE,
-            joined_at=date(2024, 1, 1),
-            membership_source=Membership.Source.STAFF,
+            person_record_type=Person.RecordType.STAFF,
         )
         self.no_membership_staff = User.objects.create_user(
             email="crm-contact@example.com",
             password=self.password,
             person_first_name="CRM",
             person_last_name="Contact",
+            person_record_type=Person.RecordType.STAFF,
         )
         self.non_staff_member = User.objects.create_user(
             email="member@example.com",
@@ -82,8 +78,8 @@ class CrmAuthenticationIsolationTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
 
-    def test_mobile_jwt_is_rejected_by_crm_endpoint_even_with_staff_role(self):
-        access = self.mobile_access_token(self.staff_user)
+    def test_mobile_jwt_is_rejected_by_crm_endpoint(self):
+        access = self.mobile_access_token(self.non_staff_member)
 
         response = self.client.get(
             self.people_url,
@@ -127,7 +123,7 @@ class CrmAuthenticationIsolationTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_shared_mobile_identity_endpoint_still_accepts_mobile_jwt(self):
-        access = self.mobile_access_token(self.staff_user)
+        access = self.mobile_access_token(self.non_staff_member)
 
         response = self.client.get(
             self.me_url,
@@ -137,7 +133,7 @@ class CrmAuthenticationIsolationTests(TestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_crm_moderation_endpoint_rejects_mobile_jwt(self):
-        access = self.mobile_access_token(self.staff_user)
+        access = self.mobile_access_token(self.non_staff_member)
 
         response = self.client.get(
             "/api/v1/community/moderation/reports/",
