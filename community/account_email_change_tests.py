@@ -56,7 +56,8 @@ class CommunityAccountEmailChangeApiTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data["code"], "INVALID_CURRENT_PASSWORD")
         self.person.membership.status = Membership.Status.FORMER
-        self.person.membership.save(update_fields=["status"])
+        self.person.membership.ended_at = timezone.localdate()
+        self.person.membership.save(update_fields=["status", "ended_at"])
         response = self.client.post(self.url, self.payload(), format="json")
         self.assertEqual(response.status_code, 403)
 

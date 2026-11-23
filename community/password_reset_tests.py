@@ -76,12 +76,14 @@ class CommunityPasswordResetRequestTests(TestCase):
         self.user.set_password("Old-password-123!")
         self.user.save(update_fields=["password"])
         self.person.membership.status = Membership.Status.FORMER
-        self.person.membership.save(update_fields=["status"])
+        self.person.membership.ended_at = timezone.localdate()
+        self.person.membership.save(update_fields=["status", "ended_at"])
         scenarios.append(self.post())
 
         cache.clear()
         self.person.membership.status = Membership.Status.ACTIVE
-        self.person.membership.save(update_fields=["status"])
+        self.person.membership.ended_at = None
+        self.person.membership.save(update_fields=["status", "ended_at"])
         self.person.archived_at = timezone.now()
         self.person.save(update_fields=["archived_at"])
         scenarios.append(self.post())
@@ -104,7 +106,8 @@ class CommunityPasswordResetRequestTests(TestCase):
         self.user.is_staff = True
         self.user.save(update_fields=["is_staff"])
         self.person.membership.status = Membership.Status.FORMER
-        self.person.membership.save(update_fields=["status"])
+        self.person.membership.ended_at = timezone.localdate()
+        self.person.membership.save(update_fields=["status", "ended_at"])
 
         with patch("community.views.send_transactional_email") as send_email:
             response = self.post()
@@ -112,7 +115,8 @@ class CommunityPasswordResetRequestTests(TestCase):
         send_email.assert_not_called()
 
         self.person.membership.status = Membership.Status.ACTIVE
-        self.person.membership.save(update_fields=["status"])
+        self.person.membership.ended_at = None
+        self.person.membership.save(update_fields=["status", "ended_at"])
         with patch("community.views.send_transactional_email") as send_email:
             response = self.post()
         self.assertEqual(response.data, {"detail": self.detail})

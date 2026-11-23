@@ -383,12 +383,6 @@ class CommunityProfileApiTests(TestCase):
             password="Strong-password-123!",
             person=technical_person,
         )
-        Membership.objects.create(
-            person=technical_person,
-            status=Membership.Status.ACTIVE,
-            joined_at=timezone.localdate(),
-            membership_source=Membership.Source.COMMUNITY_PLATFORM,
-        )
         self.client.force_authenticate(user=technical_user)
         self.assertEqual(self.client.get(self.profile_url).status_code, 403)
 
@@ -631,6 +625,7 @@ class CommunityProfileApiTests(TestCase):
         self.assertEqual(self.client.patch(self.profile_url, {"community": {"bio": "x"}}, format="json").status_code, 401)
 
         self.membership.status = Membership.Status.FORMER
-        self.membership.save(update_fields=["status"])
+        self.membership.ended_at = timezone.localdate()
+        self.membership.save(update_fields=["status", "ended_at"])
         self.client.force_authenticate(user=self.user)
         self.assertEqual(self.client.patch(self.profile_url, {"community": {"bio": "x"}}, format="json").status_code, 403)

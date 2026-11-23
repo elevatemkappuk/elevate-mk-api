@@ -62,7 +62,8 @@ class CommunityAccountMarketingPreferenceApiTests(TestCase):
         self.assertEqual(response.status_code, 401)
         self.authenticate()
         self.membership.status = Membership.Status.FORMER
-        self.membership.save(update_fields=["status"])
+        self.membership.ended_at = timezone.localdate()
+        self.membership.save(update_fields=["status", "ended_at"])
         response = self.client.patch(self.url, {"email_marketing": True}, format="json")
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.data["code"], "COMMUNITY_ACCESS_UNAVAILABLE")

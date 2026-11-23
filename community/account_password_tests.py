@@ -65,7 +65,8 @@ class CommunityAccountPasswordApiTests(TestCase):
     def test_ineligible_authenticated_user_is_rejected(self):
         self.authenticate()
         self.person.membership.status = Membership.Status.FORMER
-        self.person.membership.save(update_fields=["status"])
+        self.person.membership.ended_at = timezone.localdate()
+        self.person.membership.save(update_fields=["status", "ended_at"])
         response = self.client.post(self.url, self.payload(), format="json")
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.data["code"], "COMMUNITY_ACCESS_UNAVAILABLE")
