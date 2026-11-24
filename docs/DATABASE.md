@@ -36,9 +36,9 @@ The current Elevate-owned models are:
 - `community.CommunityAccountInvitation`
 - `community.CommunityProfile`
 
-## Phase 1A.1 Capability Foundation
+## Capability Foundation
 
-Status: Implemented in the Phase 1A.1 working tree; production deployment and
+Status: Implemented in the current working tree; production deployment and
 live-database validation remain unverified.
 
 The privacy capability foundation is additive to the existing operational role
@@ -62,7 +62,7 @@ not change existing API endpoint authorization.
   active restriction is permitted for a `(user, capability)` pair. Removing a
   restriction does not alter the underlying assignment state.
 
-### Phase 1A.1 field and integrity reference
+### Field and integrity reference
 
 `CapabilityDefinition` fields are `code` (unique, max 64), `name`,
 `description`, `is_active`, `created_at`, and `updated_at`.
@@ -84,7 +84,7 @@ non-removed restriction may exist for a `(user, capability)` pair.
 
 ### Implemented capability indexes
 
-The Phase 1A.1 migration implements these explicit capability indexes:
+The capability migration implements these explicit capability indexes:
 
 | Model | Index name | Indexed fields | Purpose |
 | --- | --- | --- | --- |
@@ -108,7 +108,7 @@ approved backup or export, explicit data-preservation review, and a
 forward-compatible recovery plan.
 Canonical capability seed data and the approved initial role defaults are
 created by that migration. No privacy governance mutation API or Django Admin
-surface is introduced in Phase 1A.1; such mutations remain deferred until the
+surface is introduced in this foundation; such mutations remain deferred until the
 approved governance workflow and mandatory audit handling are implemented.
 
 The audit action `PRIVACY_SUPERUSER_BYPASS` is added by

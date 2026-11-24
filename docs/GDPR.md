@@ -1,6 +1,6 @@
 # Elevate MK GDPR — Backend Technical Architecture and Implementation Guide
 
-Status: Living Documentation. Phase 1A.1 capability foundation implemented;
+Status: Living Documentation. Capability foundation implemented;
 verification is limited to the evidence listed below.
 
 ## Scope and authority
@@ -11,10 +11,10 @@ CRM roles, authentication flows, mobile contracts, and Community contracts are
 preserved. Detailed database and authorization contracts remain in
 [DATABASE.md](DATABASE.md) and [AUTHORIZATION.md](AUTHORIZATION.md).
 
-This document records the approved Phase 1A architecture and the current
+This document records the approved architecture and the current
 implementation status. It does not claim GDPR compliance through code alone.
 
-## Phase 1A.1 capability foundation
+## Capability foundation
 
 Status: API foundation implemented; endpoint and field enforcement remain
 planned.
@@ -28,7 +28,7 @@ and implementation status without duplicating those contracts.
 
 ### Governance boundary
 
-Phase 1A.1 creates the data and evaluation foundation only. It does not expose
+This foundation creates the data and evaluation layer only. It does not expose
 capability mutation endpoints, Django Admin mutation surfaces, proposals,
 two-person approval, justifications, automatic retention disposal, or
 sensitive-data access paths. Privacy governance mutations must remain
@@ -60,7 +60,7 @@ API, CRM, Mobile, and Community applications was not validated in this stage.
 
 ## Evidence and status
 
-- **Approved:** Phase 1A.1 catalog, default matrix, evaluator precedence,
+- **Approved:** catalog, default matrix, evaluator precedence,
   audited superuser exception, and deferred enforcement boundaries.
 - **Implemented:** API models, evaluator, reusable `HasCapability` permission,
   audit action, and migrations.
@@ -77,7 +77,7 @@ API, CRM, Mobile, and Community applications was not validated in this stage.
   preserved.
 - **Planned / Deferred:** governance workflow, approval lifecycle, API
   exposure, projections, masking, search/export enforcement, CRM UI behavior,
-  and Phase 1A.2 remain deferred.
+  and later governance and enforcement work remain deferred.
 - **Unverified:** production and staging migration safety, deployment
   behavior, live deployment state, cross-repository compatibility, and
   independent specialist review completion where noted in the Main Codex
@@ -88,6 +88,6 @@ API, CRM, Mobile, and Community applications was not validated in this stage.
 The existing Django Admin path can still expose raw audit records to principals
 with technical audit permissions, and existing superusers can administer
 operational staff roles through the pre-existing Staff Admin path. These are
-separate security findings and are not silently changed by Phase 1A.1.
+separate security findings and are not silently changed by this foundation.
 AUTH-001 and AUTH-002 remain open and are not resolved by this local validation
 or documentation update.
