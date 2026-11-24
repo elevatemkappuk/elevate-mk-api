@@ -10,10 +10,12 @@ from staff_access.views import (
     StaffEmailChangeRequestView,
     StaffOffboardView,
     StaffReactivateView,
+    StaffEffectiveAccessView,
 )
 
 
 urlpatterns = [
+    path("staff/access/me/", StaffEffectiveAccessView.as_view(), name="staff-effective-access-me"),
     path("staff/invitations/", StaffInvitationCreateView.as_view(), name="staff-invitation-create"),
     path("staff/invitations/<uuid:invitation_id>/cancel/", StaffInvitationCancelView.as_view(), name="staff-invitation-cancel"),
     path("staff/invitations/<uuid:invitation_id>/resend/", StaffInvitationResendView.as_view(), name="staff-invitation-resend"),

@@ -1,11 +1,25 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
+from drf_spectacular.utils import extend_schema, OpenApiResponse
 from rest_framework import generics, serializers, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from accounts.authentication import CRM_SESSION_AUTHENTICATION_CLASSES
-from staff_access.models import StaffEmailChangeRequest, StaffInvitation, StaffRole
-from staff_access.permissions import HasActiveStaffRoleCodes
+from staff_access.models import (
+    CAPABILITY_POLICY_STATE_KEY,
+    CapabilityPolicyState,
+    StaffEmailChangeRequest,
+    StaffInvitation,
+    StaffRole,
+)
+from staff_access.permissions import (
+    CRM_EFFECTIVE_ACCESS_DISCLOSURE_ALLOWLIST,
+    HasActiveStaffRoleCodes,
+    HasCrmOperationalAccess,
+    get_effective_capability_codes_for_user,
+)
 from staff_access.serializers import (
     StaffEmailChangeConfirmSerializer,
     StaffEmailChangeRequestSerializer,
@@ -13,6 +27,7 @@ from staff_access.serializers import (
     StaffInvitationRedeemSerializer,
     StaffInvitationRoleUpdateSerializer,
     StaffLifecycleSerializer,
+    EffectiveAccessSerializer,
 )
 from staff_access.services import (
     cancel_staff_invitation,
@@ -30,6 +45,45 @@ from accounts.models import User
 
 class StaffAdminPermission(HasActiveStaffRoleCodes):
     required_role_codes = (StaffRole.CRM_ADMIN,)
+
+
+class StaffEffectiveAccessView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [IsAuthenticated, HasCrmOperationalAccess]
+
+    @extend_schema(
+        operation_id="staff_effective_access_me",
+        summary="Get the current CRM access projection",
+        description=(
+            "Returns the backend-evaluated CRM access projection for the authenticated Staff CRM session. "
+            "Capability disclosure is intentionally empty until a later approved CRM capability consumer exists."
+        ),
+        responses={
+            200: EffectiveAccessSerializer,
+            401: OpenApiResponse(description="Authentication credentials were not provided."),
+            403: OpenApiResponse(description="You do not have an active operational CRM role."),
+        },
+        tags=["Staff Access"],
+    )
+    def get(self, request):
+        with transaction.atomic():
+            policy_state = CapabilityPolicyState.objects.select_for_update().get(
+                singleton_key=1,
+                key=CAPABILITY_POLICY_STATE_KEY,
+            )
+            capability_codes = get_effective_capability_codes_for_user(
+                request.user,
+                requested_codes=CRM_EFFECTIVE_ACCESS_DISCLOSURE_ALLOWLIST,
+                request=request,
+            )
+            data = {
+                "capability_codes": sorted(capability_codes),
+                "policy_version": policy_state.version,
+            }
+
+        response = Response(EffectiveAccessSerializer(data).data)
+        response["Cache-Control"] = "private, no-store"
+        return response
 
 
 def invitation_response(invitation):

@@ -5,7 +5,7 @@ checkpoint, see [Community Platform](community-platform.md). This includes the
 implemented Join, activation, sign-in, password recovery, frontend, and Staff
 CRM projections.
 Status: Living Documentation
-Last Updated: 2026-10-01
+Last Updated: 2026-11-24
 
 ## Scope
 This document describes the HTTP API currently implemented in the Django server repository.
@@ -127,7 +127,8 @@ The following is the current route inventory under `/api/v1/`. Authentication la
 | `GET` | `/api/v1/auth/csrf/` | Public |
 | `POST` | `/api/v1/auth/login/` | Public |
 | `POST` | `/api/v1/auth/logout/` | Authenticated session |
-| `GET` | `/api/v1/auth/me/` | Authenticated session |
+| `GET` | `/api/v1/auth/me/` | Authenticated Django session or valid mobile JWT |
+| `GET` | `/api/v1/staff/access/me/` | Authenticated CRM session with an active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` role |
 | `POST` | `/api/v1/auth/password-reset/` | Public; generic response |
 | `POST` | `/api/v1/auth/password-reset/confirm/` | Public; uid/token required |
 
@@ -700,6 +701,49 @@ Staff access lifecycle note:
 - revoking the final active `CRM_ADMIN` assignment, including through a Django Admin bulk action, is rejected atomically with no successful revocation audit event
 - the canonical `CRM_ADMIN` StaffRole cannot be deactivated
 - `/api/v1/auth/me/` response shape is unchanged
+
+## Endpoint: `GET /api/v1/staff/access/me/`
+
+Purpose:
+
+- Return the backend-evaluated effective-access projection for the authenticated Staff CRM session.
+- This is a separate Staff Access contract; it does not add capability fields to `/api/v1/auth/me/`.
+
+Authentication and admission:
+
+- A Django CRM session is required; mobile JWT authentication is not accepted.
+- The authenticated user must have an active operational `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` role.
+- Anonymous callers receive `401 Unauthorized`.
+- Authenticated users without one of those active CRM roles receive `403 Forbidden`.
+- Django `is_staff` or `is_superuser` alone does not admit a caller.
+
+Successful response:
+
+- Status: `200 OK`.
+- The response has exactly two fields:
+
+```json
+{
+  "capability_codes": [],
+  "policy_version": 2
+}
+```
+
+- `capability_codes` is the effective capability-code projection after the backend evaluator is applied. The current CRM disclosure allowlist is intentionally empty, so this field is currently always `[]`; the allowlist remains empty until a later approved CRM capability consumer and disclosure decision exist.
+- `policy_version` is the current capability-policy version read for this evaluation; `2` is the verified current example value, not a fixed contract value. It is informational for the client; it is not a capability grant, authorization token, mutation precondition, or client-controlled version.
+- The view locks the singleton capability-policy state and evaluates the requested disclosure set in one database transaction, so the returned policy version and projection are from the same transactionally consistent evaluation. The endpoint does not mutate policy state.
+- The response sets `Cache-Control: private, no-store` and must not be retained as shared or stored client state.
+
+Superuser boundary:
+
+- A Django superuser still requires an active operational CRM role to pass endpoint admission.
+- After admission, the existing superuser evaluator path remains authoritative and records its transactional `PRIVACY_SUPERUSER_BYPASS` audit event. Because the CRM disclosure allowlist is empty, the response still contains `"capability_codes": []`; superuser authority does not expand the public response contract.
+
+Evidence status:
+
+- **Implemented / Source-inspected:** route, view, serializer, CRM-session authentication, active-role permission, empty disclosure allowlist, transactional policy-state read, superuser boundary, and `private, no-store` response header were inspected in `staff_access/urls.py`, `staff_access/views.py`, `staff_access/serializers.py`, and `staff_access/permissions.py`.
+- **Verified — focused API evidence:** 34/34 Phase 1A.4A focused tests passed against isolated PostgreSQL database `test_elevate_gdpr_phase1a4a_20261124`; `manage.py check` passed; `makemigrations --check --dry-run` reported `No changes detected`; `migrate --plan` reported no planned migration operations; and `git diff --check` was clean. No schema or migration files changed, and no migrations were applied for Phase 1A.4A.
+- **Unverified:** broader runtime behavior, deployment behavior, CRM tests/build/runtime, and cross-repository CRM consumption.
 
 ## Endpoint: `GET /api/v1/people/`
 Purpose:
@@ -2420,7 +2464,7 @@ Planned, not yet implemented:
 
 - broader people/domain APIs around the `Person` model beyond the current read-only list endpoint
 - additional first-party authenticated application endpoints under the `/api/v1/` convention
-- separate authorization-aware staff CRM capabilities once the authorization model exists
+- broader capability-aware Staff CRM consumers and enforcement beyond the Phase 1A.4A projection
 
 
 ## Staff CRM Dashboard

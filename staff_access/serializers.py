@@ -50,3 +50,11 @@ class StaffEmailChangeConfirmSerializer(serializers.Serializer):
 
 class StaffLifecycleSerializer(serializers.Serializer):
     user_id = serializers.IntegerField(min_value=1)
+
+
+class EffectiveAccessSerializer(serializers.Serializer):
+    capability_codes = serializers.ListField(
+        child=serializers.CharField(),
+        read_only=True,
+    )
+    policy_version = serializers.IntegerField(read_only=True)

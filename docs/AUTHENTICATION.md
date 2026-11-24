@@ -468,13 +468,28 @@ Current `/api/v1/auth/me/` behavior:
 - does not become a staff-only endpoint
 - does not use Django `is_staff` or `is_superuser` as Elevate operational authorization
 
-## Planned Authorization
-Planned, not yet implemented:
+## Implemented Authorization Boundary
 
-- Staff CRM authorization separated from authentication
-- Elevate operational authorization based on `StaffRole` and `StaffRoleAssignment`
+Staff CRM authorization is implemented separately from authentication.
 
-Those models, permissions, and enforcement rules are not currently implemented.
+- Elevate operational authorization is based on active `StaffRoleAssignment`
+  rows linked to active canonical `StaffRole` definitions.
+- The current operational CRM roles are `CRM_ADMIN`, `CRM_MANAGER`, and
+  `CRM_VIEWER`.
+- `GET /api/v1/staff/access/me/` is admitted only through a Django CRM session
+  and an active operational CRM role; mobile JWT authentication is not accepted
+  for that endpoint.
+- The Phase 1A.4A effective-access response is intentionally limited to the
+  exact `capability_codes` and `policy_version` fields. Its CRM capability
+  disclosure allowlist is currently empty.
+
+Evidence status: the authorization boundary and Phase 1A.4A route contract are
+source-inspected. The focused API suite passed 34/34 against isolated
+PostgreSQL database `test_elevate_gdpr_phase1a4a_20261124`; `manage.py check`
+passed; `makemigrations --check --dry-run` reported `No changes detected`;
+`migrate --plan` reported no planned migration operations; and `git diff --check`
+was clean. No schema or migration files changed or were applied. Broader
+runtime, deployment, CRM, and cross-repository behavior remain unverified.
 
 ## Phase 1A.3 audit provenance
 

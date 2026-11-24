@@ -83,10 +83,12 @@ documentation update.
 
 Existing endpoint permission classes remain role-based. CRM and Mobile retain
 their existing authentication contracts, while Community uses its
-Community-specific session and projection contracts. No `/auth/me/` capability
-projection, frontend guard, Person field masking, search protection, campaign
-protection, or export enforcement was added. Runtime compatibility across the
-API, CRM, Mobile, and Community applications was not validated in this stage.
+Community-specific session and projection contracts. Phase 1A.4A adds the
+session-only `GET /api/v1/staff/access/me/` projection, but does not add a
+capability projection to `/auth/me/`, a frontend guard, Person field masking,
+search protection, campaign protection, or export enforcement. Runtime
+compatibility across the API, CRM, Mobile, and Community applications was not
+validated in this stage.
 
 ## Evidence and status
 
@@ -113,6 +115,22 @@ API, CRM, Mobile, and Community applications was not validated in this stage.
 - **Planned / Deferred:** public API/Admin exposure, projections, masking,
   search/export enforcement, CRM UI behavior, and capability-governance
   enforcement.
+- **Implemented / Source-inspected for Phase 1A.4A:** the exact
+  `GET /api/v1/staff/access/me/` route and two-field response contract
+  (`capability_codes`, `policy_version`), CRM-session and active-role admission,
+  empty CRM disclosure allowlist, superuser boundary, transactionally consistent
+  policy-version read, and `Cache-Control: private, no-store` behavior were
+  inspected in the Staff Access route, view, serializer, and permission source.
+- **Verified — focused API evidence for Phase 1A.4A:** 34/34 focused tests
+  passed against isolated PostgreSQL database
+  `test_elevate_gdpr_phase1a4a_20261124`; `manage.py check` passed;
+  `makemigrations --check --dry-run` reported `No changes detected`;
+  `migrate --plan` reported no planned migration operations; and `git diff --check`
+  was clean. No schema or migration files changed, and no migrations were
+  applied for Phase 1A.4A. Broader runtime, deployment, CRM tests/build/runtime,
+  and cross-repository consumption remain unverified.
+- **Deferred:** Phase 1A.4B and any later CRM capability consumer or capability
+  disclosure expansion.
 - **Historical runtime evidence (superseded):** governance migrations applied
   cleanly in newly named isolated test databases; the final governance rerun
   passed 21 tests in 166.170 seconds; the combined focused run of governance,
@@ -226,6 +244,45 @@ earlier Phase 1A.3 focused suite passed 19/19 and the affected broader suite pas
 102/102. Operational database migration, disposal, production/staging
 behavior, CRM integration, and cross-repository runtime compatibility remain
 deferred or unverified.
+
+## Phase 1A.4A effective Staff Access projection
+
+Status: **Implemented / source-inspected; runtime verification not claimed.**
+
+The API now exposes exactly `GET /api/v1/staff/access/me/` for an authenticated
+Staff CRM session. The successful response contains exactly:
+
+```json
+{
+  "capability_codes": [],
+  "policy_version": 2
+}
+```
+
+The `capability_codes` value is currently empty by deliberate policy: the CRM
+disclosure allowlist is an empty set until a later approved CRM capability
+consumer and disclosure decision exist. The endpoint admits only authenticated
+sessions with an active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` role;
+anonymous callers receive `401`, non-CRM authenticated users receive `403`, and
+mobile JWTs are not accepted. Django `is_staff` or `is_superuser` alone does not
+admit access.
+
+`policy_version` is an informational snapshot of the capability-policy version,
+not a grant, token, client precondition, or authorization result. The view locks
+the singleton policy state and evaluates the empty requested disclosure set in
+one transaction, without mutating policy state. Responses set
+`Cache-Control: private, no-store`.
+
+An admitted Django superuser retains the existing audited superuser evaluator
+boundary, including transactional `PRIVACY_SUPERUSER_BYPASS` recording, but the
+empty CRM allowlist keeps the response capability list empty. Phase 1A.4B is
+deferred. This contract is source-inspected from `staff_access/urls.py`,
+`views.py`, `serializers.py`, and `permissions.py`. The focused API suite passed
+34/34 against isolated PostgreSQL database
+`test_elevate_gdpr_phase1a4a_20261124`; the Django check, migration-drift check,
+migration plan, and `git diff --check` were clean as recorded above. No schema
+or migration files changed or were applied. CRM tests/build/runtime, deployment,
+and cross-repository CRM consumption remain unverified.
 
 ## Targeted remediation status
 

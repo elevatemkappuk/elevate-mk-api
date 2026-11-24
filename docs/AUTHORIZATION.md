@@ -119,6 +119,7 @@ Currently implemented:
 - active-role evaluation helpers
 - reusable DRF permission classes
 - `/api/v1/auth/me/` role exposure
+- `/api/v1/staff/access/me/` effective-access projection for authenticated CRM sessions with an active operational CRM role
 - `/api/v1/people/{person_id}/audit-history/` read access for `CRM_ADMIN`, `CRM_MANAGER`, and permission-filtered `CRM_VIEWER`
 - Internal Notes are restricted to `CRM_ADMIN` and `CRM_MANAGER`
 - `CRM_VIEWER` has no Internal Notes read or write access
@@ -326,6 +327,46 @@ The implemented anonymous Community join endpoint is an explicit public
 submission boundary, not a CRM authorization exception. It uses its own DTO,
 service, response projection, CSRF protection, and anonymous throttle. It does not
 grant access to People, Membership, ProfessionalProfile, audit, or other CRM APIs.
+
+## Phase 1A.4A effective Staff Access projection
+
+Status: **Implemented / source-inspected; runtime verification not claimed.**
+
+`GET /api/v1/staff/access/me/` is a read-only Staff CRM projection with exactly
+two response fields: `capability_codes` and `policy_version`.
+
+Admission is session-only through `CRM_SESSION_AUTHENTICATION_CLASSES`, followed
+by authentication and an active operational `CRM_ADMIN`, `CRM_MANAGER`, or
+`CRM_VIEWER` role. Anonymous callers receive `401`; authenticated users without
+one of those roles receive `403`. A mobile JWT, Django `is_staff`, or Django
+`is_superuser` alone does not satisfy endpoint admission.
+
+The CRM capability disclosure allowlist is intentionally empty at this stage.
+The endpoint therefore returns `capability_codes: []` for every admitted caller;
+this prevents premature exposure of capability decisions before a later approved
+CRM consumer and disclosure policy exist. Phase 1A.4B remains deferred.
+
+`policy_version` is the current capability-policy version observed for the
+evaluation. It is informational only: it is not a grant, token, client-controlled
+precondition, or authorization decision. The view locks the singleton policy
+state and performs the allowlisted evaluator call in one transaction, returning
+the policy version associated with that consistent read without mutating policy
+state.
+
+The response sets `Cache-Control: private, no-store`. An admitted Django
+superuser still follows the existing audited superuser evaluator path and emits
+the transactional `PRIVACY_SUPERUSER_BYPASS` audit event, but does not bypass the
+CRM-role admission boundary or expand the empty response allowlist.
+
+Evidence classification: **Implemented / Source-inspected** from
+`staff_access/urls.py`, `views.py`, `serializers.py`, and `permissions.py`.
+The focused API suite passed 34/34 against isolated PostgreSQL database
+`test_elevate_gdpr_phase1a4a_20261124`; `manage.py check` passed;
+`makemigrations --check --dry-run` reported `No changes detected`;
+`migrate --plan` reported no planned migration operations; and `git diff --check`
+was clean. No schema or migration files changed or were applied. Broader
+runtime, deployment, CRM tests/build/runtime, and cross-repository consumption
+remain unverified.
 
 ## Phase 1A.3 privacy-audit authorization
 

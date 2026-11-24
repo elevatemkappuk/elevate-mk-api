@@ -8,11 +8,14 @@ from staff_access.models import (
     RoleCapabilityDefault,
     StaffCapabilityAssignment,
     StaffCapabilityRestriction,
+    StaffRole,
     StaffRoleAssignment,
 )
 
 
 PRIVACY_CAPABILITY_CODES = frozenset(CapabilityDefinition.canonical_codes())
+CRM_EFFECTIVE_ACCESS_DISCLOSURE_ALLOWLIST = frozenset()
+CRM_OPERATIONAL_ROLE_CODES = tuple(code for code, _name in StaffRole.CANONICAL_ROLES)
 
 
 def get_active_staff_role_codes_for_user(user):
@@ -129,6 +132,10 @@ class HasActiveStaffRoleCodes(BasePermission):
             request.user,
             allowed_role_codes=self.required_role_codes,
         )
+
+
+class HasCrmOperationalAccess(HasActiveStaffRoleCodes):
+    required_role_codes = CRM_OPERATIONAL_ROLE_CODES
 
 
 class HasCapability(BasePermission):
