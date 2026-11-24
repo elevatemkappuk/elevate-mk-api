@@ -158,6 +158,183 @@ class StaffRoleAssignment(models.Model):
         return self
 
 
+class CapabilityDefinition(models.Model):
+    PERSON_CONTACT_READ = "PERSON_CONTACT_READ"
+    PERSON_DEMOGRAPHIC_READ = "PERSON_DEMOGRAPHIC_READ"
+    PERSON_EXPORT = "PERSON_EXPORT"
+    PERSON_RESTRICTED_ACCESS = "PERSON_RESTRICTED_ACCESS"
+    PRIVACY_AUDIT_READ = "PRIVACY_AUDIT_READ"
+    STAFF_CAPABILITY_ADMIN = "STAFF_CAPABILITY_ADMIN"
+
+    CANONICAL_CAPABILITIES = (
+        (PERSON_CONTACT_READ, "Person contact read", "Read permitted Person contact details."),
+        (PERSON_DEMOGRAPHIC_READ, "Person demographic read", "Read permitted Person demographic details."),
+        (PERSON_EXPORT, "Person export", "Export permitted Person data."),
+        (PERSON_RESTRICTED_ACCESS, "Person restricted access", "Additional gate for explicitly approved exceptional workflows."),
+        (PRIVACY_AUDIT_READ, "Privacy audit read", "Read privacy audit history where separately authorized."),
+        (STAFF_CAPABILITY_ADMIN, "Staff capability administration", "Administer staff capability permissions through approved governance workflows."),
+    )
+
+    code = models.CharField(max_length=64, unique=True)
+    name = models.CharField(max_length=255)
+    description = models.TextField()
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["code"]
+
+    @classmethod
+    def canonical_codes(cls):
+        return {code for code, _name, _description in cls.CANONICAL_CAPABILITIES}
+
+    def __str__(self):
+        return self.code
+
+
+class RoleCapabilityDefault(models.Model):
+    role = models.ForeignKey(StaffRole, on_delete=models.PROTECT, related_name="capability_defaults")
+    capability = models.ForeignKey(CapabilityDefinition, on_delete=models.PROTECT, related_name="role_defaults")
+    is_enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["role__code", "capability__code"]
+        constraints = [
+            models.UniqueConstraint(fields=["role", "capability"], name="staff_role_capability_default_unique"),
+        ]
+        indexes = [
+            models.Index(fields=["role", "is_enabled"], name="staff_role_cap_default_idx"),
+        ]
+
+
+class StaffCapabilityAssignmentQuerySet(models.QuerySet):
+    def active(self):
+        return self.filter(state=StaffCapabilityAssignment.State.ACTIVE)
+
+    def current(self):
+        return self.filter(state__in=StaffCapabilityAssignment.current_states())
+
+
+class StaffCapabilityAssignment(models.Model):
+    class State(models.TextChoices):
+        ACTIVE = "ACTIVE", "Active"
+        SUSPENDED = "SUSPENDED", "Suspended"
+        REVOKED = "REVOKED", "Revoked"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="staff_capability_assignments",
+    )
+    capability = models.ForeignKey(
+        CapabilityDefinition,
+        on_delete=models.PROTECT,
+        related_name="assignments",
+    )
+    state = models.CharField(max_length=20, choices=State.choices, default=State.ACTIVE)
+    granted_at = models.DateTimeField(default=timezone.now)
+    granted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="staff_capability_assignments_granted",
+        null=True,
+        blank=True,
+    )
+    suspended_at = models.DateTimeField(null=True, blank=True)
+    suspended_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="staff_capability_assignments_suspended",
+        null=True,
+        blank=True,
+    )
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="staff_capability_assignments_revoked",
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = StaffCapabilityAssignmentQuerySet.as_manager()
+
+    @classmethod
+    def current_states(cls):
+        return [cls.State.ACTIVE, cls.State.SUSPENDED]
+
+    class Meta:
+        ordering = ["user_id", "capability__code", "-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "capability"],
+                condition=models.Q(state__in=["ACTIVE", "SUSPENDED"]),
+                name="staff_capability_one_current_assignment",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["user", "capability", "state"], name="staff_cap_assignment_idx"),
+            models.Index(fields=["state", "capability"], name="staff_cap_state_cap_idx"),
+        ]
+
+
+class StaffCapabilityRestrictionQuerySet(models.QuerySet):
+    def active(self):
+        return self.filter(is_active=True, removed_at__isnull=True)
+
+
+class StaffCapabilityRestriction(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="staff_capability_restrictions",
+    )
+    capability = models.ForeignKey(
+        CapabilityDefinition,
+        on_delete=models.PROTECT,
+        related_name="restrictions",
+    )
+    is_active = models.BooleanField(default=True)
+    restricted_at = models.DateTimeField(default=timezone.now)
+    restricted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="staff_capability_restrictions_created",
+        null=True,
+        blank=True,
+    )
+    removed_at = models.DateTimeField(null=True, blank=True)
+    removed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="staff_capability_restrictions_removed",
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = StaffCapabilityRestrictionQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["user_id", "capability__code", "-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "capability"],
+                condition=models.Q(is_active=True, removed_at__isnull=True),
+                name="staff_capability_one_active_restriction",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["user", "capability", "is_active"], name="staff_cap_restriction_idx"),
+        ]
+
+
 class StaffInvitation(models.Model):
     """Durable, single-use staff account invitation state.
 

@@ -9,6 +9,7 @@ from django.db import IntegrityError
 from django.http import HttpRequest
 from django.test import RequestFactory, TransactionTestCase
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 from unittest.mock import patch
 
@@ -17,7 +18,15 @@ from audit.models import AuditEvent
 from people.models import Person
 from staff_access.admin import StaffRoleAdmin, StaffRoleAssignmentAdmin
 from staff_access.exceptions import FinalCrmAdminProtectionError
-from staff_access.models import StaffRole, StaffRoleAssignment
+from staff_access.models import (
+    CapabilityDefinition,
+    RoleCapabilityDefault,
+    StaffCapabilityAssignment,
+    StaffCapabilityRestriction,
+    StaffRole,
+    StaffRoleAssignment,
+)
+from staff_access.permissions import get_effective_capability_codes_for_user, user_has_capability
 
 
 class StaffRoleModelTests(TestCase):
@@ -43,6 +52,197 @@ class StaffRoleModelTests(TestCase):
         StaffRoleAssignment.objects.assign_role(user=user, role=role)
 
         self.assertFalse(StaffRoleAssignment.objects.active().exists())
+
+
+class CapabilityFoundationTests(TestCase):
+    def create_user(self, email, *, superuser=False):
+        if superuser:
+            return User.objects.create_superuser(
+                email=email,
+                password="testpass123",
+                person_first_name="Django",
+                person_last_name="Superuser",
+            )
+        return User.objects.create_user(
+            email=email,
+            password="testpass123",
+            person_first_name=email.split("@")[0],
+            person_last_name="User",
+            person_record_type=Person.RecordType.STAFF,
+        )
+
+    def setUp(self):
+        self.viewer = self.create_user("cap-viewer@example.com")
+        self.manager = self.create_user("cap-manager@example.com")
+        self.admin = self.create_user("cap-admin@example.com")
+        self.actor = self.create_user("cap-actor@example.com")
+        StaffRoleAssignment.objects.assign_role(user=self.viewer, role=StaffRole.CRM_VIEWER)
+        StaffRoleAssignment.objects.assign_role(user=self.manager, role=StaffRole.CRM_MANAGER)
+        StaffRoleAssignment.objects.assign_role(user=self.admin, role=StaffRole.CRM_ADMIN)
+
+    def test_canonical_capabilities_and_role_defaults_match_approved_matrix(self):
+        self.assertEqual(
+            set(CapabilityDefinition.objects.values_list("code", flat=True)),
+            set(CapabilityDefinition.canonical_codes()),
+        )
+        self.assertEqual(
+            set(
+                RoleCapabilityDefault.objects.filter(role__code=StaffRole.CRM_ADMIN).values_list(
+                    "capability__code", flat=True
+                )
+            ),
+            {
+                CapabilityDefinition.PERSON_CONTACT_READ,
+                CapabilityDefinition.PERSON_DEMOGRAPHIC_READ,
+                CapabilityDefinition.PERSON_EXPORT,
+                CapabilityDefinition.STAFF_CAPABILITY_ADMIN,
+            },
+        )
+        self.assertEqual(
+            set(
+                RoleCapabilityDefault.objects.filter(role__code=StaffRole.CRM_MANAGER).values_list(
+                    "capability__code", flat=True
+                )
+            ),
+            {CapabilityDefinition.PERSON_CONTACT_READ},
+        )
+        self.assertFalse(RoleCapabilityDefault.objects.filter(role__code=StaffRole.CRM_VIEWER).exists())
+        self.assertFalse(
+            RoleCapabilityDefault.objects.filter(
+                capability__code__in=[
+                    CapabilityDefinition.PERSON_RESTRICTED_ACCESS,
+                    CapabilityDefinition.PRIVACY_AUDIT_READ,
+                ]
+            ).exists()
+        )
+
+    def test_role_defaults_are_evaluated_by_backend(self):
+        self.assertEqual(get_effective_capability_codes_for_user(self.viewer), set())
+        self.assertEqual(
+            get_effective_capability_codes_for_user(self.manager),
+            {CapabilityDefinition.PERSON_CONTACT_READ},
+        )
+        self.assertEqual(
+            get_effective_capability_codes_for_user(self.admin),
+            {
+                CapabilityDefinition.PERSON_CONTACT_READ,
+                CapabilityDefinition.PERSON_DEMOGRAPHIC_READ,
+                CapabilityDefinition.PERSON_EXPORT,
+                CapabilityDefinition.STAFF_CAPABILITY_ADMIN,
+            },
+        )
+
+    def test_active_and_suspended_grants_and_historical_rows_are_distinguished(self):
+        contact = CapabilityDefinition.objects.get(code=CapabilityDefinition.PERSON_CONTACT_READ)
+        export = CapabilityDefinition.objects.get(code=CapabilityDefinition.PERSON_EXPORT)
+        active = StaffCapabilityAssignment.objects.create(
+            user=self.viewer, capability=contact, granted_by=self.actor
+        )
+        suspended = StaffCapabilityAssignment.objects.create(
+            user=self.viewer,
+            capability=export,
+            state=StaffCapabilityAssignment.State.SUSPENDED,
+            granted_by=self.actor,
+        )
+        revoked = StaffCapabilityAssignment.objects.create(
+            user=self.viewer,
+            capability=export,
+            state=StaffCapabilityAssignment.State.REVOKED,
+            granted_by=self.actor,
+        )
+
+        self.assertTrue(user_has_capability(self.viewer, CapabilityDefinition.PERSON_CONTACT_READ))
+        self.assertFalse(user_has_capability(self.viewer, CapabilityDefinition.PERSON_EXPORT))
+        self.assertEqual(StaffCapabilityAssignment.objects.current().count(), 2)
+        self.assertEqual(StaffCapabilityAssignment.objects.active().get(pk=active.pk), active)
+        self.assertEqual(suspended.state, StaffCapabilityAssignment.State.SUSPENDED)
+        self.assertEqual(revoked.state, StaffCapabilityAssignment.State.REVOKED)
+
+    def test_individual_grant_does_not_bypass_staff_role_eligibility(self):
+        non_staff = self.create_user("cap-no-role@example.com")
+        capability = CapabilityDefinition.objects.get(code=CapabilityDefinition.PERSON_CONTACT_READ)
+        StaffCapabilityAssignment.objects.create(user=non_staff, capability=capability, granted_by=self.actor)
+
+        self.assertFalse(user_has_capability(non_staff, CapabilityDefinition.PERSON_CONTACT_READ))
+
+    def test_active_restriction_overrides_role_default_without_reactivating_grant(self):
+        contact = CapabilityDefinition.objects.get(code=CapabilityDefinition.PERSON_CONTACT_READ)
+        assignment = StaffCapabilityAssignment.objects.create(
+            user=self.viewer,
+            capability=contact,
+            state=StaffCapabilityAssignment.State.SUSPENDED,
+            suspended_at=timezone.now(),
+            suspended_by=self.actor,
+            granted_by=self.actor,
+        )
+        restriction = StaffCapabilityRestriction.objects.create(
+            user=self.viewer, capability=contact, restricted_by=self.actor
+        )
+
+        self.assertFalse(user_has_capability(self.viewer, CapabilityDefinition.PERSON_CONTACT_READ))
+        restriction.is_active = False
+        restriction.removed_at = timezone.now()
+        restriction.removed_by = self.actor
+        restriction.save(update_fields=["is_active", "removed_at", "removed_by", "updated_at"])
+        self.assertFalse(user_has_capability(self.viewer, CapabilityDefinition.PERSON_CONTACT_READ))
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.state, StaffCapabilityAssignment.State.SUSPENDED)
+
+    def test_empty_requested_capabilities_returns_empty_set(self):
+        self.assertEqual(
+            get_effective_capability_codes_for_user(self.admin, requested_codes=set()),
+            set(),
+        )
+
+    def test_grant_suspend_regrant_preserves_current_assignment_and_revoke_preserves_history(self):
+        restricted = CapabilityDefinition.objects.get(code=CapabilityDefinition.PERSON_RESTRICTED_ACCESS)
+
+        assignment = StaffCapabilityAssignment.objects.create(
+            user=self.viewer, capability=restricted, granted_by=self.actor
+        )
+        assignment.state = StaffCapabilityAssignment.State.SUSPENDED
+        assignment.suspended_at = timezone.now()
+        assignment.suspended_by = self.actor
+        assignment.save(update_fields=["state", "suspended_at", "suspended_by", "updated_at"])
+        self.assertEqual(assignment.state, StaffCapabilityAssignment.State.SUSPENDED)
+
+        assignment.state = StaffCapabilityAssignment.State.ACTIVE
+        assignment.suspended_at = None
+        assignment.suspended_by = None
+        assignment.save(update_fields=["state", "suspended_at", "suspended_by", "updated_at"])
+        self.assertEqual(assignment.state, StaffCapabilityAssignment.State.ACTIVE)
+
+        assignment.state = StaffCapabilityAssignment.State.REVOKED
+        assignment.revoked_at = timezone.now()
+        assignment.revoked_by = self.actor
+        assignment.save(update_fields=["state", "revoked_at", "revoked_by", "updated_at"])
+        revoked = assignment
+        replacement = StaffCapabilityAssignment.objects.create(
+            user=self.viewer, capability=restricted, granted_by=self.actor
+        )
+        self.assertEqual(revoked.pk, assignment.pk)
+        self.assertNotEqual(replacement.pk, assignment.pk)
+        self.assertEqual(
+            StaffCapabilityAssignment.objects.filter(user=self.viewer, capability=restricted).count(),
+            2,
+        )
+
+    def test_superuser_privacy_bypass_is_audited(self):
+        superuser = self.create_user("privacy-superuser@example.com", superuser=True)
+        before = AuditEvent.objects.filter(action=AuditEvent.Action.PRIVACY_SUPERUSER_BYPASS).count()
+
+        self.assertTrue(user_has_capability(superuser, CapabilityDefinition.PERSON_EXPORT))
+
+        event = AuditEvent.objects.get(action=AuditEvent.Action.PRIVACY_SUPERUSER_BYPASS)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.PRIVACY_SUPERUSER_BYPASS).count(), before + 1)
+        self.assertEqual(event.actor_user_id, superuser.id)
+        self.assertEqual(event.metadata["capability_codes"], [CapabilityDefinition.PERSON_EXPORT])
+
+    def test_superuser_bypass_fails_if_transactional_audit_fails(self):
+        superuser = self.create_user("audit-failing-superuser@example.com", superuser=True)
+        with patch("staff_access.permissions.record_audit_event", side_effect=RuntimeError("audit unavailable")):
+            with self.assertRaises(RuntimeError):
+                user_has_capability(superuser, CapabilityDefinition.PERSON_EXPORT)
 
 
 class StaffRoleAssignmentModelTests(TestCase):

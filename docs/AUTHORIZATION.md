@@ -1,6 +1,6 @@
 # Elevate MK Authorization
 Status: Living Documentation
-Last Updated: 2026-08-31
+Last Updated: 2026-11-24
 
 ## Scope
 This document describes the currently implemented staff authorization foundation for the Elevate MK Django API.
@@ -152,6 +152,67 @@ Planned, not yet implemented:
 - Staff CRM resource endpoints
 - finer-grained operational permission policies beyond role-code checks
 - additional non-staff authorization domains
+
+## Phase 1A.1 Capability Foundation
+
+Status: Implemented foundation; endpoint and field enforcement remain planned.
+
+The six canonical capability codes are:
+
+- `PERSON_CONTACT_READ`
+- `PERSON_DEMOGRAPHIC_READ`
+- `PERSON_EXPORT`
+- `PERSON_RESTRICTED_ACCESS`
+- `PRIVACY_AUDIT_READ`
+- `STAFF_CAPABILITY_ADMIN`
+
+The approved initial role-default matrix is:
+
+| Role | Default capabilities |
+| --- | --- |
+| `CRM_VIEWER` | none |
+| `CRM_MANAGER` | `PERSON_CONTACT_READ` |
+| `CRM_ADMIN` | `PERSON_CONTACT_READ`, `PERSON_DEMOGRAPHIC_READ`, `PERSON_EXPORT`, `STAFF_CAPABILITY_ADMIN` |
+
+`PERSON_RESTRICTED_ACCESS` and `PRIVACY_AUDIT_READ` are not ordinary CRM-role
+defaults. `PERSON_RESTRICTED_ACCESS` remains an additional gate for future
+explicitly approved exceptional workflows; no such workflow is exposed in
+Phase 1A.1.
+
+The backend evaluator combines active role defaults with active individual
+assignments, excludes suspended and revoked assignments, and subtracts active
+explicit restrictions. Removing a restriction does not reactivate a suspended
+or revoked assignment. For ordinary, non-superuser evaluation, individual
+capability evaluation also requires an active staff role, preserving the
+existing Person/User and operational staff boundary. The approved Django
+superuser exception is evaluated before this ordinary-user rule and is
+separately audited.
+
+The reusable `HasCapability` DRF permission class delegates to this evaluator
+for future endpoint adoption. No existing endpoint has been switched from its
+role-based permission class in Phase 1A.1.
+
+Active Django superusers receive the approved full privacy-capability bypass.
+Each requested bypass is recorded transactionally as
+`PRIVACY_SUPERUSER_BYPASS`; if the audit write fails, the bypass fails. This
+exception applies to capability evaluation only and does not make a Django
+superuser an operational CRM role or change existing endpoint permission
+classes.
+
+Phase 1A.1 deliberately does not provide capability administration endpoints,
+governance proposals, two-person approval, masking, Person projections,
+search/export enforcement, CRM UI enforcement, automatic disposal, or an
+exceptional restricted-access workflow. These remain later approved phases.
+
+Source and validation evidence: the catalog and defaults are defined in
+`staff_access/models.py` and seeded by
+`staff_access/migrations/0006_capability_foundation.py`; evaluation is in
+`staff_access/permissions.py`; the audit action is in `audit/models.py` and
+`audit/migrations/0020_alter_auditevent_action.py`; focused tests are in
+`staff_access/tests.py`. Local Django checks, migration-drift checks, Python
+compilation, and the 9-test focused capability suite completed successfully.
+Production migration, endpoint integration, and live compatibility remain
+unverified.
 
 The implemented anonymous Community join endpoint is an explicit public
 submission boundary, not a CRM authorization exception. It uses its own DTO,

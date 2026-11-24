@@ -1,6 +1,6 @@
 # Elevate MK Database
 Status: Living Documentation
-Last Updated: 2026-10-01
+Last Updated: 2026-11-24
 
 ## Scope
 This document describes the Elevate-owned database/domain structures currently implemented in the Django API codebase.
@@ -23,6 +23,10 @@ The current Elevate-owned models are:
 - `external_references.ExternalPersonReference`
 - `staff_access.StaffRole`
 - `staff_access.StaffRoleAssignment`
+- `staff_access.CapabilityDefinition`
+- `staff_access.RoleCapabilityDefault`
+- `staff_access.StaffCapabilityAssignment`
+- `staff_access.StaffCapabilityRestriction`
 - `data_imports.ImportBatch`
 - `data_imports.ImportRecord`
 - `events.Event`
@@ -31,6 +35,72 @@ The current Elevate-owned models are:
 - `community.JoinSubmissionReceipt`
 - `community.CommunityAccountInvitation`
 - `community.CommunityProfile`
+
+## Phase 1A.1 Capability Foundation
+
+Status: Implemented in the Phase 1A.1 working tree; production deployment and
+live-database validation remain unverified.
+
+The privacy capability foundation is additive to the existing operational role
+model. It does not replace `StaffRole` or `StaffRoleAssignment`, and it does
+not change existing API endpoint authorization.
+
+### Capability tables
+
+- `CapabilityDefinition` stores the six canonical capability identifiers and
+  their descriptions. References to definitions use `PROTECT`, and definitions
+  may be deactivated without deleting historical references.
+- `RoleCapabilityDefault` maps a role to an enabled or disabled capability.
+  `(role, capability)` is unique and indexed for role evaluation.
+- `StaffCapabilityAssignment` stores individual capability grant history. Its
+  states are `ACTIVE`, `SUSPENDED`, and `REVOKED`. Only one active or suspended
+  current assignment is permitted for a `(user, capability)` pair; revoked
+  rows remain as history.
+- `StaffCapabilityRestriction` stores explicit restriction history. Only one
+  active restriction is permitted for a `(user, capability)` pair. Removing a
+  restriction does not alter the underlying assignment state.
+
+### Phase 1A.1 field and integrity reference
+
+`CapabilityDefinition` fields are `code` (unique, max 64), `name`,
+`description`, `is_active`, `created_at`, and `updated_at`.
+
+`RoleCapabilityDefault` contains `role` and `capability` foreign keys using
+`PROTECT`, `is_enabled`, and creation/update timestamps. The `(role,
+capability)` pair is unique and indexed with `is_enabled`.
+
+`StaffCapabilityAssignment` contains `user` and `capability` foreign keys
+using `PROTECT`, `state`, grant timestamp/actor, suspension timestamp/actor,
+revocation timestamp/actor, and creation/update timestamps. Actor references
+use `SET_NULL`. Only one `ACTIVE` or `SUSPENDED` row may exist for a `(user,
+capability)` pair. Revoked rows remain historical records.
+
+`StaffCapabilityRestriction` contains `user` and `capability` foreign keys
+using `PROTECT`, active state, restriction/removal timestamps and actors, and
+creation/update timestamps. Actor references use `SET_NULL`. Only one active,
+non-removed restriction may exist for a `(user, capability)` pair.
+
+The schema is introduced by `staff_access.0006_capability_foundation`, which
+depends on `staff_access.0005_staff_email_delivery`. Its seed reverse
+operation is intentionally a no-op, but reversing the schema operations would
+drop the four capability tables and their rows. The migration must therefore
+not be reversed in production as a routine rollback. Recovery requires an
+approved backup or export, explicit data-preservation review, and a
+forward-compatible recovery plan.
+Canonical capability seed data and the approved initial role defaults are
+created by that migration. No privacy governance mutation API or Django Admin
+surface is introduced in Phase 1A.1; such mutations remain deferred until the
+approved governance workflow and mandatory audit handling are implemented.
+
+The audit action `PRIVACY_SUPERUSER_BYPASS` is added by
+`audit.0020_alter_auditevent_action`. The audit migration preserves the
+existing action choices and appends the new action.
+
+Validation evidence: `manage.py check --fail-level ERROR`,
+`manage.py makemigrations --check --dry-run`, Python compilation, and
+`manage.py test staff_access.tests.CapabilityFoundationTests --keepdb
+--verbosity 0` completed locally. The focused suite ran 9 tests and returned
+`OK`. No production migration was executed.
 
 ## Historical Import Staging
 

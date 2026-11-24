@@ -93,6 +93,7 @@ class AuditEvent(models.Model):
         CAMPAIGN_RECONCILIATION_REQUIRED = "CAMPAIGN_RECONCILIATION_REQUIRED", "Campaign reconciliation required"
         CAMPAIGN_PROVIDER_FAILURE = "CAMPAIGN_PROVIDER_FAILURE", "Campaign provider failure"
         CAMPAIGN_PROVIDER_RETRY = "CAMPAIGN_PROVIDER_RETRY", "Campaign provider retry"
+        PRIVACY_SUPERUSER_BYPASS = "PRIVACY_SUPERUSER_BYPASS", "Privacy capability superuser bypass"
 
     actor_user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
