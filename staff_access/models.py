@@ -1,6 +1,6 @@
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.db import models
 from django.utils import timezone
 import uuid
 
@@ -76,30 +76,16 @@ class StaffRoleAssignmentManager(models.Manager):
     def active(self):
         return self.get_queryset().active()
 
-    def assign_role(self, *, user, role, assigned_by=None):
-        if isinstance(role, str):
-            role = StaffRole.objects.get(code=role)
+    def assign_role(self, *, user, role, assigned_by=None, audit=False, return_details=False):
+        from staff_access.services import assign_staff_role
 
-        with transaction.atomic():
-            locked_role = StaffRole.objects.select_for_update().get(pk=role.pk)
-            locked_user = user.__class__.objects.select_for_update().get(pk=user.pk)
-            if locked_user.person.record_type == "COMMUNITY":
-                from memberships.models import Membership
-
-                if Membership.objects.filter(person_id=locked_user.person_id).exists():
-                    raise ValidationError("A Community Person with Membership cannot be provisioned as Staff.")
-                raise ValidationError(
-                    "Staff roles require a separately provisioned STAFF Person and User."
-                )
-
-            assignment, created = self.select_for_update().get_or_create(
-                user=locked_user,
-                role=locked_role,
-                defaults={"is_active": True, "assigned_by": assigned_by},
-            )
-            if not created and not assignment.is_active:
-                assignment.reactivate()
-            return assignment
+        return assign_staff_role(
+            user=user,
+            role=role,
+            assigned_by=assigned_by,
+            audit=audit,
+            return_details=return_details,
+        )
 
 
 class StaffRoleAssignment(models.Model):
@@ -172,7 +158,17 @@ class StaffRoleAssignment(models.Model):
         self.save(update_fields=["is_active", "revoked_at", "revoked_by", "updated_at"])
         return self
 
-    def reactivate(self):
+    def reactivate(self, *, assigned_by=None):
+        from staff_access.services import assign_staff_role
+
+        return assign_staff_role(
+            user=self.user,
+            role=self.role,
+            assigned_by=assigned_by,
+            audit=True,
+        )
+
+    def _reactivate_unchecked(self, *, assigned_by=None):
         self.is_active = True
         self.revoked_at = None
         self.revoked_by = None

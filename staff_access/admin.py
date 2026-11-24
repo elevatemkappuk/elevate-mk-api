@@ -6,8 +6,15 @@ from django.utils.translation import ngettext
 from audit.models import AuditEvent
 from audit.services import record_audit_event
 from staff_access.exceptions import FinalCrmAdminProtectionError
-from staff_access.models import StaffInvitation, StaffRole, StaffRoleAssignment
+from staff_access.models import (
+    CAPABILITY_POLICY_STATE_KEY,
+    CapabilityPolicyState,
+    StaffInvitation,
+    StaffRole,
+    StaffRoleAssignment,
+)
 from staff_access.services import (
+    activate_staff_role,
     ensure_staff_role_can_be_deactivated,
     revoke_staff_role_assignments,
 )
@@ -21,7 +28,7 @@ def can_manage_staff_access(user):
     )
 
 
-def record_staff_role_audit_event(*, action, actor_user, assignment, request=None):
+def record_staff_role_audit_event(*, action, actor_user, assignment, request=None, metadata_extra=None):
     request_id = None
     ip_address = None
     if request is not None:
@@ -46,6 +53,7 @@ def record_staff_role_audit_event(*, action, actor_user, assignment, request=Non
             "target_user_id": str(assignment.user_id),
             "staff_role_id": str(assignment.role_id),
             "staff_role_code": assignment.role.code,
+            **(metadata_extra or {}),
         },
         request_id=request_id,
         ip_address=ip_address,
@@ -95,6 +103,10 @@ class StaffRoleAdmin(admin.ModelAdmin):
             was_active = StaffRole.objects.filter(pk=obj.pk).values_list("is_active", flat=True).first()
             if was_active and not obj.is_active:
                 obj.deactivate(actor_user=request.user, request=request)
+                obj.refresh_from_db()
+                return
+            if was_active is False and obj.is_active:
+                activate_staff_role(obj, actor_user=request.user)
                 obj.refresh_from_db()
                 return
 
@@ -163,41 +175,22 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
             return
 
         with transaction.atomic():
-            locked_role = StaffRole.objects.select_for_update().get(pk=obj.role_id)
-            locked_user = obj.user.__class__.objects.select_for_update().get(pk=obj.user_id)
-            existing = (
-                StaffRoleAssignment.objects.select_for_update()
-                .select_related("role")
-                .filter(user=locked_user, role=locked_role)
-                .first()
-            )
-            if existing:
-                if not existing.is_active:
-                    existing.reactivate()
-                    record_staff_role_audit_event(
-                        action=AuditEvent.Action.STAFF_ROLE_REACTIVATED,
-                        actor_user=request.user,
-                        assignment=existing,
-                        request=request,
-                    )
-                    self.message_user(request, "Existing assignment reactivated.", level=messages.SUCCESS)
-                else:
-                    self.message_user(request, "Assignment already exists and remains active.", level=messages.WARNING)
-                obj.pk = existing.pk
-                return
-
-            assignment = StaffRoleAssignment.objects.create(
-                user=locked_user,
-                role=locked_role,
+            assignment, created, reactivated, policy_version = StaffRoleAssignment.objects.assign_role(
+                user=obj.user,
+                role=obj.role,
                 assigned_by=request.user,
+                audit=False,
+                return_details=True,
             )
-            assignment = StaffRoleAssignment.objects.select_related("role").get(pk=assignment.pk)
-            record_staff_role_audit_event(
-                action=AuditEvent.Action.STAFF_ROLE_ASSIGNED,
-                actor_user=request.user,
-                assignment=assignment,
-                request=request,
-            )
+            if created or reactivated:
+                action = AuditEvent.Action.STAFF_ROLE_REACTIVATED if reactivated else AuditEvent.Action.STAFF_ROLE_ASSIGNED
+                record_staff_role_audit_event(
+                    action=action,
+                    actor_user=request.user,
+                    assignment=assignment,
+                    request=request,
+                    metadata_extra={"policy_version": policy_version} if policy_version is not None else None,
+                )
 
         obj.pk = assignment.pk
         obj.assigned_at = assignment.assigned_at
@@ -214,12 +207,21 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
                     request=request,
                     audit=False,
                 )
+                policy_state = CapabilityPolicyState.objects.filter(
+                    singleton_key=1,
+                    key=CAPABILITY_POLICY_STATE_KEY,
+                ).first()
                 for assignment in assignments:
                     record_staff_role_audit_event(
                         action=AuditEvent.Action.STAFF_ROLE_REVOKED,
                         actor_user=request.user,
                         assignment=assignment,
                         request=request,
+                        metadata_extra=(
+                            {"policy_version": policy_state.version}
+                            if policy_state is not None
+                            else None
+                        ),
                     )
         except FinalCrmAdminProtectionError as error:
             self.message_user(request, error.messages[0], level=messages.ERROR)
@@ -242,19 +244,27 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
         updated = 0
         with transaction.atomic():
             assignments = list(
-                queryset.select_for_update()
+                queryset
                 .select_related("role")
                 .filter(is_active=False)
             )
             for assignment in assignments:
-                assignment.reactivate()
-                record_staff_role_audit_event(
-                    action=AuditEvent.Action.STAFF_ROLE_REACTIVATED,
-                    actor_user=request.user,
-                    assignment=assignment,
-                    request=request,
+                assignment, created, reactivated, policy_version = StaffRoleAssignment.objects.assign_role(
+                    user=assignment.user,
+                    role=assignment.role,
+                    assigned_by=request.user,
+                    audit=False,
+                    return_details=True,
                 )
-                updated += 1
+                if reactivated:
+                    record_staff_role_audit_event(
+                        action=AuditEvent.Action.STAFF_ROLE_REACTIVATED,
+                        actor_user=request.user,
+                        assignment=assignment,
+                        request=request,
+                        metadata_extra={"policy_version": policy_version} if policy_version is not None else None,
+                    )
+                    updated += 1
         self.message_user(
             request,
             ngettext(

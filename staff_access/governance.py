@@ -870,14 +870,6 @@ def _execute_pending(*, proposal_id, actor_user, request=None, approval=False, c
             if _requires_two_person(proposal):
                 raise PermissionError("This proposal requires a distinct second approver.")
 
-        if proposal.policy_version != state.version:
-            return _finalize_without_mutation(
-                proposal=proposal,
-                actor=actor,
-                outcome=CapabilityProposalDecision.Outcome.INVALIDATED,
-                reason="The proposal policy version is stale.",
-                request=request,
-            )
         capability = _get_capability(proposal.capability)
         fresh_role = None if proposal.role_id is None else _get_role_for_proposal(proposal.role)
         fresh_snapshot = _target_snapshot(
@@ -892,6 +884,14 @@ def _execute_pending(*, proposal_id, actor_user, request=None, approval=False, c
                 actor=actor,
                 outcome=CapabilityProposalDecision.Outcome.INVALIDATED,
                 reason="The proposal role is no longer active.",
+                request=request,
+            )
+        if proposal.policy_version != state.version:
+            return _finalize_without_mutation(
+                proposal=proposal,
+                actor=actor,
+                outcome=CapabilityProposalDecision.Outcome.INVALIDATED,
+                reason="The proposal policy version is stale.",
                 request=request,
             )
         if not _snapshots_match(proposal.expected_target_state, fresh_snapshot):

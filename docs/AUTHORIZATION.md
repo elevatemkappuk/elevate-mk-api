@@ -344,7 +344,9 @@ one of those roles receive `403`. A mobile JWT, Django `is_staff`, or Django
 The CRM capability disclosure allowlist is intentionally empty at this stage.
 The endpoint therefore returns `capability_codes: []` for every admitted caller;
 this prevents premature exposure of capability decisions before a later approved
-CRM consumer and disclosure policy exist. Phase 1A.4B remains deferred.
+CRM consumer and disclosure policy exist. Phase 1A.4B Staff Access lifecycle
+integration is implemented; capability-consuming administration and disclosure
+expansion remain deferred.
 
 `policy_version` is the current capability-policy version observed for the
 evaluation. It is informational only: it is not a grant, token, client-controlled

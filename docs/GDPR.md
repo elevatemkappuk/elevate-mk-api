@@ -129,8 +129,9 @@ validated in this stage.
   was clean. No schema or migration files changed, and no migrations were
   applied for Phase 1A.4A. Broader runtime, deployment, CRM tests/build/runtime,
   and cross-repository consumption remain unverified.
-- **Deferred:** Phase 1A.4B and any later CRM capability consumer or capability
-  disclosure expansion.
+- **Implemented / source-inspected:** Phase 1A.4B CRM Staff Access lifecycle
+  integration and fail-closed projection handling. Capability-consuming CRM
+  administration remains deferred, as does capability disclosure expansion.
 - **Historical runtime evidence (superseded):** governance migrations applied
   cleanly in newly named isolated test databases; the final governance rerun
   passed 21 tests in 166.170 seconds; the combined focused run of governance,
@@ -144,6 +145,35 @@ validated in this stage.
   live deployment state, cross-repository compatibility, all privileged
   operational writers, and independent specialist review completion where noted
   in the Main Codex handoff.
+
+### Phase 1A.4C.2A lifecycle remediation
+
+Status: **Implemented / focused validation verified in an isolated PostgreSQL
+test environment; governance API exposure remains deferred.**
+
+Staff-role assignment and reactivation now use a shared lifecycle service
+boundary. The service acquires the capability policy row, canonical role rows,
+assignment rows, and User rows in the documented order, revalidates the Staff
+Person boundary, updates policy version when effective role state changes, and
+preserves audit and transaction rollback behavior. Invitation redemption no
+longer locks an existing User before invoking role assignment. Staff-role
+deactivation, revocation and Admin reactivation use the same policy/role-first
+ordering and update policy state consistently.
+
+The remediation did not expose governance HTTP endpoints, expand capability
+disclosure, modify CRM code, reconcile legacy TECHNICAL records, or change
+GOV-005. GOV-003 and GOV-006 are reduced for the reviewed lifecycle paths but
+remain open for uncovered privileged writers until independent security review
+and broader activation evidence are complete.
+
+The final focused validation recorded 21/21 Admin, role-model, assignment and
+concurrency tests and 34/34 governance and invitation tests passing, alongside
+a clean Django system check, no schema-affecting model changes, no planned
+migrations and a clean migration graph against the isolated database. The full
+broader focused
+run remains limited by two pre-existing Admin audit assertions that do not
+exclude the migration-generated `CAPABILITY_CATALOG_EXTENDED` event; those
+assertions are not treated as remediation failures.
 
 ## Security and privacy limitations
 

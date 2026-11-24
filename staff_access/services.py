@@ -12,7 +12,14 @@ from accounts.models import User
 from audit.models import AuditEvent
 from audit.services import record_audit_event
 from staff_access.exceptions import FinalCrmAdminProtectionError
-from staff_access.models import StaffEmailChangeRequest, StaffInvitation, StaffRole, StaffRoleAssignment
+from staff_access.models import (
+    CAPABILITY_POLICY_STATE_KEY,
+    CapabilityPolicyState,
+    StaffEmailChangeRequest,
+    StaffInvitation,
+    StaffRole,
+    StaffRoleAssignment,
+)
 
 
 def _normalize_invitation_email(email):
@@ -160,6 +167,114 @@ def offboard_staff_user(*, target_user, actor_user, request=None):
     return target_user
 
 
+def assign_staff_role(*, user, role, assigned_by=None, audit=True, return_details=False):
+    """Assign or reactivate one Staff role under the shared lifecycle lock contract."""
+    if isinstance(role, str):
+        role = StaffRole.objects.get(code=role)
+
+    with transaction.atomic():
+        policy_state = CapabilityPolicyState.objects.select_for_update().filter(
+            singleton_key=1,
+            key=CAPABILITY_POLICY_STATE_KEY,
+        ).first()
+        locked_roles = list(StaffRole.objects.select_for_update().order_by("pk"))
+        locked_role = next(item for item in locked_roles if item.pk == role.pk)
+
+        existing_assignments = list(
+            StaffRoleAssignment.objects.select_for_update()
+            .filter(user_id=user.pk)
+            .order_by("pk")
+        )
+        locked_user = user.__class__.objects.select_for_update().get(pk=user.pk)
+        if locked_user.person.record_type == "COMMUNITY":
+            from memberships.models import Membership
+
+            if Membership.objects.filter(person_id=locked_user.person_id).exists():
+                raise ValidationError("A Community Person with Membership cannot be provisioned as Staff.")
+            raise ValidationError("Staff roles require a separately provisioned STAFF Person and User.")
+
+        assignment = next(
+            (item for item in existing_assignments if item.role_id == locked_role.pk),
+            None,
+        )
+        created = assignment is None
+        reactivated = bool(assignment is not None and not assignment.is_active)
+        if created:
+            assignment = StaffRoleAssignment.objects.create(
+                user=locked_user,
+                role=locked_role,
+                assigned_by=assigned_by,
+            )
+        elif reactivated:
+            assignment._reactivate_unchecked(assigned_by=assigned_by)
+        else:
+            if return_details:
+                return assignment, False, False, policy_state.version if policy_state is not None else None
+            return assignment
+
+        if policy_state is not None:
+            policy_state.version += 1
+            policy_state.updated_by = assigned_by
+            policy_state.reason = "staff_role_assignment_changed"
+            policy_state.save(update_fields=["version", "updated_by", "reason", "updated_at"])
+
+        if audit:
+            record_audit_event(
+                action=(
+                    AuditEvent.Action.STAFF_ROLE_ASSIGNED
+                    if created
+                    else AuditEvent.Action.STAFF_ROLE_REACTIVATED
+                ),
+                actor_user=assigned_by,
+                entity_type="StaffRoleAssignment",
+                entity_id=assignment.pk,
+                metadata={
+                    "target_user_id": str(locked_user.pk),
+                    "staff_role_id": str(locked_role.pk),
+                    "staff_role_code": locked_role.code,
+                    **({"policy_version": policy_state.version} if policy_state is not None else {}),
+                },
+            )
+        if return_details:
+            return assignment, created, reactivated, policy_state.version if policy_state is not None else None
+        return assignment
+
+
+def activate_staff_role(role, *, actor_user=None):
+    """Reactivate a role while preserving the shared policy lock contract."""
+    if actor_user is None:
+        raise PermissionError("Role activation requires an authenticated actor.")
+    with transaction.atomic():
+        policy_state = CapabilityPolicyState.objects.select_for_update().filter(
+            singleton_key=1,
+            key=CAPABILITY_POLICY_STATE_KEY,
+        ).first()
+        locked_roles = list(StaffRole.objects.select_for_update().order_by("pk"))
+        locked_role = next(item for item in locked_roles if item.pk == role.pk)
+        if locked_role.is_active:
+            return locked_role
+        locked_role.is_active = True
+        locked_role.save(update_fields=["is_active", "updated_at"])
+        if policy_state is not None:
+            policy_state.version += 1
+            policy_state.updated_by = actor_user
+            policy_state.reason = "staff_role_activated"
+            policy_state.save(update_fields=["version", "updated_by", "reason", "updated_at"])
+            record_audit_event(
+                action=AuditEvent.Action.CAPABILITY_PERMISSION_MUTATED,
+                actor_user=actor_user,
+                entity_type="StaffRole",
+                entity_id=locked_role.pk,
+                metadata={
+                    "staff_role_code": locked_role.code,
+                    "role_active": True,
+                    "policy_version": policy_state.version,
+                    "reason": "staff_role_activated",
+                },
+            )
+        return locked_role
+
+
 def reactivate_staff_user(*, target_user, actor_user):
     """Start a fresh invitation; never restores the old User or assignments."""
     from staff_access.permissions import user_has_any_active_staff_role
@@ -290,7 +405,7 @@ def redeem_staff_invitation(*, public_id, raw_token, password):
             or not secrets.compare_digest(invitation.token_hash, _invitation_token_hash(raw_token))
         ):
             raise ValidationError("This Staff invitation is invalid or has expired.")
-        existing_user = User.objects.select_for_update().select_related("person").filter(email=invitation.intended_email).first()
+        existing_user = User.objects.select_related("person").filter(email=invitation.intended_email).first()
         if existing_user is not None and (existing_user.is_active or existing_user.person.record_type != Person.RecordType.STAFF):
             raise ValidationError({"email": "An active or non-Staff account already uses this email address."})
         if existing_user is None:
@@ -304,14 +419,21 @@ def redeem_staff_invitation(*, public_id, raw_token, password):
         else:
             user = existing_user
             person = user.person
+        for role_code in invitation.pending_role_codes:
+            role = StaffRole.objects.get(code=role_code, is_active=True)
+            StaffRoleAssignment.objects.assign_role(
+                user=user,
+                role=role,
+                assigned_by=invitation.created_by,
+                audit=True,
+            )
+        if existing_user is not None:
+            user = User.objects.select_for_update().get(pk=existing_user.pk)
             user.set_password(password)
             user.is_active = True
             user.auth_version += 1
             user.crm_session_version += 1
             user.save(update_fields=["password", "is_active", "auth_version", "crm_session_version"])
-        for role_code in invitation.pending_role_codes:
-            role = StaffRole.objects.get(code=role_code, is_active=True)
-            StaffRoleAssignment.objects.assign_role(user=user, role=role, assigned_by=invitation.created_by)
         invitation.accepted_at = timezone.now()
         invitation.token_hash = None
         invitation.save(update_fields=["accepted_at", "token_hash", "updated_at"])
@@ -334,7 +456,12 @@ def ensure_staff_role_can_be_deactivated(role):
 def deactivate_staff_role(role, *, actor_user=None, request=None):
     """Deactivate a non-canonical-admin role through the Staff Access domain."""
     with transaction.atomic():
-        locked_role = StaffRole.objects.select_for_update().get(pk=role.pk)
+        policy_state = CapabilityPolicyState.objects.select_for_update().filter(
+            singleton_key=1,
+            key=CAPABILITY_POLICY_STATE_KEY,
+        ).first()
+        locked_roles = list(StaffRole.objects.select_for_update().order_by("pk"))
+        locked_role = next(item for item in locked_roles if item.pk == role.pk)
         ensure_staff_role_can_be_deactivated(locked_role)
         affected_assignments = list(
             StaffRoleAssignment.objects.select_for_update()
@@ -347,6 +474,11 @@ def deactivate_staff_role(role, *, actor_user=None, request=None):
         )
         locked_role.is_active = False
         locked_role.save(update_fields=["is_active", "updated_at"])
+        if policy_state is not None:
+            policy_state.version += 1
+            policy_state.updated_by = actor_user
+            policy_state.reason = "staff_role_deactivated"
+            policy_state.save(update_fields=["version", "updated_by", "reason", "updated_at"])
         for user in affected_users:
             user.crm_session_version = F("crm_session_version") + 1
             user.save(update_fields=["crm_session_version"])
@@ -365,6 +497,7 @@ def deactivate_staff_role(role, *, actor_user=None, request=None):
                 "staff_role_code": locked_role.code,
                 "affected_user_count": len(affected_user_ids),
                 "crm_sessions_invalidated": True,
+                **({"policy_version": policy_state.version} if policy_state is not None else {}),
             },
             request_id=request_id,
             ip_address=ip_address,
@@ -385,7 +518,12 @@ def revoke_staff_role_assignments(*, assignments, revoked_by=None, revoked_at=No
         assignment_ids = [assignment.pk for assignment in assignments if assignment.pk]
 
     with transaction.atomic():
-        crm_admin_role = StaffRole.objects.select_for_update().get(code=StaffRole.CRM_ADMIN)
+        policy_state = CapabilityPolicyState.objects.select_for_update().filter(
+            singleton_key=1,
+            key=CAPABILITY_POLICY_STATE_KEY,
+        ).first()
+        locked_roles = list(StaffRole.objects.select_for_update().order_by("pk"))
+        crm_admin_role = next(role for role in locked_roles if role.code == StaffRole.CRM_ADMIN)
         locked_assignments = list(
             StaffRoleAssignment.objects.select_for_update()
             .select_related("role")
@@ -419,6 +557,13 @@ def revoke_staff_role_assignments(*, assignments, revoked_by=None, revoked_at=No
             user.crm_session_version = F("crm_session_version") + 1
             user.save(update_fields=["crm_session_version"])
 
+        if active_assignments:
+            if policy_state is not None:
+                policy_state.version += 1
+                policy_state.updated_by = revoked_by
+                policy_state.reason = "staff_role_assignments_revoked"
+                policy_state.save(update_fields=["version", "updated_by", "reason", "updated_at"])
+
         if audit:
             request_id = None
             ip_address = None
@@ -436,6 +581,7 @@ def revoke_staff_role_assignments(*, assignments, revoked_by=None, revoked_at=No
                         "target_user_id": str(assignment.user_id),
                         "staff_role_id": str(assignment.role_id),
                         "staff_role_code": assignment.role.code,
+                        **({"policy_version": policy_state.version} if policy_state is not None else {}),
                     },
                     request_id=request_id,
                     ip_address=ip_address,
