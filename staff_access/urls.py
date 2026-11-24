@@ -11,11 +11,25 @@ from staff_access.views import (
     StaffOffboardView,
     StaffReactivateView,
     StaffEffectiveAccessView,
+    GovernanceTargetDetailView,
+    GovernanceRoleDefaultsView,
+    GovernanceProposalCreateView,
+    GovernanceIndividualChangeView,
+    GovernanceProposalActionView,
+    GovernanceHistoryView,
+    GovernanceSuperuserActionView,
 )
 
 
 urlpatterns = [
     path("staff/access/me/", StaffEffectiveAccessView.as_view(), name="staff-effective-access-me"),
+    path("staff/governance/targets/<int:user_id>/", GovernanceTargetDetailView.as_view(), name="staff-governance-target-detail"),
+    path("staff/governance/role-defaults/", GovernanceRoleDefaultsView.as_view(), name="staff-governance-role-defaults"),
+    path("staff/governance/proposals/", GovernanceProposalCreateView.as_view(), name="staff-governance-proposal-create"),
+    path("staff/governance/individual-changes/", GovernanceIndividualChangeView.as_view(), name="staff-governance-individual-change"),
+    path("staff/governance/proposals/<uuid:proposal_id>/<str:action>/", GovernanceProposalActionView.as_view(), name="staff-governance-proposal-action"),
+    path("staff/governance/history/<str:history_type>/", GovernanceHistoryView.as_view(), name="staff-governance-history"),
+    path("staff/governance/superuser-actions/", GovernanceSuperuserActionView.as_view(), name="staff-governance-superuser-action"),
     path("staff/invitations/", StaffInvitationCreateView.as_view(), name="staff-invitation-create"),
     path("staff/invitations/<uuid:invitation_id>/cancel/", StaffInvitationCancelView.as_view(), name="staff-invitation-cancel"),
     path("staff/invitations/<uuid:invitation_id>/resend/", StaffInvitationResendView.as_view(), name="staff-invitation-resend"),

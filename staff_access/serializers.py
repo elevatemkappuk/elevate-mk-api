@@ -1,7 +1,7 @@
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 
-from staff_access.models import StaffRole
+from staff_access.models import CapabilityDefinition, CapabilityProposal, StaffRole
 
 
 class StaffInvitationCreateSerializer(serializers.Serializer):
@@ -58,3 +58,25 @@ class EffectiveAccessSerializer(serializers.Serializer):
         read_only=True,
     )
     policy_version = serializers.IntegerField(read_only=True)
+
+
+class CapabilityGovernanceMutationSerializer(serializers.Serializer):
+    operation = serializers.ChoiceField(choices=CapabilityProposal.Operation.choices)
+    capability = serializers.ChoiceField(
+        choices=[(code, code) for code, _name, _description in CapabilityDefinition.CANONICAL_CAPABILITIES]
+    )
+    target_user_id = serializers.IntegerField(min_value=1, required=False)
+    role_id = serializers.IntegerField(min_value=1, required=False)
+    reason = serializers.CharField(max_length=4000, trim_whitespace=True)
+
+    def validate(self, attrs):
+        role_operation = attrs["operation"] in CapabilityProposal.ROLE_DEFAULT_OPERATIONS
+        if role_operation and (attrs.get("role_id") is None or attrs.get("target_user_id") is not None):
+            raise serializers.ValidationError("Role-default operations require role_id and no target_user_id.")
+        if not role_operation and (attrs.get("target_user_id") is None or attrs.get("role_id") is not None):
+            raise serializers.ValidationError("Individual operations require target_user_id and no role_id.")
+        return attrs
+
+
+class CapabilityProposalDecisionSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=4000, trim_whitespace=True, required=False)

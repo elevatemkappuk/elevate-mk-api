@@ -10,6 +10,12 @@ from accounts.authentication import CRM_SESSION_AUTHENTICATION_CLASSES
 from staff_access.models import (
     CAPABILITY_POLICY_STATE_KEY,
     CapabilityPolicyState,
+    CapabilityDefinition,
+    CapabilityProposal,
+    CapabilityProposalDecision,
+    RoleCapabilityDefault,
+    StaffCapabilityAssignment,
+    StaffCapabilityRestriction,
     StaffEmailChangeRequest,
     StaffInvitation,
     StaffRole,
@@ -19,6 +25,7 @@ from staff_access.permissions import (
     HasActiveStaffRoleCodes,
     HasCrmOperationalAccess,
     get_effective_capability_codes_for_user,
+    user_has_any_active_staff_role,
 )
 from staff_access.serializers import (
     StaffEmailChangeConfirmSerializer,
@@ -28,6 +35,8 @@ from staff_access.serializers import (
     StaffInvitationRoleUpdateSerializer,
     StaffLifecycleSerializer,
     EffectiveAccessSerializer,
+    CapabilityGovernanceMutationSerializer,
+    CapabilityProposalDecisionSerializer,
 )
 from staff_access.services import (
     cancel_staff_invitation,
@@ -40,11 +49,98 @@ from staff_access.services import (
     offboard_staff_user,
     reactivate_staff_user,
 )
+from staff_access.governance import (
+    apply_capability_proposal,
+    apply_individual_capability_change,
+    apply_superuser_capability_change,
+    approve_capability_proposal,
+    cancel_capability_proposal,
+    create_capability_proposal,
+    reject_capability_proposal,
+)
+from staff_access.permissions import user_has_capability
+from people.models import Person
 from accounts.models import User
 
 
 class StaffAdminPermission(HasActiveStaffRoleCodes):
     required_role_codes = (StaffRole.CRM_ADMIN,)
+
+
+class OrdinaryGovernancePermission(IsAuthenticated):
+    message = "An active, non-superuser privacy administrator is required."
+
+    def has_permission(self, request, view):
+        return (
+            super().has_permission(request, view)
+            and not request.user.is_superuser
+            and user_has_capability(request.user, CapabilityDefinition.STAFF_CAPABILITY_ADMIN, request=request)
+        )
+
+
+class SuperuserGovernancePermission(IsAuthenticated):
+    message = "An active Django superuser with CRM access is required."
+
+    def has_permission(self, request, view):
+        return (
+            super().has_permission(request, view)
+            and request.user.is_active
+            and request.user.is_superuser
+            and user_has_any_active_staff_role(request.user, StaffRole.canonical_codes())
+        )
+
+
+def _governance_error(error):
+    if isinstance(error, DjangoValidationError):
+        return serializers.ValidationError(
+            error.message_dict if hasattr(error, "message_dict") else error.messages
+        )
+    if isinstance(error, PermissionError):
+        from rest_framework.exceptions import PermissionDenied
+
+        return PermissionDenied(str(error))
+    if isinstance(error, (CapabilityDefinition.DoesNotExist, StaffRole.DoesNotExist, User.DoesNotExist)):
+        return serializers.ValidationError("The requested governance target was not found.")
+    return serializers.ValidationError(str(error))
+
+
+def _proposal_payload(proposal):
+    decision = getattr(proposal, "decision", None)
+    return {
+        "public_id": str(proposal.public_id),
+        "operation": proposal.operation,
+        "status": proposal.status,
+        "role_id": proposal.role_id,
+        "role_code": proposal.role.code if proposal.role_id else None,
+        "target_user_id": proposal.target_user_id,
+        "capability": proposal.capability.code,
+        "proposed_by_id": proposal.proposed_by_id,
+        "reason": proposal.reason,
+        "policy_version": proposal.policy_version,
+        "expected_target_state": proposal.expected_target_state,
+        "expires_at": proposal.expires_at,
+        "created_at": proposal.created_at,
+        "resolved_at": proposal.resolved_at,
+        "resolution_reason": proposal.resolution_reason,
+        "decision": None if decision is None else {
+            "outcome": decision.outcome,
+            "decided_by_id": decision.decided_by_id,
+            "reason": decision.reason,
+            "policy_version": decision.policy_version,
+            "created_at": decision.created_at,
+        },
+    }
+
+
+def _governance_objects(data):
+    capability = CapabilityDefinition.objects.get(code=data["capability"], is_active=True)
+    role = None
+    target = None
+    if data["operation"] in CapabilityProposal.ROLE_DEFAULT_OPERATIONS:
+        role = StaffRole.objects.get(pk=data["role_id"])
+    else:
+        target = User.objects.select_related("person").get(pk=data["target_user_id"])
+    return capability, role, target
 
 
 class StaffEffectiveAccessView(APIView):
@@ -84,6 +180,203 @@ class StaffEffectiveAccessView(APIView):
         response = Response(EffectiveAccessSerializer(data).data)
         response["Cache-Control"] = "private, no-store"
         return response
+
+
+class GovernanceTargetDetailView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [OrdinaryGovernancePermission]
+
+    def get(self, request, user_id):
+        try:
+            target = User.objects.select_related("person").get(pk=user_id)
+        except User.DoesNotExist:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        if target.person.record_type != Person.RecordType.STAFF:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        assignments = StaffCapabilityAssignment.objects.filter(user=target).select_related("capability")
+        restrictions = StaffCapabilityRestriction.objects.filter(user=target).select_related("capability")
+        role_assignments = target.staff_role_assignments.select_related("role").order_by("role__code")
+        capability_state = {}
+        for capability in CapabilityDefinition.objects.filter(is_active=True).order_by("code"):
+            assignment = next((item for item in assignments if item.capability_id == capability.pk), None)
+            restriction = next((item for item in restrictions if item.capability_id == capability.pk and item.is_active), None)
+            actions = []
+            if assignment is None and restriction is None:
+                actions.append(CapabilityProposal.Operation.INDIVIDUAL_GRANT)
+            elif assignment is not None and assignment.state == StaffCapabilityAssignment.State.SUSPENDED and restriction is None:
+                actions.append(CapabilityProposal.Operation.INDIVIDUAL_RESTORE)
+            if assignment is not None and assignment.state == StaffCapabilityAssignment.State.ACTIVE:
+                actions.extend((CapabilityProposal.Operation.INDIVIDUAL_SUSPEND, CapabilityProposal.Operation.INDIVIDUAL_REVOKE))
+            if restriction is None:
+                actions.append(CapabilityProposal.Operation.INDIVIDUAL_RESTRICT)
+            else:
+                actions.append(CapabilityProposal.Operation.INDIVIDUAL_UNRESTRICT)
+            capability_state[capability.code] = {
+                "assignment_state": None if assignment is None else assignment.state,
+                "restriction_active": restriction is not None,
+                "permitted_actions": sorted(set(actions)),
+            }
+
+        return Response({
+            "target_user_id": target.pk,
+            "person_id": target.person_id,
+            "is_active": target.is_active,
+            "record_type": target.person.record_type,
+            "staff_roles": [
+                {"id": item.role_id, "code": item.role.code, "is_active": item.is_active and item.role.is_active}
+                for item in role_assignments
+            ],
+            "capabilities": capability_state,
+        })
+
+
+class GovernanceRoleDefaultsView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [OrdinaryGovernancePermission]
+
+    def get(self, request):
+        rows = RoleCapabilityDefault.objects.select_related("role", "capability").order_by("role__code", "capability__code")
+        return Response({
+            "policy_version": CapabilityPolicyState.objects.get(
+                singleton_key=1, key=CAPABILITY_POLICY_STATE_KEY
+            ).version,
+            "role_defaults": [
+                {
+                    "id": row.pk,
+                    "role_id": row.role_id,
+                    "role_code": row.role.code,
+                    "capability": row.capability.code,
+                    "is_enabled": row.is_enabled,
+                }
+                for row in rows
+            ],
+        })
+
+
+class GovernanceProposalCreateView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [OrdinaryGovernancePermission]
+
+    def post(self, request):
+        serializer = CapabilityGovernanceMutationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            capability, role, target = _governance_objects(serializer.validated_data)
+            proposal = create_capability_proposal(
+                actor_user=request.user,
+                operation=serializer.validated_data["operation"],
+                capability=capability,
+                reason=serializer.validated_data["reason"],
+                role=role,
+                target_user=target,
+                request=request,
+            )
+        except (DjangoValidationError, PermissionError, CapabilityDefinition.DoesNotExist, StaffRole.DoesNotExist, User.DoesNotExist) as error:
+            raise _governance_error(error)
+        return Response(_proposal_payload(proposal), status=status.HTTP_201_CREATED)
+
+
+class GovernanceIndividualChangeView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [OrdinaryGovernancePermission]
+
+    def post(self, request):
+        serializer = CapabilityGovernanceMutationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        if data["operation"] in CapabilityProposal.ROLE_DEFAULT_OPERATIONS:
+            raise serializers.ValidationError("Role-default changes must use the proposal workflow.")
+        try:
+            capability, _role, target = _governance_objects(data)
+            proposal = apply_individual_capability_change(
+                actor_user=request.user,
+                target_user=target,
+                capability=capability,
+                operation=data["operation"],
+                reason=data["reason"],
+                request=request,
+            )
+        except (DjangoValidationError, PermissionError, CapabilityDefinition.DoesNotExist, User.DoesNotExist) as error:
+            raise _governance_error(error)
+        return Response(_proposal_payload(proposal))
+
+
+class GovernanceProposalActionView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [OrdinaryGovernancePermission]
+
+    def post(self, request, proposal_id, action):
+        serializer = CapabilityProposalDecisionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            proposal = CapabilityProposal.objects.get(public_id=proposal_id)
+        except CapabilityProposal.DoesNotExist:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            if action == "approve":
+                result = approve_capability_proposal(proposal=proposal, actor_user=request.user, request=request)
+            elif action == "reject":
+                if not serializer.validated_data.get("reason"):
+                    raise serializers.ValidationError({"reason": "A rejection reason is required."})
+                result = reject_capability_proposal(proposal=proposal, actor_user=request.user, reason=serializer.validated_data["reason"], request=request)
+            elif action == "cancel":
+                if not serializer.validated_data.get("reason"):
+                    raise serializers.ValidationError({"reason": "A cancellation reason is required."})
+                result = cancel_capability_proposal(proposal=proposal, actor_user=request.user, reason=serializer.validated_data["reason"], request=request)
+            else:
+                return Response({"detail": "Unknown proposal action."}, status=status.HTTP_404_NOT_FOUND)
+        except (DjangoValidationError, PermissionError) as error:
+            raise _governance_error(error)
+        return Response(_proposal_payload(result))
+
+
+class GovernanceHistoryView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [OrdinaryGovernancePermission]
+
+    def get(self, request, history_type):
+        proposals = CapabilityProposal.objects.select_related("role", "target_user", "capability", "proposed_by").prefetch_related("decision")
+        if history_type == "individual":
+            proposals = proposals.filter(target_user__isnull=False)
+        elif history_type == "role-defaults":
+            proposals = proposals.filter(role__isnull=False)
+        elif history_type == "decisions":
+            proposals = proposals.filter(decision__isnull=False)
+        else:
+            return Response({"detail": "Unknown history type."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"results": [_proposal_payload(item) for item in proposals[:200]]})
+
+
+class GovernanceSuperuserActionView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [SuperuserGovernancePermission]
+
+    def post(self, request):
+        serializer = CapabilityGovernanceMutationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            capability, role, target = _governance_objects(data)
+            result = apply_superuser_capability_change(
+                actor_user=request.user,
+                capability=capability,
+                operation=data["operation"],
+                reason=data["reason"],
+                role=role,
+                target_user=target,
+                request=request,
+            )
+        except (DjangoValidationError, PermissionError, CapabilityDefinition.DoesNotExist, StaffRole.DoesNotExist, User.DoesNotExist) as error:
+            raise _governance_error(error)
+        return Response({
+            "status": "APPLIED",
+            "operation": data["operation"],
+            "capability": capability.code,
+            "role_id": None if role is None else role.pk,
+            "target_user_id": None if target is None else target.pk,
+            "state": result,
+        })
 
 
 def invitation_response(invitation):

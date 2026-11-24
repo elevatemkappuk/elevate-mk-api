@@ -396,6 +396,28 @@ complete new email address.
 | `GET` | `/api/docs/` | Swagger UI |
 | `GET` | `/api/redoc/` | ReDoc |
 
+### Staff governance API
+
+The Phase 1A.4C.2B governance routes are CRM-session-only and require an
+active, non-superuser effective `STAFF_CAPABILITY_ADMIN` capability, except
+for the dedicated superuser route. They return identifiers, role/capability
+state, proposal state and audit-safe metadata; they do not return Person
+contact or demographic fields.
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/staff/governance/targets/{user_id}/` | Safe target access detail and backend-permitted actions |
+| `GET` | `/api/v1/staff/governance/role-defaults/` | Role-default state and policy version |
+| `POST` | `/api/v1/staff/governance/proposals/` | Create a governed proposal |
+| `POST` | `/api/v1/staff/governance/individual-changes/` | Apply an ordinary single-admin individual mutation where permitted |
+| `POST` | `/api/v1/staff/governance/proposals/{proposal_id}/{approve\|reject\|cancel}/` | Resolve a proposal |
+| `GET` | `/api/v1/staff/governance/history/{individual\|role-defaults\|decisions}/` | Read governed history |
+| `POST` | `/api/v1/staff/governance/superuser-actions/` | Audited direct operation for an active Django superuser |
+
+Unsafe requests use the existing CRM Django session authentication and CSRF
+boundary. The superuser route derives authority from the authenticated server
+session; client-supplied flags cannot establish superuser authority.
+
 ## OpenAPI Documentation
 Current documentation endpoints:
 

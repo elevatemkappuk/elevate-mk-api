@@ -175,6 +175,26 @@ run remains limited by two pre-existing Admin audit assertions that do not
 exclude the migration-generated `CAPABILITY_CATALOG_EXTENDED` event; those
 assertions are not treated as remediation failures.
 
+### Phase 1A.4C.2B governance API
+
+Status: **Implemented / focused API validation verified; CRM consumption is
+planned for Phase 1A.4C.3.**
+
+The API exposes safe governance administration routes for target access detail,
+role-default state, proposal creation and resolution, individual mutations,
+governance history, and the dedicated audited Django-superuser operation path.
+Ordinary routes require an effective `STAFF_CAPABILITY_ADMIN` capability and
+remain subject to the existing eligibility, restriction, separation-of-duty,
+policy-version and transactional-audit rules. The superuser route requires an
+authenticated active Django superuser with CRM admission and invokes the
+existing direct-operation service; it does not accept client authority flags.
+
+The target projection contains identifiers, staff-role state, capability state
+and backend-permitted actions only. Person contact and demographic fields,
+exports, search projections and exceptional restricted-access workflows remain
+outside this stage. Focused API validation passed 6/6 tests; deployment,
+operational activation and CRM runtime consumption remain unverified.
+
 ## Security and privacy limitations
 
 The existing Django Admin path can still expose raw audit records to principals
