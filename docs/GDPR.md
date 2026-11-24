@@ -16,33 +16,15 @@ implementation status. It does not claim GDPR compliance through code alone.
 
 ## Phase 1A.1 capability foundation
 
-### Approved catalog and defaults
+Status: API foundation implemented; endpoint and field enforcement remain
+planned.
 
-The six capabilities are `PERSON_CONTACT_READ`, `PERSON_DEMOGRAPHIC_READ`,
-`PERSON_EXPORT`, `PERSON_RESTRICTED_ACCESS`, `PRIVACY_AUDIT_READ`, and
-`STAFF_CAPABILITY_ADMIN`.
-
-The initial defaults are `CRM_VIEWER: none`, `CRM_MANAGER:
-PERSON_CONTACT_READ`, and `CRM_ADMIN: PERSON_CONTACT_READ,
-PERSON_DEMOGRAPHIC_READ, PERSON_EXPORT, STAFF_CAPABILITY_ADMIN`.
-`PERSON_RESTRICTED_ACCESS` and `PRIVACY_AUDIT_READ` are not ordinary role
-defaults.
-
-### Evaluator and precedence
-
-The central backend evaluator in `staff_access.permissions`:
-
-1. denies unauthenticated and inactive users;
-2. requires an active operational staff role for ordinary capability grants;
-3. combines active role defaults and active individual assignments;
-4. excludes suspended and revoked assignments;
-5. subtracts active explicit restrictions; and
-6. preserves assignment and restriction history in the database.
-
-An active Django superuser receives the approved full privacy-capability
-bypass. The evaluator writes `PRIVACY_SUPERUSER_BYPASS` in the same transaction
-before returning the bypass result. Audit failure prevents the bypass result.
-This is not an operational CRM-role grant.
+The API repository remains authoritative for the capability catalog, role-default
+matrix, evaluator precedence, and reusable `HasCapability` permission contract;
+see [AUTHORIZATION.md](AUTHORIZATION.md). The authoritative capability schema,
+integrity constraints, indexes, and migration details are maintained in
+[DATABASE.md](DATABASE.md). This guide records the privacy governance boundary
+and implementation status without duplicating those contracts.
 
 ### Governance boundary
 
@@ -66,27 +48,40 @@ not performed.
 
 ## Compatibility boundaries
 
-Existing endpoint permission classes remain role-based. CRM, Mobile, and
-Community continue consuming their existing authentication and `staff_roles`
-contracts. No `/auth/me/` capability projection, frontend guard, Person field
-masking, search protection, campaign protection, or export enforcement was
-added.
+Status: **Unverified** for cross-repository runtime compatibility in this
+documentation update.
+
+Existing endpoint permission classes remain role-based. CRM and Mobile retain
+their existing authentication contracts, while Community uses its
+Community-specific session and projection contracts. No `/auth/me/` capability
+projection, frontend guard, Person field masking, search protection, campaign
+protection, or export enforcement was added. Runtime compatibility across the
+API, CRM, Mobile, and Community applications was not validated in this stage.
 
 ## Evidence and status
 
 - **Approved:** Phase 1A.1 catalog, default matrix, evaluator precedence,
   audited superuser exception, and deferred enforcement boundaries.
 - **Implemented:** API models, evaluator, reusable `HasCapability` permission,
-  audit action, migrations, and focused regression tests.
-- **Verified:** `manage.py check --fail-level ERROR`,
-  `manage.py makemigrations --check --dry-run`, Python compilation, and
-  `manage.py test staff_access.tests.CapabilityFoundationTests --keepdb
-  --verbosity 0`. The focused suite ran 9 tests and returned `OK`.
-- **Planned:** governance workflow, approval lifecycle, API exposure,
-  projections, masking, search/export enforcement, and CRM UI behavior.
-- **Unverified:** production migration safety, deployment behavior, live
-  database state, and independent specialist review completion where noted in
-  the Main Codex handoff.
+  audit action, and migrations.
+- **Verified — local migration and schema validation:** a backup was created
+  and verified locally before validation; the local PostgreSQL target was
+  `localhost:5432/elevate`; migration state reported no pending operations;
+  exactly six capabilities and the approved defaults were present; four
+  capability tables, four explicit indexes, and three named constraints were
+  present; `manage.py check --fail-level ERROR` passed; and
+  `manage.py makemigrations --check --dry-run` reported no changes.
+- **Test-executed / Verified locally:**
+  `CapabilityFoundationTests` ran 13 tests in 34.658 seconds and returned
+  `OK` against the local PostgreSQL test database; the local test database was
+  preserved.
+- **Planned / Deferred:** governance workflow, approval lifecycle, API
+  exposure, projections, masking, search/export enforcement, CRM UI behavior,
+  and Phase 1A.2 remain deferred.
+- **Unverified:** production and staging migration safety, deployment
+  behavior, live deployment state, cross-repository compatibility, and
+  independent specialist review completion where noted in the Main Codex
+  handoff.
 
 ## Security and privacy limitations
 
@@ -94,3 +89,5 @@ The existing Django Admin path can still expose raw audit records to principals
 with technical audit permissions, and existing superusers can administer
 operational staff roles through the pre-existing Staff Admin path. These are
 separate security findings and are not silently changed by Phase 1A.1.
+AUTH-001 and AUTH-002 remain open and are not resolved by this local validation
+or documentation update.

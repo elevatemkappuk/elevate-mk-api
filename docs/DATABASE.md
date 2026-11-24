@@ -51,7 +51,9 @@ not change existing API endpoint authorization.
   their descriptions. References to definitions use `PROTECT`, and definitions
   may be deactivated without deleting historical references.
 - `RoleCapabilityDefault` maps a role to an enabled or disabled capability.
-  `(role, capability)` is unique and indexed for role evaluation.
+  The `(role, capability)` pair is unique through
+  `staff_role_capability_default_unique`; the explicit role-evaluation index is
+  `(role, is_enabled)`.
 - `StaffCapabilityAssignment` stores individual capability grant history. Its
   states are `ACTIVE`, `SUSPENDED`, and `REVOKED`. Only one active or suspended
   current assignment is permitted for a `(user, capability)` pair; revoked
@@ -67,7 +69,7 @@ not change existing API endpoint authorization.
 
 `RoleCapabilityDefault` contains `role` and `capability` foreign keys using
 `PROTECT`, `is_enabled`, and creation/update timestamps. The `(role,
-capability)` pair is unique and indexed with `is_enabled`.
+capability)` pair is unique through `staff_role_capability_default_unique`.
 
 `StaffCapabilityAssignment` contains `user` and `capability` foreign keys
 using `PROTECT`, `state`, grant timestamp/actor, suspension timestamp/actor,
@@ -79,6 +81,23 @@ capability)` pair. Revoked rows remain historical records.
 using `PROTECT`, active state, restriction/removal timestamps and actors, and
 creation/update timestamps. Actor references use `SET_NULL`. Only one active,
 non-removed restriction may exist for a `(user, capability)` pair.
+
+### Implemented capability indexes
+
+The Phase 1A.1 migration implements these explicit capability indexes:
+
+| Model | Index name | Indexed fields | Purpose |
+| --- | --- | --- | --- |
+| `RoleCapabilityDefault` | `staff_role_cap_default_idx` | `(role, is_enabled)` | Role-default evaluation lookup |
+| `StaffCapabilityAssignment` | `staff_cap_assignment_idx` | `(user, capability, state)` | User/capability assignment-state lookup |
+| `StaffCapabilityAssignment` | `staff_cap_state_cap_idx` | `(state, capability)` | Assignment-state and capability lookup |
+| `StaffCapabilityRestriction` | `staff_cap_restriction_idx` | `(user, capability, is_active)` | User/capability restriction-state lookup |
+
+Capability integrity also includes the unique `CapabilityDefinition.code`
+field, `staff_role_capability_default_unique`, the conditional
+`staff_capability_one_current_assignment` constraint, and the conditional
+`staff_capability_one_active_restriction` constraint. These are documented as
+constraints rather than additional explicit `Meta.indexes`.
 
 The schema is introduced by `staff_access.0006_capability_foundation`, which
 depends on `staff_access.0005_staff_email_delivery`. Its seed reverse
@@ -96,11 +115,36 @@ The audit action `PRIVACY_SUPERUSER_BYPASS` is added by
 `audit.0020_alter_auditevent_action`. The audit migration preserves the
 existing action choices and appends the new action.
 
-Validation evidence: `manage.py check --fail-level ERROR`,
-`manage.py makemigrations --check --dry-run`, Python compilation, and
-`manage.py test staff_access.tests.CapabilityFoundationTests --keepdb
---verbosity 0` completed locally. The focused suite ran 9 tests and returned
-`OK`. No production migration was executed.
+### Local validation evidence
+
+Target: local PostgreSQL at `localhost:5432`, database `elevate`. No
+credentials or personal data are recorded here.
+
+- **Source-inspected:** capability models and migration definitions were
+  inspected in `staff_access/models.py` and
+  `staff_access/migrations/0006_capability_foundation.py`.
+- **Backup-verified:** a local database backup was created and verified
+  locally before validation. The backup artifact is not retained in this
+  documentation.
+- **Migration-validated:** `manage.py migrate` successfully applied these nine
+  authorized migrations in dependency order: `accounts.0002`, `audit.0018`,
+  `audit.0019`, `audit.0020`, `staff_access.0003`, `staff_access.0004`,
+  `notifications.0004`, `staff_access.0005`, and `staff_access.0006`. Then
+  `manage.py migrate --plan` reported no planned migration operations;
+  `showmigrations` marked the inspected `audit` and `staff_access` migration
+  chains as applied.
+- **Data-validated:** the database contained exactly six capability
+  definitions, the approved role-default matrix, all four capability tables,
+  the four expected explicit capability indexes, and the three expected
+  named capability constraints.
+- **Verified:** `manage.py check --fail-level ERROR` passed, and
+  `manage.py makemigrations --check --dry-run` reported `No changes detected`.
+- **Test-executed / Verified locally:**
+  `staff_access.tests.CapabilityFoundationTests --keepdb` ran 13 tests in
+  34.658 seconds and returned `OK` against the local PostgreSQL test database;
+  the local test database was preserved.
+- **Deployment-unverified:** production, staging, deployment behavior, and
+  live migration safety remain unverified.
 
 ## Historical Import Staging
 

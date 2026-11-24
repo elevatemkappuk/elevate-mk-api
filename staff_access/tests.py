@@ -4,7 +4,7 @@ from django.contrib.admin.sites import AdminSite
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.messages.storage.fallback import FallbackStorage
 from django.core.exceptions import ValidationError
-from django.db import close_old_connections, connection
+from django.db import close_old_connections, connection, transaction
 from django.db import IntegrityError
 from django.http import HttpRequest
 from django.test import RequestFactory, TransactionTestCase
@@ -164,6 +164,91 @@ class CapabilityFoundationTests(TestCase):
         StaffCapabilityAssignment.objects.create(user=non_staff, capability=capability, granted_by=self.actor)
 
         self.assertFalse(user_has_capability(non_staff, CapabilityDefinition.PERSON_CONTACT_READ))
+
+    def test_active_restriction_overrides_active_individual_grant(self):
+        capability_code = CapabilityDefinition.PERSON_CONTACT_READ
+        capability = CapabilityDefinition.objects.get(code=capability_code)
+        StaffCapabilityAssignment.objects.create(
+            user=self.viewer,
+            capability=capability,
+            state=StaffCapabilityAssignment.State.ACTIVE,
+            granted_by=self.actor,
+        )
+
+        self.assertTrue(user_has_capability(self.viewer, capability_code))
+
+        StaffCapabilityRestriction.objects.create(
+            user=self.viewer,
+            capability=capability,
+            restricted_by=self.actor,
+        )
+
+        self.assertFalse(user_has_capability(self.viewer, capability_code))
+
+    def test_active_restriction_overrides_active_role_default(self):
+        capability_code = CapabilityDefinition.PERSON_CONTACT_READ
+        capability = CapabilityDefinition.objects.get(code=capability_code)
+
+        self.assertTrue(user_has_capability(self.manager, capability_code))
+        self.assertTrue(
+            RoleCapabilityDefault.objects.filter(
+                role__code=StaffRole.CRM_MANAGER,
+                capability=capability,
+                is_enabled=True,
+            ).exists()
+        )
+
+        StaffCapabilityRestriction.objects.create(
+            user=self.manager,
+            capability=capability,
+            restricted_by=self.actor,
+        )
+
+        self.assertFalse(user_has_capability(self.manager, capability_code))
+
+    def test_current_assignment_pair_is_database_unique(self):
+        capability = CapabilityDefinition.objects.get(code=CapabilityDefinition.PERSON_RESTRICTED_ACCESS)
+        StaffCapabilityAssignment.objects.create(
+            user=self.viewer,
+            capability=capability,
+            state=StaffCapabilityAssignment.State.ACTIVE,
+            granted_by=self.actor,
+        )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                StaffCapabilityAssignment.objects.create(
+                    user=self.viewer,
+                    capability=capability,
+                    state=StaffCapabilityAssignment.State.SUSPENDED,
+                    granted_by=self.actor,
+                )
+
+        self.assertEqual(
+            StaffCapabilityAssignment.objects.filter(user=self.viewer, capability=capability).count(),
+            1,
+        )
+
+    def test_active_restriction_pair_is_database_unique(self):
+        capability = CapabilityDefinition.objects.get(code=CapabilityDefinition.PERSON_RESTRICTED_ACCESS)
+        StaffCapabilityRestriction.objects.create(
+            user=self.viewer,
+            capability=capability,
+            restricted_by=self.actor,
+        )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                StaffCapabilityRestriction.objects.create(
+                    user=self.viewer,
+                    capability=capability,
+                    restricted_by=self.actor,
+                )
+
+        self.assertEqual(
+            StaffCapabilityRestriction.objects.filter(user=self.viewer, capability=capability).count(),
+            1,
+        )
 
     def test_active_restriction_overrides_role_default_without_reactivating_grant(self):
         contact = CapabilityDefinition.objects.get(code=CapabilityDefinition.PERSON_CONTACT_READ)
