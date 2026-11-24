@@ -910,7 +910,9 @@ class PersonAuditHistoryView(BusinessPersonQuerysetMixin, generics.GenericAPIVie
         return self.get_paginated_response(serializer.data)
 
     def get_queryset_for_person(self, person_id):
-        queryset = AuditEvent.objects.select_related("actor_user").filter(build_person_audit_scope_q(person_id))
+        queryset = AuditEvent.objects.select_related("actor_user").operational().filter(
+            build_person_audit_scope_q(person_id)
+        )
         queryset = filter_person_audit_visibility_for_user(queryset, self.request.user)
         return queryset.order_by("-occurred_at", "-id")
 

@@ -2,6 +2,10 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
+import uuid
+
+
+AUDIT_CONTRACT_VERSION = 1
 
 
 class AuditEventImmutableError(ValidationError):
@@ -9,6 +13,12 @@ class AuditEventImmutableError(ValidationError):
 
 
 class AuditEventQuerySet(models.QuerySet):
+    def operational(self):
+        return self.filter(audit_domain=AuditEvent.Domain.OPERATIONAL)
+
+    def privacy(self):
+        return self.filter(audit_domain=AuditEvent.Domain.PRIVACY)
+
     def update(self, **kwargs):
         raise AuditEventImmutableError("AuditEvent records are append-only and cannot be updated.")
 
@@ -20,7 +30,55 @@ class AuditEventManager(models.Manager.from_queryset(AuditEventQuerySet)):
     pass
 
 
+class AuditEventSubject(models.Model):
+    class SubjectType(models.TextChoices):
+        PERSON = "PERSON", "Person"
+
+    event = models.ForeignKey("audit.AuditEvent", on_delete=models.PROTECT, related_name="subjects")
+    subject_type = models.CharField(max_length=20, choices=SubjectType.choices, default=SubjectType.PERSON)
+    person = models.ForeignKey(
+        "people.Person",
+        on_delete=models.PROTECT,
+        related_name="audit_subjects",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["subject_type", "person_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["event", "subject_type", "person"],
+                name="audit_event_subject_unique",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["subject_type", "person", "event"], name="audit_subject_person_event_idx"),
+            models.Index(fields=["event", "person"], name="audit_subject_event_person_idx"),
+        ]
+
+    def clean(self):
+        if self.subject_type != self.SubjectType.PERSON or not self.person_id or not self.event_id:
+            raise ValidationError("Only normalized Person audit subjects are supported.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+
 class AuditEvent(models.Model):
+    CURRENT_CONTRACT_VERSION = AUDIT_CONTRACT_VERSION
+
+    class Domain(models.TextChoices):
+        OPERATIONAL = "OPERATIONAL", "Operational"
+        PRIVACY = "PRIVACY", "Privacy"
+
+    class ProvenanceSource(models.TextChoices):
+        LEGACY = "LEGACY", "Legacy event"
+        HTTP_REQUEST = "HTTP_REQUEST", "HTTP request"
+        BACKGROUND_JOB = "BACKGROUND_JOB", "Background job"
+        SYSTEM = "SYSTEM", "System operation"
+        MIGRATION = "MIGRATION", "Migration"
+
     class Action(models.TextChoices):
         LOGIN_SUCCEEDED = "LOGIN_SUCCEEDED", "Login succeeded"
         LOGIN_FAILED = "LOGIN_FAILED", "Login failed"
@@ -108,6 +166,11 @@ class AuditEvent(models.Model):
         CAPABILITY_EMERGENCY_SUSPENDED = "CAPABILITY_EMERGENCY_SUSPENDED", "Capability emergency suspension"
         CAPABILITY_RECOVERY_APPROVED = "CAPABILITY_RECOVERY_APPROVED", "Capability controlled recovery approved"
         CAPABILITY_POLICY_BASELINED = "CAPABILITY_POLICY_BASELINED", "Capability policy baseline captured"
+        CAPABILITY_CATALOG_EXTENDED = "CAPABILITY_CATALOG_EXTENDED", "Capability catalogue extended"
+        RETENTION_POLICY_VERSION_CREATED = "RETENTION_POLICY_VERSION_CREATED", "Retention policy version created"
+        LEGAL_HOLD_PLACED = "LEGAL_HOLD_PLACED", "Legal hold placed"
+        LEGAL_HOLD_RELEASE_REQUESTED = "LEGAL_HOLD_RELEASE_REQUESTED", "Legal hold release requested"
+        LEGAL_HOLD_RELEASED = "LEGAL_HOLD_RELEASED", "Legal hold released"
 
     actor_user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -123,6 +186,23 @@ class AuditEvent(models.Model):
     metadata = models.JSONField(default=dict, blank=True)
     request_id = models.CharField(max_length=255, null=True, blank=True)
     ip_address = models.GenericIPAddressField(null=True, blank=True)
+    audit_domain = models.CharField(
+        max_length=20,
+        choices=Domain.choices,
+        default=Domain.OPERATIONAL,
+        db_index=True,
+    )
+    contract_version = models.PositiveSmallIntegerField(default=AUDIT_CONTRACT_VERSION, db_index=True)
+    provenance_source = models.CharField(
+        max_length=32,
+        choices=ProvenanceSource.choices,
+        default=ProvenanceSource.LEGACY,
+        db_index=True,
+    )
+    provenance_id = models.CharField(max_length=64, null=True, blank=True, editable=False)
+    provenance_trusted = models.BooleanField(default=False, editable=False)
+    retention_class = models.CharField(max_length=40, null=True, blank=True, db_index=True)
+    retention_policy_version = models.PositiveBigIntegerField(null=True, blank=True, db_index=True)
     occurred_at = models.DateTimeField(default=timezone.now, db_index=True)
 
     objects = AuditEventManager()
@@ -131,6 +211,8 @@ class AuditEvent(models.Model):
         ordering = ["-occurred_at", "-id"]
         indexes = [
             models.Index(fields=["entity_type", "entity_id"], name="audit_event_entity_idx"),
+            models.Index(fields=["audit_domain", "occurred_at"], name="audit_event_domain_time_idx"),
+            models.Index(fields=["retention_class", "retention_policy_version", "occurred_at"], name="audit_event_retention_idx"),
         ]
 
     def clean(self):
@@ -144,6 +226,12 @@ class AuditEvent(models.Model):
             errors["changes"] = ["Changes must not be null."]
         if self.metadata is None:
             errors["metadata"] = ["Metadata must not be null."]
+        if self.audit_domain not in self.Domain.values:
+            errors["audit_domain"] = ["Unsupported audit domain."]
+        if self.provenance_source not in self.ProvenanceSource.values:
+            errors["provenance_source"] = ["Unsupported provenance source."]
+        if self.contract_version < 1:
+            errors["contract_version"] = ["Contract version must be positive."]
 
         if errors:
             raise ValidationError(errors)
@@ -160,3 +248,222 @@ class AuditEvent(models.Model):
 
     def __str__(self):
         return f"{self.action} {self.entity_type} {self.entity_id or '-'}"
+
+
+class ImmutableRetentionQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError("Retention and legal-hold history is managed by services.")
+
+    def delete(self):
+        raise ValidationError("Retention and legal-hold history is append-only.")
+
+
+class RetentionPolicyState(models.Model):
+    singleton_key = models.PositiveSmallIntegerField(default=1, unique=True, editable=False)
+    version = models.PositiveBigIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="retention_policy_state_updates",
+    )
+    reason = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["singleton_key"]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(singleton_key=1),
+                name="audit_retention_state_singleton_key",
+            ),
+        ]
+
+
+class RetentionPolicyVersion(models.Model):
+    audit_domain = models.CharField(max_length=20, choices=AuditEvent.Domain.choices)
+    retention_class = models.CharField(max_length=40)
+    version = models.PositiveBigIntegerField()
+    retention_days = models.PositiveIntegerField(null=True, blank=True)
+    effective_at = models.DateTimeField()
+    reason = models.TextField()
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="retention_policy_versions_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = ImmutableRetentionQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["-version"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["audit_domain", "retention_class", "version"],
+                name="audit_retention_domain_version_unique",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(retention_days__isnull=True) | models.Q(retention_days__gt=0),
+                name="audit_retention_days_positive_or_null",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["audit_domain", "retention_class", "effective_at"],
+                name="audit_ret_domain_time_idx",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise ValidationError("Retention policy versions are immutable.")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Retention policy versions are immutable.")
+
+
+class LegalHold(models.Model):
+    class Scope(models.TextChoices):
+        EVENT = "EVENT", "Audit event"
+        PERSON = "PERSON", "Person"
+
+    class Status(models.TextChoices):
+        ACTIVE = "ACTIVE", "Active"
+        RELEASED = "RELEASED", "Released"
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    scope = models.CharField(max_length=20, choices=Scope.choices)
+    person = models.ForeignKey(
+        "people.Person",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="legal_holds",
+    )
+    audit_event = models.ForeignKey(
+        AuditEvent,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="legal_holds",
+    )
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
+    reason = models.TextField()
+    placed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="legal_holds_placed",
+    )
+    placed_at = models.DateTimeField(default=timezone.now)
+    released_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="legal_holds_released",
+    )
+    released_at = models.DateTimeField(null=True, blank=True)
+    release_reason = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = ImmutableRetentionQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["-placed_at", "-id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(scope="PERSON", person__isnull=False, audit_event__isnull=True)
+                    | models.Q(scope="EVENT", person__isnull=True, audit_event__isnull=False)
+                ),
+                name="audit_legal_hold_one_target",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["person", "status"], name="audit_legal_hold_person_idx"),
+            models.Index(fields=["audit_event", "status"], name="audit_legal_hold_event_idx"),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            previous = type(self).objects.get(pk=self.pk)
+            immutable_fields = (
+                "public_id", "scope", "person_id", "audit_event_id", "reason", "placed_by_id", "placed_at", "created_at"
+            )
+            changed = [field for field in immutable_fields if getattr(previous, field) != getattr(self, field)]
+            if changed:
+                raise ValidationError("Legal hold fields are immutable: " + ", ".join(changed))
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Legal holds are retained as history and cannot be deleted.")
+
+
+class LegalHoldReleaseRequest(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        APPROVED = "APPROVED", "Approved"
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    legal_hold = models.ForeignKey(
+        LegalHold,
+        on_delete=models.PROTECT,
+        related_name="release_requests",
+    )
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    reason = models.TextField()
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="legal_hold_release_requests",
+    )
+    requested_at = models.DateTimeField(default=timezone.now)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="legal_hold_release_approvals",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    approval_reason = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = ImmutableRetentionQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["-requested_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["legal_hold"],
+                condition=models.Q(status="PENDING"),
+                name="audit_one_pending_hold_release",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["legal_hold", "status"], name="audit_hold_release_status_idx"),
+        ]
+
+    IMMUTABLE_FIELDS = (
+        "public_id",
+        "legal_hold_id",
+        "reason",
+        "requested_by_id",
+        "requested_at",
+        "created_at",
+    )
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            previous = type(self).objects.get(pk=self.pk)
+            changed = [field for field in self.IMMUTABLE_FIELDS if getattr(previous, field) != getattr(self, field)]
+            if changed:
+                raise ValidationError("Legal hold release fields are immutable: " + ", ".join(changed))
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Legal hold release history cannot be deleted.")

@@ -132,7 +132,10 @@ class AuditEventModelTests(TestCase):
             entity_type="Authentication",
         )
 
-        self.assertEqual(AuditEvent.objects.count(), 1)
+        self.assertEqual(
+            AuditEvent.objects.filter(action=AuditEvent.Action.LOGIN_FAILED).count(),
+            1,
+        )
 
 
 class AuditEventAdminTests(TestCase):
@@ -182,7 +185,7 @@ class AuthenticationAuditIntegrationTests(TestCase):
             format="json",
         )
 
-        event = AuditEvent.objects.get()
+        event = AuditEvent.objects.get(action=AuditEvent.Action.LOGIN_SUCCEEDED)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(event.action, AuditEvent.Action.LOGIN_SUCCEEDED)
         self.assertEqual(event.actor_user, self.user)
@@ -198,7 +201,7 @@ class AuthenticationAuditIntegrationTests(TestCase):
             format="json",
         )
 
-        event = AuditEvent.objects.get()
+        event = AuditEvent.objects.get(action=AuditEvent.Action.LOGIN_FAILED)
         self.assertEqual(response.status_code, 400)
         self.assertEqual(event.action, AuditEvent.Action.LOGIN_FAILED)
         self.assertIsNone(event.actor_user)
@@ -212,7 +215,7 @@ class AuthenticationAuditIntegrationTests(TestCase):
             format="json",
         )
 
-        event = AuditEvent.objects.get()
+        event = AuditEvent.objects.get(action=AuditEvent.Action.LOGIN_FAILED)
         self.assertEqual(response.status_code, 400)
         self.assertEqual(event.action, AuditEvent.Action.LOGIN_FAILED)
         self.assertIsNone(event.actor_user)
@@ -223,7 +226,10 @@ class AuthenticationAuditIntegrationTests(TestCase):
         response = self.client.post(self.login_url, {"email": "member@example.com"}, format="json")
 
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(AuditEvent.objects.count(), 0)
+        self.assertEqual(
+            AuditEvent.objects.filter(action=AuditEvent.Action.LOGIN_FAILED).count(),
+            0,
+        )
 
     def test_authenticated_logout_creates_exactly_one_logout_event(self):
         self.client.post(
@@ -257,7 +263,10 @@ class AuthenticationAuditIntegrationTests(TestCase):
         response = self.client.get(self.csrf_url)
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(AuditEvent.objects.count(), 0)
+        self.assertEqual(
+            AuditEvent.objects.exclude(action=AuditEvent.Action.CAPABILITY_POLICY_BASELINED).count(),
+            0,
+        )
 
 
 @override_settings(ROOT_URLCONF="config.urls")
@@ -560,7 +569,10 @@ class PersonAuditHistoryApiTests(TestCase):
         result = response.data["results"][0]
         self.assertEqual(result["id"], event.id)
         self.assertEqual(result["description"], "Internal note updated")
-        self.assertEqual(result["actor"], {"id": self.admin_user.id, "email": self.admin_user.email})
+        self.assertEqual(
+            result["actor"],
+            {"id": self.admin_user.id, "email": self.admin_user.email, "contact_restricted": False},
+        )
         self.assertEqual(result["entity_type"], "InternalNote")
         self.assertEqual(result["changes"], {})
         self.assertNotIn("metadata", result)

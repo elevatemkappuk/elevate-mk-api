@@ -160,7 +160,7 @@ services are source-inspected, with focused PostgreSQL migration and runtime
 validation verified in isolation. Endpoint activation and field enforcement
 remain unverified or deferred.
 
-The six canonical capability codes are:
+The original Phase 1A.2 baseline contained six capability codes:
 
 - `PERSON_CONTACT_READ`
 - `PERSON_DEMOGRAPHIC_READ`
@@ -168,6 +168,13 @@ The six canonical capability codes are:
 - `PERSON_RESTRICTED_ACCESS`
 - `PRIVACY_AUDIT_READ`
 - `STAFF_CAPABILITY_ADMIN`
+
+The current Phase 1A.3 catalogue contains those six baseline capabilities plus
+`LEGAL_HOLD_ADMIN`. Migration `staff_access.0008_legal_hold_admin` advances the
+existing policy version and records one audited `CAPABILITY_CATALOG_EXTENDED`
+event with explicit migration provenance. It does not alter the original
+`CAPABILITY_POLICY_BASELINED` event, role defaults, assignments, restrictions,
+or historical records, and it does not grant `LEGAL_HOLD_ADMIN` by default.
 
 The approved initial role-default matrix is:
 
@@ -319,3 +326,21 @@ The implemented anonymous Community join endpoint is an explicit public
 submission boundary, not a CRM authorization exception. It uses its own DTO,
 service, response projection, CSRF protection, and anonymous throttle. It does not
 grant access to People, Membership, ProfessionalProfile, audit, or other CRM APIs.
+
+## Phase 1A.3 privacy-audit authorization
+
+Implemented and locally verified in isolated PostgreSQL validation.
+`PRIVACY_AUDIT_READ` gates privacy-audit projections and
+`LEGAL_HOLD_ADMIN` governs retention-policy, legal-hold, and dry-run
+operations. Raw `AuditEvent` Django Admin visibility is restricted to active
+Django superusers and remains read-only. The approved full superuser privacy
+authority remains audited and transactional. No public governance endpoint,
+CRM permission screen, or writable governance Admin surface is introduced.
+The non-destructive retention evaluator also requires an active authorized
+`LEGAL_HOLD_ADMIN` actor; unresolved privacy subjects fail closed from
+eligibility.
+
+Current targeted evidence: the isolated PostgreSQL focused authorization and
+privacy regression set passed 69/69, including the 9/9 remediation subset.
+This verifies the local implementation only; operational activation and
+cross-repository runtime behavior remain unverified.

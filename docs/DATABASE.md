@@ -51,8 +51,10 @@ not change existing API endpoint authorization.
 
 ### Capability tables
 
-- `CapabilityDefinition` stores the six canonical capability identifiers and
-  their descriptions. References to definitions use `PROTECT`, and definitions
+- `CapabilityDefinition` stores the seven current capability identifiers and
+  their descriptions. The original six-capability Phase 1A.2 catalogue remains
+  represented by its historical baseline event; the Phase 1A.3 extension is
+  separately audited. References to definitions use `PROTECT`, and definitions
   may be deactivated without deleting historical references.
 - `RoleCapabilityDefault` maps a role to an enabled or disabled capability.
   The `(role, capability)` pair is unique through
@@ -118,6 +120,25 @@ approved governance workflow and mandatory audit handling are implemented.
 The audit action `PRIVACY_SUPERUSER_BYPASS` is added by
 `audit.0020_alter_auditevent_action`. The audit migration preserves the
 existing action choices and appends the new action.
+
+Phase 1A.3 extends the catalogue through
+`staff_access.0008_legal_hold_admin`, which depends on both
+`staff_access.0007_capability_governance` and
+`audit.0022_auditeventsubject_legalhold_legalholdreleaserequest_and_more`.
+The audit migration creates normalized subjects and legal-hold structures;
+its subject backfill verifies Person existence in batches, skips missing,
+malformed, dangling, or ambiguous references, and logs only aggregate
+unresolved counts. The staff migration atomically creates or confirms
+`LEGAL_HOLD_ADMIN`, advances `CapabilityPolicyState.version`, and records one
+`CAPABILITY_CATALOG_EXTENDED` event with `MIGRATION` provenance. It preserves
+the original six-capability baseline, existing defaults, assignments,
+restrictions, and history; it creates no role default for the new capability.
+
+`AuditEventSubject` is a normalized, protected Person association. Valid
+historical references are backfilled; unresolved references remain on the
+original event without an invented Person and are excluded from retention
+eligibility. The backfill is transactional with the migration and does not
+access external services or write personal data to logs.
 
 ### Capability governance persistence
 
@@ -215,10 +236,11 @@ production, staging, deployment or cross-repository runtime behavior.
 - **Migration-validated:** isolated PostgreSQL test database creation applied
   the complete migration graph, including `audit.0021` and
   `staff_access.0007`, without unexpected operations or migration errors.
-- **Data-validated:** the database contained exactly six capability
-  definitions, the approved role-default matrix, the four foundation capability
-  tables and three governance tables, the four expected explicit foundation
-  capability indexes, and the three expected named foundation constraints.
+- **Historical Phase 1A.2 data validation:** the isolated foundation database
+  contained exactly six baseline capability definitions and the approved
+  role-default matrix. The current Phase 1A.3 catalogue contains seven
+  definitions; its extension and policy-version audit evidence are verified by
+  the current focused migration tests.
 - **Verified:** `manage.py check --fail-level ERROR` passed, and
   `manage.py makemigrations --check --dry-run` reported `No changes detected`.
 - **Test-executed / Verified locally:**
@@ -1542,3 +1564,28 @@ Purpose:
 - the same external ID can coexist across providers; an Eventbrite ID and a Community ID are not treated as the same source identity
 - indexes support lookup by Event/reference type and Participation/reference type
 - future Eventbrite and Community adapters attach their source IDs here, leaving Event and EventParticipation provider-neutral
+
+## Phase 1A.3 audit, retention and legal-hold schema
+
+Implemented and locally verified for the Phase 1A.3 migration chain.
+`AuditEvent` carries immutable contract,
+provenance, audit-domain, retention-class, and retention-policy-version
+fields. `AuditEventSubject` normalizes zero-or-more Person associations per
+event with a unique `(event, subject_type, person)` constraint and indexed
+Person/event lookups. The migration performs only conservative legacy
+association backfill from unambiguous Person identifiers; unresolved events
+remain unassociated for later review.
+
+`RetentionPolicyState` provides monotonic policy versions and
+`RetentionPolicyVersion` is immutable and unique per domain, retention class,
+and version. The evaluator requires an authorized `LEGAL_HOLD_ADMIN` actor
+and treats unresolved privacy subjects as non-eligible.
+`LegalHold` supports event and Person targets, overlap, and retained release
+history. `LegalHoldReleaseRequest` permits one pending request per hold.
+Named constraints and indexes are defined in
+`audit/migrations/0022_auditeventsubject_legalhold_legalholdreleaserequest_and_more.py`.
+No disposal or operational-database migration is enabled by this stage.
+
+Current targeted evidence: isolated PostgreSQL migration and schema checks
+passed, the remediation subset passed 9/9, and the broader authorized focused
+set passed 69/69. The configured operational database was not migrated.

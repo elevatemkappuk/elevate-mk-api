@@ -475,3 +475,12 @@ Planned, not yet implemented:
 - Elevate operational authorization based on `StaffRole` and `StaffRoleAssignment`
 
 Those models, permissions, and enforcement rules are not currently implemented.
+
+## Phase 1A.3 audit provenance
+
+Implemented and locally verified in the isolated Phase 1A.3 tests. HTTP audit
+provenance is generated server-side by the audit
+middleware; caller-supplied request identifiers and IP values cannot replace
+the trusted request context. Background, system, migration, and legacy events
+retain explicit provenance classifications. This does not change login,
+session, JWT, credential, or authentication-revocation contracts.

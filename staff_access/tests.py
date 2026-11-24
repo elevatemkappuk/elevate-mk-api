@@ -778,7 +778,10 @@ class StaffAdminTests(TestCase):
 
         self.assertEqual(StaffRoleAssignment.objects.filter(user=self.target_user, role=self.crm_admin_role).count(), 1)
         self.assertEqual(duplicate_attempt.pk, existing.pk)
-        self.assertEqual(AuditEvent.objects.count(), 0)
+        self.assertEqual(
+            AuditEvent.objects.exclude(action=AuditEvent.Action.CAPABILITY_POLICY_BASELINED).count(),
+            0,
+        )
 
     def test_staff_role_assignment_admin_grant_rolls_back_when_audit_write_fails(self):
         request = self.build_request()
@@ -791,7 +794,10 @@ class StaffAdminTests(TestCase):
         self.assertFalse(
             StaffRoleAssignment.objects.filter(user=self.target_user, role=self.crm_admin_role).exists()
         )
-        self.assertEqual(AuditEvent.objects.count(), 0)
+        self.assertEqual(
+            AuditEvent.objects.exclude(action=AuditEvent.Action.CAPABILITY_POLICY_BASELINED).count(),
+            0,
+        )
 
     def test_staff_role_assignment_admin_reactivation_rolls_back_when_audit_write_fails(self):
         request = self.build_request()

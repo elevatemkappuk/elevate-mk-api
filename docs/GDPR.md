@@ -1,9 +1,8 @@
 # Elevate MK GDPR — Backend Technical Architecture and Implementation Guide
 
-Status: Living Documentation. Capability foundation and governance models,
-services, migrations and focused tests are implemented. Governance migration,
-baseline capture and focused PostgreSQL validation are runtime-verified in an
-isolated test database. Public activation, production/staging behavior and
+Status: Living Documentation. Capability foundation, governance models,
+privacy-audit models, migrations, services and focused tests are implemented
+and locally verified. Public activation, production/staging behavior and
 deployment remain unverified.
 
 ## Scope and authority
@@ -102,7 +101,8 @@ API, CRM, Mobile, and Community applications was not validated in this stage.
 - **Verified — local migration and schema validation for the foundation:** a backup was created
   and verified locally before validation; the local PostgreSQL target was
   `localhost:5432/elevate`; migration state reported no pending operations;
-  exactly six capabilities and the approved defaults were present; four
+  the historical six-capability Phase 1A.2 baseline and approved defaults were
+  present; the current Phase 1A.3 catalogue contains seven capabilities; four
   capability tables, four explicit indexes, and three named constraints were
   present; `manage.py check --fail-level ERROR` passed; and
   `manage.py makemigrations --check --dry-run` reported no changes.
@@ -194,3 +194,67 @@ the documentation quality gate therefore remain unverified.
 in the shared role-to-assignment-to-user order and invalidates pending
 role-default proposals when their role becomes inactive. These changes were
 implemented but runtime-unverified until the final focused rerun.
+
+## Phase 1A.3 privacy-audit foundation
+
+Status: **Implemented and locally verified.** This stage adds
+the versioned audit contract, trusted request provenance, separate operational
+and privacy audit domains, normalized `AuditEventSubject` Person associations,
+the `LEGAL_HOLD_ADMIN` capability, versioned retention-policy records, and
+event- and Person-scoped legal holds. It does not expose new public governance
+endpoints, enable writable Django Admin governance, or dispose of records.
+
+`PRIVACY_AUDIT_READ` gates privacy-audit projections. Raw `AuditEvent` Admin
+visibility is active-superuser-only. Privacy payloads reject sensitive values,
+and audit writes remain transactional with the protected operation. The
+retention evaluator requires an authorized `LEGAL_HOLD_ADMIN`, is
+non-destructive, and uses an explicit evaluation
+timestamp; it reports eligible, held, unclassified, unresolved-subject, and
+excluded events without deleting data.
+
+The initial 24-month retention period remains provisional and requires formal
+legal/privacy approval. Retention policy versions are immutable and use audit
+event creation time as the retention reference. Ordinary hold release requires
+a distinct approver through the dedicated `LegalHoldReleaseRequest` workflow;
+the approved active-superuser authority remains available. This dedicated
+model keeps hold-release invariants separate from capability proposals.
+
+**Historical evidence status:** isolated PostgreSQL upgrade from the Phase 1A.2 state
+preserved synthetic assignments, restrictions, audit events, the seeded
+baseline, normalized Person associations, and governance records. The
+earlier Phase 1A.3 focused suite passed 19/19 and the affected broader suite passed
+102/102. Operational database migration, disposal, production/staging
+behavior, CRM integration, and cross-repository runtime compatibility remain
+deferred or unverified.
+
+## Targeted remediation status
+
+**Implemented and locally verified:** the catalogue extension now
+uses explicit `SYSTEM_MIGRATION` metadata and `MIGRATION` provenance, advances
+the existing policy version atomically, preserves the original baseline, and
+does not seed a `LEGAL_HOLD_ADMIN` role default. The normalized-subject
+backfill validates Person existence in batches and preserves unresolved audit
+events without inventing subjects; unresolved privacy events remain excluded
+from retention eligibility.
+
+The existing Person audit-history endpoint remains an operational CRM history
+projection: it uses the operational audit domain and existing CRM record and
+field visibility rules, so privacy events are excluded before count and
+pagination. The dedicated privacy projection service requires an active user,
+`PRIVACY_AUDIT_READ`, and an authorized business-domain Person scope before
+returning privacy-domain events; STAFF subjects remain available only through
+the existing CRM-admin record boundary. No public privacy-audit endpoint or Angular integration
+is introduced.
+
+The focused validation command set was: `manage.py check --fail-level ERROR`,
+`manage.py makemigrations --check --dry-run`, isolated PostgreSQL migration
+verification from Phase 1A.2 through Phase 1A.3, the synthetic normalized
+subject migration test, focused privacy-audit projection tests, and the
+existing Phase 1A.3 regression suites. The remediation subset passed 9/9 and
+the broader authorized focused set passed 69/69 against isolated PostgreSQL
+test database `test_elevate`; no operational database was migrated. AUTH-002
+remains preserved with its scoped raw-admin resolution;
+trusted provenance construction is a non-blocking follow-up, not an accepted
+risk. GOV-003, GOV-005, uncovered GOV-006 writers, AUTH-001, legacy TECHNICAL
+reconciliation, legal approval for disposal, and cross-repository runtime
+compatibility remain open or unverified.

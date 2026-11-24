@@ -186,6 +186,7 @@ class CapabilityDefinition(models.Model):
     PERSON_EXPORT = "PERSON_EXPORT"
     PERSON_RESTRICTED_ACCESS = "PERSON_RESTRICTED_ACCESS"
     PRIVACY_AUDIT_READ = "PRIVACY_AUDIT_READ"
+    LEGAL_HOLD_ADMIN = "LEGAL_HOLD_ADMIN"
     STAFF_CAPABILITY_ADMIN = "STAFF_CAPABILITY_ADMIN"
 
     CANONICAL_CAPABILITIES = (
@@ -194,6 +195,7 @@ class CapabilityDefinition(models.Model):
         (PERSON_EXPORT, "Person export", "Export permitted Person data."),
         (PERSON_RESTRICTED_ACCESS, "Person restricted access", "Additional gate for explicitly approved exceptional workflows."),
         (PRIVACY_AUDIT_READ, "Privacy audit read", "Read privacy audit history where separately authorized."),
+        (LEGAL_HOLD_ADMIN, "Legal hold administration", "Place, release and evaluate legal holds through governed workflows."),
         (STAFF_CAPABILITY_ADMIN, "Staff capability administration", "Administer staff capability permissions through approved governance workflows."),
     )
 

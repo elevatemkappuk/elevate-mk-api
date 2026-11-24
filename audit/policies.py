@@ -2,7 +2,9 @@ from django.db.models import Q
 
 from audit.models import AuditEvent
 from staff_access.models import StaffRole
-from staff_access.permissions import get_active_staff_role_codes_for_user
+from staff_access.permissions import get_active_staff_role_codes_for_user, user_has_any_active_staff_role
+from staff_access.models import CapabilityDefinition
+from staff_access.permissions import user_has_capability
 
 PERSON_AUDIT_RESTRICTED_ENTITY_TYPES = frozenset({"InternalNote"})
 PERSON_AUDIT_RESTRICTED_ACTIONS = frozenset(
@@ -56,7 +58,9 @@ PERSON_AUDIT_ALLOWED_CHANGE_FIELDS_BY_ENTITY_TYPE = {
 
 def build_person_audit_scope_q(person_id):
     normalized_person_id = str(person_id)
-    return Q(metadata__person_id=normalized_person_id) | Q(
+    return Q(subjects__subject_type="PERSON", subjects__person_id=normalized_person_id) | Q(
+        metadata__person_id=normalized_person_id
+    ) | Q(
         entity_type="Person",
         entity_id=normalized_person_id,
     )
@@ -124,6 +128,23 @@ def project_safe_change_value(value):
         return {"changed": value["changed"]}
 
     return None
+
+
+def get_privacy_audit_queryset_for_user(user, *, person):
+    """Return a privacy projection after capability and Person-scope checks."""
+    if not getattr(user, "is_authenticated", False) or not getattr(user, "is_active", False):
+        return AuditEvent.objects.none()
+    if not user_has_capability(user, CapabilityDefinition.PRIVACY_AUDIT_READ):
+        return AuditEvent.objects.none()
+    if person is None or getattr(person, "record_type", None) not in {"COMMUNITY", "STAFF"}:
+        return AuditEvent.objects.none()
+    if getattr(person, "record_type", None) != "COMMUNITY" and not user_has_any_active_staff_role(
+        user, (StaffRole.CRM_ADMIN,)
+    ):
+        return AuditEvent.objects.none()
+    return AuditEvent.objects.privacy().select_related("actor_user").only(
+        "id", "action", "entity_type", "entity_id", "actor_user", "occurred_at"
+    ).filter(build_person_audit_scope_q(person.pk)).order_by("-occurred_at", "-id")
 
 
 def is_safe_change_scalar(value):
