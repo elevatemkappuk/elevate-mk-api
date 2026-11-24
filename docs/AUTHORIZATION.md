@@ -153,9 +153,12 @@ Planned, not yet implemented:
 - finer-grained operational permission policies beyond role-code checks
 - additional non-staff authorization domains
 
-## Phase 1A.1 Capability Foundation
+## Capability Foundation
 
-Status: Implemented foundation; endpoint and field enforcement remain planned.
+Status: Implemented foundation; corrected capability governance models and
+services are source-inspected, with focused PostgreSQL migration and runtime
+validation verified in isolation. Endpoint activation and field enforcement
+remain unverified or deferred.
 
 The six canonical capability codes are:
 
@@ -177,7 +180,7 @@ The approved initial role-default matrix is:
 `PERSON_RESTRICTED_ACCESS` and `PRIVACY_AUDIT_READ` are not ordinary CRM-role
 defaults. `PERSON_RESTRICTED_ACCESS` remains an additional gate for future
 explicitly approved exceptional workflows; no such workflow is exposed in
-Phase 1A.1.
+the current implementation.
 
 The backend evaluator combines active role defaults with active individual
 assignments, excludes suspended and revoked assignments, and subtracts active
@@ -190,29 +193,127 @@ separately audited.
 
 The reusable `HasCapability` DRF permission class delegates to this evaluator
 for future endpoint adoption. No existing endpoint has been switched from its
-role-based permission class in Phase 1A.1.
+role-based permission class; capability endpoint enforcement remains deferred.
 
-Active Django superusers receive the approved full privacy-capability bypass.
-Each requested bypass is recorded transactionally as
+### Capability governance activation boundary
+
+Status: **Historical intermediate status; superseded below.** Governance model
+and service semantics are present in the working tree. The focused validation
+passed the capability foundation and CRM-admin concurrency subsets, but the
+governance suite has one baseline-fixture failure; revised superuser runtime
+acceptance remains unverified. No public API or Admin activation is evidenced.
+
+This document remains authoritative for evaluator semantics: active role
+defaults and active individual assignments are additive, suspended and revoked
+assignments are ineffective, active restrictions subtract capabilities, and the
+approved superuser bypass is audited transactionally.
+
+The ordinary governance service requires an active, non-superuser STAFF actor
+with an unrestricted `STAFF_CAPABILITY_ADMIN` capability. Ordinary targets must
+be active STAFF users with an active canonical CRM role and cannot be the
+acting user. Reasons are required and limited to 4,000 characters. Proposal
+expiry is 30 days from creation.
+
+Role-default operations and individual `STAFF_CAPABILITY_ADMIN` grant, restore,
+or `INDIVIDUAL_UNRESTRICT` operations require a distinct second approver. Other
+supported operations use the single-admin path. Approval revalidates proposer authority,
+target eligibility, policy version, expected target state, expiry, and active
+restrictions before mutation. The service uses transactional locking, records
+proposal and mutation audit events, bumps policy version after mutation, and
+stores an immutable decision. Existing pending proposals remain subject to this
+ordinary workflow and are never silently converted into superuser operations.
+
+Active Django superusers use the explicit `apply_superuser_capability_change`
+service path. It permits self-administration, inactive/non-STAFF targets,
+restriction bypass, direct role-default changes, and direct capability changes
+without two-person approval. It still requires active authentication, a
+justification, transactional before/after audit events, database constraints,
+and the existing lock order. Audit failure rolls back the mutation. Inactive
+superusers and ordinary administrators cannot invoke this path.
+
+The service also provides direct individual-change and urgent
+`STAFF_CAPABILITY_ADMIN` suspend/restrict/revoke wrappers, role-loss
+reconciliation that suspends active individual grants, and expiry processing.
+These are source behaviors only; execution and caller coverage remain
+unverified.
+
+### Historical intermediate governance gate status (superseded)
+
+The following gate record preserves the intermediate review state. The GOV-004
+controlled-recovery and replacement-path status below is superseded by the
+authoritative final validation section; the remaining findings are restated
+there as current blockers.
+
+#### Historical intermediate open governance activation gates
+
+The following findings remain open and unresolved from the current read-only
+security review; the source implementation and migration definitions do not
+resolve them:
+
+- **GOV-003 — Direct ORM bypass:** direct ORM writes or privileged management
+  scripts may bypass the governance service boundary until all callers are
+  constrained and reviewed. The three governance persistence models are not registered in
+  Django Admin; inspected application-level privacy writers are in
+  `staff_access/governance.py`. Trusted migration, maintenance, and
+  database-administrator paths remain explicit trust boundaries rather than
+  operational interfaces.
+- **GOV-004 — Recovery disabled:** controlled recovery remains disabled pending
+  predicate is superseded by the approved full Django superuser authority
+  decision. The replacement direct path is implemented but remains
+  runtime-unverified. The historical recovery-disabled label above is
+  superseded by this direct-superuser authority decision; it is retained only
+  for architectural history.
+- **GOV-005 — Actorless reconciliation:** the current service requires an
+  attributable actor for reconciliation and rejects actorless invocation.
+  Caller coverage and operational scheduling remain unverified before
+  activation.
+- **GOV-006 — Cross-path lock order:** lock ordering across proposal,
+  authorization, capability, and reconciliation paths remains open for
+  concurrency review.
+
+GOV-003, GOV-004, the uncovered privileged-writer portion of GOV-006, and
+operational coverage for GOV-005 block operational governance activation.
+`AUTH-001` and `AUTH-002` also remain open.
+
+Active Django superusers receive the approved full privacy-capability evaluation
+bypass. Each requested bypass is recorded transactionally as
 `PRIVACY_SUPERUSER_BYPASS`; if the audit write fails, the bypass fails. This
-exception applies to capability evaluation only and does not make a Django
+evaluation exception and the direct mutation path do not make a Django
 superuser an operational CRM role or change existing endpoint permission
-classes.
+classes. The direct mutation path additionally records actual before/after
+state, actor, target, operation, justification, and superuser authority usage.
 
-Phase 1A.1 deliberately does not provide capability administration endpoints,
-governance proposals, two-person approval, masking, Person projections,
-search/export enforcement, CRM UI enforcement, automatic disposal, or an
-exceptional restricted-access workflow. These remain later approved phases.
+The current documentation does not claim capability administration endpoints or
+a Django Admin governance surface. Masking, Person projections, search/export
+enforcement, CRM UI enforcement, automatic disposal, and any exceptional
+restricted-access workflow remain deferred. Source service behavior does not
+establish public activation.
+
+### Final validation status (authoritative)
+
+The final isolated Phase 1A.2 validation passed 41/41 tests, including revised
+superuser authority, governance, capability foundation, and concurrency
+coverage. Synthetic pre-`0007` migration verification also passed. Earlier
+intermediate validation counts are historical and superseded. Operational
+activation, production/staging behavior, and deployment remain unverified.
+
+The former controlled-recovery finding is superseded by the approved direct
+superuser authority decision; runtime validation of the replacement path is
+complete in isolation. Mandatory transactional audit, before/after recording,
+and rollback on audit failure remain required. GOV-003, GOV-005, uncovered GOV-006 writer paths,
+AUTH-001, and AUTH-002 remain open.
 
 Source and validation evidence: the catalog and defaults are defined in
 `staff_access/models.py` and seeded by
 `staff_access/migrations/0006_capability_foundation.py`; evaluation is in
 `staff_access/permissions.py`; the audit action is in `audit/models.py` and
 `audit/migrations/0020_alter_auditevent_action.py`; focused tests are in
-`staff_access/tests.py`. Local Django checks, migration-drift checks, Python
-compilation, and the 9-test focused capability suite completed successfully.
-Production migration, endpoint integration, and live compatibility remain
-unverified.
+`staff_access/tests.py`. Foundation and governance validation evidence is
+retained in `DATABASE.md` and `GDPR.md`; isolated PostgreSQL migration and
+focused test execution are verified, while production migration, governance
+endpoint integration, and live compatibility remain unverified. Governance source is in
+`staff_access/governance.py`, `staff_access/migrations/0007_capability_governance.py`,
+and `audit/migrations/0021_alter_auditevent_action.py`.
 
 The implemented anonymous Community join endpoint is an explicit public
 submission boundary, not a CRM authorization exception. It uses its own DTO,

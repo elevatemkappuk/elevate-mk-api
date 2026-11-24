@@ -94,6 +94,20 @@ class AuditEvent(models.Model):
         CAMPAIGN_PROVIDER_FAILURE = "CAMPAIGN_PROVIDER_FAILURE", "Campaign provider failure"
         CAMPAIGN_PROVIDER_RETRY = "CAMPAIGN_PROVIDER_RETRY", "Campaign provider retry"
         PRIVACY_SUPERUSER_BYPASS = "PRIVACY_SUPERUSER_BYPASS", "Privacy capability superuser bypass"
+        CAPABILITY_PROPOSAL_CREATED = "CAPABILITY_PROPOSAL_CREATED", "Capability proposal created"
+        CAPABILITY_PROPOSAL_APPROVED = "CAPABILITY_PROPOSAL_APPROVED", "Capability proposal approved"
+        CAPABILITY_PROPOSAL_REJECTED = "CAPABILITY_PROPOSAL_REJECTED", "Capability proposal rejected"
+        CAPABILITY_PROPOSAL_CANCELLED = "CAPABILITY_PROPOSAL_CANCELLED", "Capability proposal cancelled"
+        CAPABILITY_PROPOSAL_EXPIRED = "CAPABILITY_PROPOSAL_EXPIRED", "Capability proposal expired"
+        CAPABILITY_PROPOSAL_INVALIDATED = "CAPABILITY_PROPOSAL_INVALIDATED", "Capability proposal invalidated"
+        CAPABILITY_PERMISSION_MUTATED = "CAPABILITY_PERMISSION_MUTATED", "Capability permission mutated"
+        CAPABILITY_ASSIGNMENT_SUSPENDED = "CAPABILITY_ASSIGNMENT_SUSPENDED", "Capability assignment suspended"
+        CAPABILITY_ASSIGNMENT_RESTORED = "CAPABILITY_ASSIGNMENT_RESTORED", "Capability assignment restored"
+        CAPABILITY_EMERGENCY_REVOKED = "CAPABILITY_EMERGENCY_REVOKED", "Capability emergency revocation"
+        CAPABILITY_EMERGENCY_RESTRICTED = "CAPABILITY_EMERGENCY_RESTRICTED", "Capability emergency restriction"
+        CAPABILITY_EMERGENCY_SUSPENDED = "CAPABILITY_EMERGENCY_SUSPENDED", "Capability emergency suspension"
+        CAPABILITY_RECOVERY_APPROVED = "CAPABILITY_RECOVERY_APPROVED", "Capability controlled recovery approved"
+        CAPABILITY_POLICY_BASELINED = "CAPABILITY_POLICY_BASELINED", "Capability policy baseline captured"
 
     actor_user = models.ForeignKey(
         settings.AUTH_USER_MODEL,

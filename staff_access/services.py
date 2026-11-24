@@ -336,16 +336,20 @@ def deactivate_staff_role(role, *, actor_user=None, request=None):
     with transaction.atomic():
         locked_role = StaffRole.objects.select_for_update().get(pk=role.pk)
         ensure_staff_role_can_be_deactivated(locked_role)
-        affected_user_ids = list(
-            StaffRoleAssignment.objects.active()
-            .filter(role=locked_role)
-            .values_list("user_id", flat=True)
+        affected_assignments = list(
+            StaffRoleAssignment.objects.select_for_update()
+            .filter(role=locked_role, is_active=True, revoked_at__isnull=True)
+            .order_by("pk")
+        )
+        affected_user_ids = sorted({assignment.user_id for assignment in affected_assignments})
+        affected_users = list(
+            User.objects.select_for_update().filter(pk__in=affected_user_ids).order_by("pk")
         )
         locked_role.is_active = False
         locked_role.save(update_fields=["is_active", "updated_at"])
-        User.objects.filter(pk__in=affected_user_ids).update(
-            crm_session_version=F("crm_session_version") + 1,
-        )
+        for user in affected_users:
+            user.crm_session_version = F("crm_session_version") + 1
+            user.save(update_fields=["crm_session_version"])
         request_id = None
         ip_address = None
         if request is not None:
@@ -407,9 +411,13 @@ def revoke_staff_role_assignments(*, assignments, revoked_by=None, revoked_at=No
         for assignment in active_assignments:
             assignment._revoke_unchecked(revoked_by=revoked_by, revoked_at=revoked_at)
 
-        User.objects.filter(pk__in={assignment.user_id for assignment in active_assignments}).update(
-            crm_session_version=F("crm_session_version") + 1,
+        affected_user_ids = sorted({assignment.user_id for assignment in active_assignments})
+        affected_users = list(
+            User.objects.select_for_update().filter(pk__in=affected_user_ids).order_by("pk")
         )
+        for user in affected_users:
+            user.crm_session_version = F("crm_session_version") + 1
+            user.save(update_fields=["crm_session_version"])
 
         if audit:
             request_id = None

@@ -947,10 +947,16 @@ class StaffAdminTests(TestCase):
 
 @skipUnless(connection.vendor == "postgresql", "Requires PostgreSQL row-level locking semantics.")
 class FinalCrmAdminConcurrencyTests(TransactionTestCase):
-    serialized_rollback = True
+    # This class only requires canonical role rows, which are recreated in
+    # setUp. Avoid serialized rollback because the serialized permission
+    # payload contains duplicate auth_permission natural keys in this project.
+    serialized_rollback = False
 
     def setUp(self):
-        self.role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
+        self.role, _created = StaffRole.objects.update_or_create(
+            code=StaffRole.CRM_ADMIN,
+            defaults={"name": "CRM Admin", "is_active": True},
+        )
         self.first = self.create_assignment("first-admin@example.com")
         self.second = self.create_assignment("second-admin@example.com")
 

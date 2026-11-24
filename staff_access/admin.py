@@ -163,10 +163,12 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
             return
 
         with transaction.atomic():
+            locked_role = StaffRole.objects.select_for_update().get(pk=obj.role_id)
+            locked_user = obj.user.__class__.objects.select_for_update().get(pk=obj.user_id)
             existing = (
                 StaffRoleAssignment.objects.select_for_update()
                 .select_related("role")
-                .filter(user=obj.user, role=obj.role)
+                .filter(user=locked_user, role=locked_role)
                 .first()
             )
             if existing:
@@ -185,8 +187,8 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
                 return
 
             assignment = StaffRoleAssignment.objects.create(
-                user=obj.user,
-                role=obj.role,
+                user=locked_user,
+                role=locked_role,
                 assigned_by=request.user,
             )
             assignment = StaffRoleAssignment.objects.select_related("role").get(pk=assignment.pk)

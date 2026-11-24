@@ -27,6 +27,9 @@ The current Elevate-owned models are:
 - `staff_access.RoleCapabilityDefault`
 - `staff_access.StaffCapabilityAssignment`
 - `staff_access.StaffCapabilityRestriction`
+- `staff_access.CapabilityPolicyState`
+- `staff_access.CapabilityProposal`
+- `staff_access.CapabilityProposalDecision`
 - `data_imports.ImportBatch`
 - `data_imports.ImportRecord`
 - `events.Event`
@@ -38,8 +41,9 @@ The current Elevate-owned models are:
 
 ## Capability Foundation
 
-Status: Implemented in the current working tree; production deployment and
-live-database validation remain unverified.
+Status: Implemented foundation and governance schema; governance migration
+execution, baseline capture and focused PostgreSQL tests are verified in an
+isolated test database. Production deployment remains unverified.
 
 The privacy capability foundation is additive to the existing operational role
 model. It does not replace `StaffRole` or `StaffRoleAssignment`, and it does
@@ -115,28 +119,106 @@ The audit action `PRIVACY_SUPERUSER_BYPASS` is added by
 `audit.0020_alter_auditevent_action`. The audit migration preserves the
 existing action choices and appends the new action.
 
+### Capability governance persistence
+
+Status: **Historical intermediate status; superseded by the authoritative final
+validation status below.** The corrected governance models and migrations were
+present in the working tree. The intermediate capability-foundation and
+CRM-admin concurrency subsets passed, while the intermediate governance suite
+had one baseline-fixture failure; the expanded individual-state baseline and
+revised superuser behavior were subsequently verified by the final isolated
+run.
+
+`CapabilityPolicyState` is a singleton policy baseline with a unique,
+non-editable `singleton_key` fixed to `1`, unique `key` fixed to
+`capability-governance`, `version`, `updated_at`, non-editable
+`baseline_captured_at`, non-editable `baseline_snapshot`, optional `updated_by`,
+and a free-form `reason`. The source defines
+`staff_cap_policy_singleton_key` and `staff_cap_policy_singleton_name` check
+constraints. `baseline_snapshot` is a JSON snapshot of the role-capability
+defaults and existing individual assignments and restrictions present when the
+baseline is captured.
+
+`CapabilityProposal` stores a unique public UUID, operation, status, optional
+role or target user, capability, proposer, reason, policy version, expected
+target-state JSON snapshot, expiry, resolution metadata, and a controlled
+recovery flag. Operations are `ROLE_DEFAULT_ENABLE`,
+`ROLE_DEFAULT_DISABLE`, `INDIVIDUAL_GRANT`, `INDIVIDUAL_RESTORE`,
+`INDIVIDUAL_SUSPEND`, `INDIVIDUAL_REVOKE`, `INDIVIDUAL_RESTRICT`, and
+`INDIVIDUAL_UNRESTRICT`. Statuses are `PENDING`, `APPROVED`, `REJECTED`,
+`CANCELLED`, `EXPIRED`, and `INVALIDATED`.
+
+The source defines these proposal constraints:
+
+- `staff_cap_proposal_target_shape` requires role-default operations to have a
+  role and no target user, and individual operations to have a target user and
+  no role;
+- `staff_cap_proposal_resolution_state` requires pending proposals to have no
+  resolution timestamp and terminal proposals to have one;
+- `staff_cap_proposal_expiry_after_creation` requires expiry after creation;
+- `staff_cap_one_pending_role_proposal` permits one pending role/capability
+  role-default proposal;
+- `staff_cap_one_pending_user_proposal` permits one pending user/capability
+  individual proposal.
+
+The explicit proposal indexes are `staff_cap_prop_status_exp_idx`
+(`status`, `expires_at`), `staff_cap_prop_user_idx` (`target_user`,
+`capability`, `status`), and `staff_cap_prop_role_idx` (`role`, `capability`,
+`status`).
+
+`CapabilityProposalDecision` is a protected one-to-one relation to a proposal.
+It stores outcome (`APPROVED`, `REJECTED`, `CANCELLED`, `EXPIRED`, or
+`INVALIDATED`), deciding actor, reason, policy version, and creation timestamp.
+The model rejects updates to an existing decision, preserving decision
+immutability in source.
+
+`staff_access.0007_capability_governance` depends on
+`staff_access.0006_capability_foundation` and `audit.0021_alter_auditevent_action`.
+It creates the three governance tables, applies the listed constraints and
+indexes, and seeds the singleton policy baseline at version `1`, including
+`baseline_captured_at` and `baseline_snapshot` from the existing
+`RoleCapabilityDefault`, `StaffCapabilityAssignment`, and
+`StaffCapabilityRestriction` rows. Individual snapshots preserve internal row
+and actor identifiers, states, timestamps, and capability codes without
+copying email addresses or other person attributes. The seed also records the
+`CAPABILITY_POLICY_BASELINED` audit event with source metadata and policy
+version; its reverse is a no-op. `audit.0021_alter_auditevent_action` depends on
+`audit.0020_alter_auditevent_action` and adds the governance audit action
+choices, including proposal lifecycle, permission mutation, assignment
+suspension/restoration, emergency suspend/revoke/restrict, and controlled
+recovery approval, and policy-baseline capture actions.
+
+**Historical intermediate note (superseded):** earlier migration and seed
+details were verified during isolated PostgreSQL test-database creation, while
+the expanded baseline correction then required a focused rerun. Production and
+staging execution remain unverified.
+
 ### Local validation evidence
 
 Target: local PostgreSQL at `localhost:5432`, database `elevate`. No
 credentials or personal data are recorded here.
 
+The following recorded evidence includes the previously implemented capability
+foundation and the Phase 1A.2 governance verification. It does not verify
+production, staging, deployment or cross-repository runtime behavior.
+
 - **Source-inspected:** capability models and migration definitions were
   inspected in `staff_access/models.py` and
   `staff_access/migrations/0006_capability_foundation.py`.
+- **Source-inspected governance:** corrected governance models, service, and
+  migrations were inspected in `staff_access/models.py`,
+  `staff_access/governance.py`, `staff_access/migrations/0007_capability_governance.py`,
+  and `audit/migrations/0021_alter_auditevent_action.py`.
 - **Backup-verified:** a local database backup was created and verified
   locally before validation. The backup artifact is not retained in this
   documentation.
-- **Migration-validated:** `manage.py migrate` successfully applied these nine
-  authorized migrations in dependency order: `accounts.0002`, `audit.0018`,
-  `audit.0019`, `audit.0020`, `staff_access.0003`, `staff_access.0004`,
-  `notifications.0004`, `staff_access.0005`, and `staff_access.0006`. Then
-  `manage.py migrate --plan` reported no planned migration operations;
-  `showmigrations` marked the inspected `audit` and `staff_access` migration
-  chains as applied.
+- **Migration-validated:** isolated PostgreSQL test database creation applied
+  the complete migration graph, including `audit.0021` and
+  `staff_access.0007`, without unexpected operations or migration errors.
 - **Data-validated:** the database contained exactly six capability
-  definitions, the approved role-default matrix, all four capability tables,
-  the four expected explicit capability indexes, and the three expected
-  named capability constraints.
+  definitions, the approved role-default matrix, the four foundation capability
+  tables and three governance tables, the four expected explicit foundation
+  capability indexes, and the three expected named foundation constraints.
 - **Verified:** `manage.py check --fail-level ERROR` passed, and
   `manage.py makemigrations --check --dry-run` reported `No changes detected`.
 - **Test-executed / Verified locally:**
@@ -145,6 +227,21 @@ credentials or personal data are recorded here.
   the local test database was preserved.
 - **Deployment-unverified:** production, staging, deployment behavior, and
   live migration safety remain unverified.
+- **Historical runtime evidence (superseded):** the final 21-test governance suite passed in
+  166.170 seconds; the combined focused run of governance, capability
+  foundation, and final CRM-admin concurrency tests passed 35 tests in
+  146.862 seconds. This covered baseline initialization, constraints,
+  transactional audit rollback, proposal lifecycle, concurrency and the
+  documented authorization boundaries.
+
+## Final Phase 1A.2 validation status (authoritative)
+
+This status supersedes earlier intermediate 21-test and 35-test evidence and
+the incomplete intermediate run.
+Synthetic pre-`0007` migration verification and the final isolated focused run
+passed. The final run passed 41/41 tests across governance, capability
+foundation, and CRM-admin concurrency coverage. Production deployment and
+operational database migrations remain unapplied and unverified.
 
 ## Historical Import Staging
 
