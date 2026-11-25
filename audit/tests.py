@@ -264,7 +264,12 @@ class AuthenticationAuditIntegrationTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
-            AuditEvent.objects.exclude(action=AuditEvent.Action.CAPABILITY_POLICY_BASELINED).count(),
+            AuditEvent.objects.exclude(
+                action__in=[
+                    AuditEvent.Action.CAPABILITY_POLICY_BASELINED,
+                    AuditEvent.Action.CAPABILITY_CATALOG_EXTENDED,
+                ]
+            ).count(),
             0,
         )
 

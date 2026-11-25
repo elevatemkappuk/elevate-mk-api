@@ -1,6 +1,6 @@
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core import signing
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from rest_framework import generics, serializers, status
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
@@ -35,6 +35,22 @@ def _resolve_event_reference(value):
     return AuditEvent.objects.filter(pk=event_id, audit_domain=AuditEvent.Domain.PRIVACY).first()
 
 
+def _safe_actor_summary(user):
+    if user is None:
+        return {"id": None, "display_name": "System", "contact_restricted": False}
+    person = getattr(user, "person", None)
+    name = " ".join(
+        value.strip()
+        for value in (getattr(person, "first_name", ""), getattr(person, "last_name", ""))
+        if value and value.strip()
+    )
+    return {
+        "id": user.pk,
+        "display_name": name or "Restricted user",
+        "contact_restricted": not bool(name),
+    }
+
+
 class PrivacyHistoryPagination(PageNumberPagination):
     page_size = 25
     page_size_query_param = "page_size"
@@ -57,6 +73,8 @@ class PrivacyHistorySerializer(serializers.Serializer):
     outcome = serializers.SerializerMethodField()
     superuser_operation = serializers.SerializerMethodField()
     capability = serializers.SerializerMethodField()
+    legal_hold_event_reference = serializers.SerializerMethodField()
+    permitted_actions = serializers.SerializerMethodField()
 
     def get_description(self, event):
         if (event.metadata or {}).get("operation") == "LEGAL_HOLD_RELEASE_REJECTED":
@@ -85,16 +103,31 @@ class PrivacyHistorySerializer(serializers.Serializer):
         metadata = event.metadata or {}
         return metadata.get("capability") or metadata.get("capability_code")
 
+    def get_legal_hold_event_reference(self, event):
+        request = self.context.get("request")
+        if not request or not user_has_capability(request.user, CapabilityDefinition.LEGAL_HOLD_ADMIN):
+            return None
+        return _event_reference(event.pk)
+
+    def get_permitted_actions(self, event):
+        request = self.context.get("request")
+        if not request or not user_has_capability(request.user, CapabilityDefinition.LEGAL_HOLD_ADMIN):
+            return []
+        return ["place_event_hold"]
+
 
 class LegalHoldSerializer(serializers.Serializer):
     public_id = serializers.UUIDField()
     scope = serializers.CharField()
     status = serializers.CharField()
     person_id = serializers.IntegerField(allow_null=True)
+    person_display_name = serializers.SerializerMethodField()
     audit_event_reference = serializers.SerializerMethodField()
     placed_by_id = serializers.IntegerField()
+    placed_by = serializers.SerializerMethodField()
     placed_at = serializers.DateTimeField()
     released_by_id = serializers.IntegerField(allow_null=True)
+    released_by = serializers.SerializerMethodField()
     released_at = serializers.DateTimeField(allow_null=True)
     justification = serializers.SerializerMethodField()
     permitted_actions = serializers.SerializerMethodField()
@@ -103,6 +136,19 @@ class LegalHoldSerializer(serializers.Serializer):
 
     def get_audit_event_reference(self, hold):
         return _event_reference(hold.audit_event_id) if hold.audit_event_id else None
+
+    def get_person_display_name(self, hold):
+        person = hold.person
+        if person is None:
+            return None
+        name = " ".join(value.strip() for value in (person.first_name, person.last_name) if value and value.strip())
+        return name or "Restricted Person"
+
+    def get_placed_by(self, hold):
+        return _safe_actor_summary(hold.placed_by)
+
+    def get_released_by(self, hold):
+        return _safe_actor_summary(hold.released_by) if hold.released_by_id else None
 
     def get_justification(self, hold):
         request = self.context.get("request")
@@ -117,6 +163,8 @@ class LegalHoldSerializer(serializers.Serializer):
         if request.user.is_superuser:
             return ["direct_release"]
         if user_has_capability(request.user, CapabilityDefinition.LEGAL_HOLD_ADMIN):
+            if hold.release_requests.filter(status=LegalHoldReleaseRequest.Status.PENDING).exists():
+                return []
             return ["request_release"]
         return []
 
@@ -140,10 +188,14 @@ class LegalHoldSerializer(serializers.Serializer):
                 "status": release_request.status,
                 "justification": release_request.reason,
                 "requested_by_id": release_request.requested_by_id,
+                "requested_by": _safe_actor_summary(release_request.requested_by),
                 "requested_at": release_request.requested_at,
                 "approved_by_id": release_request.approved_by_id,
+                "approved_by": _safe_actor_summary(release_request.approved_by) if release_request.approved_by_id else None,
                 "approved_at": release_request.approved_at,
+                "approval_justification": release_request.approval_reason or None,
                 "rejected_by_id": release_request.rejected_by_id,
+                "rejected_by": _safe_actor_summary(release_request.rejected_by) if release_request.rejected_by_id else None,
                 "rejected_at": release_request.rejected_at,
                 "rejection_reason": release_request.rejection_reason or None,
                 "permitted_actions": permitted_actions,
@@ -225,6 +277,28 @@ class LegalHoldPermission(PrivacyAdministratorPermission):
         return allowed
 
 
+class LegalHoldPersonTargetSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Person
+        fields = ("id", "record_type", "first_name", "last_name")
+
+
+class LegalHoldPersonTargetView(generics.ListAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [LegalHoldPermission, HasCrmOperationalAccess]
+    serializer_class = LegalHoldPersonTargetSerializer
+    pagination_class = LegalHoldPagination
+
+    def get_queryset(self):
+        queryset = Person.objects.filter(
+            archived_at__isnull=True,
+        ).exclude(record_type=Person.RecordType.TECHNICAL)
+        query = self.request.query_params.get("q", "").strip()
+        if query:
+            queryset = queryset.filter(Q(first_name__icontains=query) | Q(last_name__icontains=query))
+        return queryset.order_by("last_name", "first_name", "id")
+
+
 class LegalHoldListCreateView(generics.ListCreateAPIView):
     authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [LegalHoldPermission, HasCrmOperationalAccess]
@@ -232,7 +306,17 @@ class LegalHoldListCreateView(generics.ListCreateAPIView):
     pagination_class = LegalHoldPagination
 
     def get_queryset(self):
-        queryset = LegalHold.objects.select_related("person", "audit_event", "placed_by", "released_by").prefetch_related("release_requests")
+        queryset = LegalHold.objects.select_related(
+            "person", "audit_event", "placed_by", "placed_by__person", "released_by", "released_by__person"
+        ).prefetch_related(
+            Prefetch(
+                "release_requests",
+                queryset=LegalHoldReleaseRequest.objects.select_related(
+                    "requested_by", "requested_by__person", "approved_by", "approved_by__person",
+                    "rejected_by", "rejected_by__person",
+                ),
+            )
+        )
         person_id = self.request.query_params.get("person_id")
         if person_id:
             queryset = queryset.filter(Q(person_id=person_id) | Q(audit_event__subjects__person_id=person_id)).distinct()
@@ -274,7 +358,17 @@ class LegalHoldDetailView(generics.RetrieveAPIView):
     serializer_class = LegalHoldSerializer
     lookup_field = "public_id"
     lookup_url_kwarg = "public_id"
-    queryset = LegalHold.objects.select_related("person", "audit_event", "placed_by", "released_by").prefetch_related("release_requests")
+    queryset = LegalHold.objects.select_related(
+            "person", "audit_event", "placed_by", "placed_by__person", "released_by", "released_by__person"
+        ).prefetch_related(
+            Prefetch(
+                "release_requests",
+                queryset=LegalHoldReleaseRequest.objects.select_related(
+                    "requested_by", "requested_by__person", "approved_by", "approved_by__person",
+                    "rejected_by", "rejected_by__person",
+                ),
+            )
+        )
 
 
 class LegalHoldReleaseRequestView(APIView):

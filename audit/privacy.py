@@ -72,6 +72,11 @@ def request_legal_hold_release(*, actor_user, hold, reason):
     hold = LegalHold.objects.select_for_update().get(pk=hold.pk)
     if hold.status != LegalHold.Status.ACTIVE:
         raise ValidationError("Only active legal holds may be released.")
+    if LegalHoldReleaseRequest.objects.filter(
+        legal_hold=hold,
+        status=LegalHoldReleaseRequest.Status.PENDING,
+    ).exists():
+        raise ValidationError("A release request is already pending for this legal hold.")
     reason = _reason(reason)
     request = LegalHoldReleaseRequest.objects.create(
         legal_hold=hold,

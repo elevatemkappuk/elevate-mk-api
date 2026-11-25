@@ -404,5 +404,12 @@ activated against this disclosure.
 Privacy audit history denies admitted CRM users without
 `PRIVACY_AUDIT_READ` with `403 Forbidden` before filtering, pagination, or
 projection. Legal-hold list/detail responses expose only safe release-request
-summaries and backend-calculated approval/rejection actions; self-approval
-remains denied.
+summaries and backend-calculated approval/rejection actions; self-approval is
+denied for ordinary governed administrators, while the approved audited
+Django-superuser exception remains in force. Phase 1A.4D.4 also suppresses duplicate release-request
+actions while a request is pending and revalidates `LEGAL_HOLD_ADMIN` and
+target scope for contextual Person and event hold actions.
+
+Legal-hold Person selection uses a dedicated capability-protected projection
+containing only active non-technical Person identifiers and names; it does not
+reuse the broader contact/demographic People directory projection.

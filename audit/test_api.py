@@ -90,6 +90,8 @@ class PrivacyAuditAndLegalHoldApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["count"], 1)
         self.assertEqual(response.data["results"][0]["id"], str(event.id))
+        self.assertEqual(response.data["results"][0]["permitted_actions"], ["place_event_hold"])
+        self.assertTrue(response.data["results"][0]["legal_hold_event_reference"])
         self.assertNotIn("metadata", response.data["results"][0])
         self.assertNotIn("entity_id", response.data["results"][0])
 
@@ -120,6 +122,8 @@ class PrivacyAuditAndLegalHoldApiTests(TestCase):
         self.assertEqual(create_response.data["scope"], LegalHold.Scope.PERSON)
         self.assertEqual(create_response.data["permitted_actions"], ["request_release"])
         self.assertEqual(create_response.data["execution_mode"], "GOVERNED")
+        self.assertEqual(create_response.data["person_display_name"], "Subject Person")
+        self.assertEqual(create_response.data["placed_by"]["display_name"], "Privacy Admin")
         hold_id = create_response.data["public_id"]
 
         request_response = self.client.post(
@@ -142,6 +146,63 @@ class PrivacyAuditAndLegalHoldApiTests(TestCase):
         self.assertEqual(approve_response.data["status"], LegalHold.Status.RELEASED)
         self.assertFalse(LegalHold.objects.filter(public_id=hold_id, status=LegalHold.Status.ACTIVE).exists())
 
+    def test_legal_hold_person_targets_are_capability_protected_and_minimal(self):
+        staff_person = Person.objects.create(
+            first_name="Eligible", last_name="Staff", record_type=Person.RecordType.STAFF,
+            primary_email="staff-target@example.com",
+        )
+        self.authenticate(self.admin)
+
+        response = self.client.get(
+            "/api/v1/privacy/legal-holds/person-targets/",
+            {"q": "Eligible"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["id"], staff_person.pk)
+        self.assertEqual(response.data["results"][0]["first_name"], "Eligible")
+        self.assertNotIn("primary_email", response.data["results"][0])
+        self.assertNotIn("mobile", response.data["results"][0])
+        self.assertNotIn("age_range", response.data["results"][0])
+
+    def test_pending_release_removes_duplicate_request_action_and_reject_allows_retry(self):
+        self.authenticate(self.admin)
+        create_response = self.client.post(
+            self.holds_url,
+            {"person_id": self.person.pk, "reason": "Pending release action check"},
+            format="json",
+        )
+        hold_id = create_response.data["public_id"]
+        first = self.client.post(
+            f"/api/v1/privacy/legal-holds/{hold_id}/release-requests/",
+            {"reason": "First release request"},
+            format="json",
+        )
+        self.assertEqual(first.status_code, 201)
+        duplicate = self.client.post(
+            f"/api/v1/privacy/legal-holds/{hold_id}/release-requests/",
+            {"reason": "Duplicate release request"},
+            format="json",
+        )
+        self.assertEqual(duplicate.status_code, 400)
+        projection = self.client.get(self.holds_url).data["results"][0]
+        self.assertEqual(projection["permitted_actions"], [])
+        self.authenticate(self.other_admin)
+        rejected = self.client.post(
+            f"/api/v1/privacy/legal-hold-release-requests/{first.data['public_id']}/reject/",
+            {"reason": "Hold remains required"},
+            format="json",
+        )
+        self.assertEqual(rejected.status_code, 200)
+        self.authenticate(self.admin)
+        retry = self.client.post(
+            f"/api/v1/privacy/legal-holds/{hold_id}/release-requests/",
+            {"reason": "Second release request"},
+            format="json",
+        )
+        self.assertEqual(retry.status_code, 201)
+
     def test_legal_hold_access_denial_records_route_operation(self):
         StaffCapabilityAssignment.objects.filter(
             user=self.other_admin,
@@ -158,6 +219,22 @@ class PrivacyAuditAndLegalHoldApiTests(TestCase):
             metadata__denial_code="LEGAL_HOLD_ADMIN_REQUIRED",
         ).latest("id")
         self.assertEqual(denial.metadata["operation"], "LEGAL_HOLD_ACCESS")
+
+    def test_event_reference_places_event_specific_hold(self):
+        self.authenticate(self.admin)
+        event = AuditEvent.objects.create(
+            actor_user=self.admin,
+            action=AuditEvent.Action.PERSON_UPDATED,
+            entity_type="Person",
+            entity_id=str(self.person.pk),
+            audit_domain=AuditEvent.Domain.PRIVACY,
+        )
+        history = self.client.get(self.audit_history_url)
+        reference = next(item["legal_hold_event_reference"] for item in history.data["results"] if item["id"] == str(event.id))
+        response = self.client.post(self.holds_url, {"audit_event_reference": reference, "reason": "Event-specific retention review"}, format="json")
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["scope"], LegalHold.Scope.EVENT)
+        self.assertIsNone(response.data["person_id"])
 
     def test_legal_hold_projection_exposes_safe_release_requests_to_independent_reviewer(self):
         self.authenticate(self.admin)
@@ -176,7 +253,7 @@ class PrivacyAuditAndLegalHoldApiTests(TestCase):
         self.assertEqual(release_request["permitted_actions"], ["approve", "reject"])
         self.assertEqual(release_request["requested_by_id"], self.admin.pk)
         self.assertEqual(release_request["justification"], "Independent review requested")
-        self.assertNotIn("requested_by", release_request)
+        self.assertEqual(release_request["requested_by"]["display_name"], "Privacy Admin")
 
     def test_release_request_projection_hides_self_approval_actions(self):
         self.authenticate(self.admin)

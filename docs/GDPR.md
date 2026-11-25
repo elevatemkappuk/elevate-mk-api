@@ -257,7 +257,9 @@ operational activation, and cross-repository behavior remain unverified.
 
 This final status supersedes the earlier intermediate 21-test, 35-test, and
 failed 42-discovery validation entries above. Synthetic pre-`0007` migration
-verification passed, and the final isolated focused run passed 41/41 tests.
+verification passed. Current targeted evidence includes 12/12 legal-hold API
+tests and 4/4 PostgreSQL concurrency tests; broader repository suites remain
+outside the targeted rerun scope.
 The baseline captured role defaults, active/suspended/revoked assignments,
 active/historical restrictions, identifiers, timestamps, and its matching audit
 event. QA accepted the scoped evidence. Production/staging, deployment,
@@ -441,9 +443,11 @@ effective result. History combines safe proposal and direct-superuser AFTER
 projections with actor, timestamp, target, operation, outcome, reason, and
 before/resulting state; raw AuditEvent metadata is not exposed.
 
-The API denial and projection behavior is implemented. The final isolated
-validation pass recorded 126/126 backend tests, including migration and
-PostgreSQL concurrency coverage, and 9/9 API privacy-history/legal-hold tests.
+The API denial and projection behavior is implemented. The focused validation
+evidence for this remediation is 12/12 `audit.test_api` tests, 4/4 focused
+PostgreSQL concurrency tests, a successful Django system check, and a clean
+migration-drift check. Broader repository suites, browser, operational
+migration, and deployment evidence remains unverified for this batch.
 The API denial audit now records route-specific operation labels for privacy
 audit and legal-hold authorization failures. The persistent UAT database is
 `elevate_gdpr_phase1a4c_manual`; operational, staging, deployment, and browser
@@ -473,6 +477,15 @@ approval/rejection actions, allowing an independent authorized administrator
 to discover pending requests after login or refresh without manual request-ID
 entry. No retention
 automation, deletion, anonymisation, or GDPR-FUTURE-001 implementation is part
-of this stage. Operational/staging deployment, browser workflow,
-cross-repository compatibility, and independent runtime OWASP acceptance remain
-unverified.
+of this stage. The isolated Phase 1A.4D manual UAT was accepted for the
+API/CRM workflow. Operational/staging deployment, cross-repository
+compatibility, and final-hardening security evidence remain unverified.
+Minor UX polish is deferred as non-blocking backlog work.
+
+Phase 1A.4D.4 remediation was exercised and accepted in the isolated UAT database with an
+audited restoration of the Synthetic Manager `LEGAL_HOLD_ADMIN` capability. It
+also adds safe actor and Person projections and a duplicate pending-release
+guard. Pending requests remove the ordinary `request_release`
+action until rejected or otherwise resolved. Person-wide and event-specific
+targets continue through the existing services and signed opaque references;
+no migration is required.

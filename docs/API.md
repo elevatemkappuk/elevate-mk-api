@@ -3083,7 +3083,7 @@ Review Profile followed by explicit acknowledgement and the My Profile
 Looks Good action both use this acknowledgement behavior.
 ## Phase 1A.4D backend privacy contracts
 
-Implemented / runtime-unverified: the API now defines separate CRM-session
+Implemented / isolated UAT runtime verified: the API now defines separate CRM-session
 routes for privacy audit history and legal-hold administration. Privacy audit
 history is exposed at `GET /api/v1/people/{person_id}/privacy-audit-history/`
 with bounded `page`, `page_size`, `occurred_from`, `occurred_to`,
@@ -3096,6 +3096,8 @@ workflow; these values are not part of the privacy-audit history projection.
 Legal-hold routes are:
 
 - `GET|POST /api/v1/privacy/legal-holds/`
+- `GET /api/v1/privacy/legal-holds/person-targets/` — capability-protected
+  active non-technical Person identifier/name search for legal-hold placement.
 - `GET /api/v1/privacy/legal-holds/{public_id}/`
 - `POST /api/v1/privacy/legal-holds/{public_id}/release-requests/`
 - `POST /api/v1/privacy/legal-hold-release-requests/{public_id}/approve/`
@@ -3112,6 +3114,14 @@ List responses use bounded page-number pagination (`page`, optional
 An independent authorized administrator can discover pending requests after a
 fresh login or refresh without receiving an internal database ID. Release
 requests are `PENDING`, `APPROVED`, or `REJECTED`;
-rejection preserves the active hold and permits a subsequent request. Ordinary
-approval and rejection require a distinct authorized decision-maker. The direct
-release route is superuser-only and remains CRM-admitted and audited.
+rejection preserves the active hold and permits a subsequent request. Pending
+requests remove the ordinary `request_release` action, and duplicate pending
+requests are rejected by the service before state changes. Authorized
+legal-hold projections add safe Person and actor display summaries, decision
+actors and justifications, while preserving contact and raw audit metadata
+boundaries. Privacy-audit events expose `place_event_hold` and a signed opaque
+`legal_hold_event_reference` only when the viewer also has
+`LEGAL_HOLD_ADMIN`. Ordinary approval and rejection require a distinct
+authorized decision-maker; the approved audited Django-superuser exception
+may perform direct self-approval or self-rejection. The direct release route
+is superuser-only and remains CRM-admitted and audited.
