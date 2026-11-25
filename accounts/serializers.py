@@ -48,7 +48,7 @@ class CurrentUserSerializer(AuthenticatedUserSerializer):
     membership = serializers.SerializerMethodField()
 
     class Meta(AuthenticatedUserSerializer.Meta):
-        fields = ("id", "email", "person", "staff_roles", "membership", "is_superuser")
+        fields = ("id", "email", "person", "staff_roles", "membership")
 
     @extend_schema_field(serializers.ListField(child=serializers.CharField()))
     def get_staff_roles(self, obj):

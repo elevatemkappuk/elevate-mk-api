@@ -14,6 +14,7 @@ state after all required locks are held.
 """
 
 from datetime import timedelta
+import re
 from types import SimpleNamespace
 
 from django.core.exceptions import ValidationError
@@ -38,6 +39,11 @@ from staff_access.models import (
 
 POLICY_STATE_KEY = "capability-governance"
 PROPOSAL_EXPIRY = timedelta(days=30)
+UNSAFE_REASON_PATTERN = re.compile(
+    r"(?:\bpassword\b|\bpasswd\b|\bsecret\b|api[ _-]?key|"
+    r"(?:access|refresh)[ _-]?token|\bbearer\s+[A-Za-z0-9._-]+)",
+    re.IGNORECASE,
+)
 
 
 def _reason(reason):
@@ -46,6 +52,8 @@ def _reason(reason):
         raise ValidationError({"reason": "A reason is required."})
     if len(value) > 4000:
         raise ValidationError({"reason": "The reason must be 4000 characters or fewer."})
+    if UNSAFE_REASON_PATTERN.search(value):
+        raise ValidationError({"reason": "Reasons must not contain credentials or secret values."})
     return value
 
 

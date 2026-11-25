@@ -167,7 +167,7 @@ GOV-005. GOV-003 and GOV-006 are reduced for the reviewed lifecycle paths but
 remain open for uncovered privileged writers until independent security review
 and broader activation evidence are complete.
 
-The final focused validation recorded 21/21 Admin, role-model, assignment and
+Historical Phase 1A.4C planning validation recorded 21/21 Admin, role-model, assignment and
 concurrency tests and 34/34 governance and invitation tests passing, alongside
 a clean Django system check, no schema-affecting model changes, no planned
 migrations and a clean migration graph against the isolated database. The full
@@ -178,8 +178,8 @@ assertions are not treated as remediation failures.
 
 ### Phase 1A.4C.2B governance API
 
-Status: **Implemented / focused API validation verified; CRM consumption is
-planned for Phase 1A.4C.3.**
+Status: **Implemented / focused API and CRM consumption validation verified in
+the isolated local scope; deployment remains unverified.**
 
 The API exposes safe governance administration routes for searchable Staff
 target selection, target access detail, role-default state, proposal creation
@@ -203,19 +203,25 @@ exceptional restricted-access workflows remain outside this stage. Ordinary
 individual changes are immediate where authorized; grant/restore/unrestrict of
 `STAFF_CAPABILITY_ADMIN` remains proposal-based. Duplicate pending proposals
 are returned as sanitized HTTP 409 conflicts. Focused governance API validation
-passed 21/21 tests against isolated PostgreSQL; the isolated Phase 1A.4C manual
+The historical Phase 1A.4C manual API validation passed 21/21 tests; the current
+governance remediation run passed 17/17 tests against isolated PostgreSQL. The
+isolated Phase 1A.4C manual
 API runtime is verified, while deployment and operational activation remain
 unverified.
 
 The role-default projection includes every active canonical CRM role and active
 capability, including disabled defaults. Each row includes backend-calculated
-`permitted_actions`; a matching pending proposal suppresses further actions,
-otherwise the row exposes only the applicable enable or disable operation.
+`permitted_actions` and an `execution_mode`; a matching pending proposal
+suppresses ordinary further actions, while an admitted superuser receives a
+`DIRECT_SUPERUSER` mode. Target capability rows similarly expose
+`permitted_action_modes`. The CRM consumes these backend descriptors rather
+than reproducing authorization rules.
 Proposal payloads similarly expose only the actions available to the current
 administrator: proposers may cancel, while distinct authorized administrators
 may approve or reject. Clients do not reproduce these governance decisions.
-This additive contract was validated by the focused governance API suite
-(12/12 tests in the current run).
+The earlier 12/12 additive-contract result is historical. The current
+governance API suite passed 17/17, including action-mode, superuser, non-STAFF
+admission and invalid-proposal-operation coverage.
 
 ## Security and privacy limitations
 
@@ -390,3 +396,28 @@ trusted provenance construction is a non-blocking follow-up, not an accepted
 risk. GOV-003, GOV-005, uncovered GOV-006 writers, AUTH-001, legacy TECHNICAL
 reconciliation, legal approval for disposal, and cross-repository runtime
 compatibility remain open or unverified.
+
+### Phase 1A.4C remediation notes
+
+The proposal endpoint rejects direct individual operations instead of creating
+pending proposals that cannot be approved. Governance reasons reject obvious
+credential-like content with a validation error; this is input minimization,
+not a substitute for secrets handling.
+
+### Mandatory access-control acceptance checklist
+
+- Least privilege: **Implemented; runtime verified in the 17/17 isolated API run.**
+- Deny by default: **Implemented; runtime verified in protected API tests.**
+- Backend-authoritative authorization: **Implemented; runtime verified.**
+- Resource scope and safe projections: **Implemented; runtime verified in API
+  projections.**
+- Horizontal escalation prevention: **Implemented; partially runtime verified.**
+- Vertical escalation prevention: **Implemented; partially runtime verified.**
+- Authorization revocation: **Implemented; runtime verified in focused paths.**
+- Security-sensitive authorization-failure logging: **Unverified**; no explicit
+  governance authorization-failure audit path was confirmed.
+- Privileged-operation auditing: **Implemented; runtime verified in focused tests.**
+- Functional access-control regression testing: **Verified for the 17/17 API
+  governance suite; broader cross-repository coverage remains separate.**
+- OWASP review: **Implemented scoped review; independent runtime security
+  evidence remains unverified.**

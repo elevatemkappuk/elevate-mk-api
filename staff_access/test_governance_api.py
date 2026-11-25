@@ -80,6 +80,7 @@ class GovernanceApiTests(TestCase):
         client = APIClient(enforce_csrf_checks=False)
         response = client.post("/api/v1/auth/login/", {"email": user.email, "password": self.password}, format="json")
         self.assertEqual(response.status_code, 200, response.data)
+        self.assertNotIn("is_superuser", response.data)
         return client
 
     def test_target_projection_is_safe_and_backend_authoritative(self):
@@ -180,8 +181,30 @@ class GovernanceApiTests(TestCase):
             ).exists()
         )
 
+    def test_proposal_endpoint_rejects_operations_that_use_direct_path(self):
+        response = self.admin_client.post(
+            "/api/v1/staff/governance/proposals/",
+            {
+                "operation": "INDIVIDUAL_GRANT",
+                "capability": CapabilityDefinition.PERSON_DEMOGRAPHIC_READ,
+                "target_user_id": self.target.pk,
+                "reason": "Direct operations must not become orphaned proposals",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("proposal workflow", str(response.data).lower())
+        self.assertFalse(
+            CapabilityProposal.objects.filter(
+                target_user=self.target,
+                capability__code=CapabilityDefinition.PERSON_DEMOGRAPHIC_READ,
+                status=CapabilityProposal.Status.PENDING,
+            ).exists()
+        )
+
     def test_duplicate_pending_proposal_returns_sanitized_conflict(self):
-        capability = CapabilityDefinition.objects.get(code=CapabilityDefinition.PERSON_DEMOGRAPHIC_READ)
+        capability = CapabilityDefinition.objects.get(code=CapabilityDefinition.STAFF_CAPABILITY_ADMIN)
         payload = {
             "operation": "INDIVIDUAL_GRANT",
             "capability": capability.code,
@@ -278,6 +301,7 @@ class GovernanceApiTests(TestCase):
         self.assertEqual(defaults.status_code, 200)
         self.assertEqual(len(defaults.data["role_defaults"]), 21)
         self.assertTrue(all(row["permitted_actions"] for row in defaults.data["role_defaults"]))
+        self.assertTrue(all(row["execution_mode"] == "DIRECT_SUPERUSER" for row in defaults.data["role_defaults"]))
 
         for history_type in ("individual", "role-defaults", "decisions"):
             response = client.get(f"/api/v1/staff/governance/history/{history_type}/")
@@ -300,6 +324,18 @@ class GovernanceApiTests(TestCase):
             format="json",
         )
         self.assertEqual(missing_reason.status_code, 400)
+
+        unsafe_reason = client.post(
+            "/api/v1/staff/governance/superuser-actions/",
+            {
+                "operation": "ROLE_DEFAULT_ENABLE",
+                "capability": CapabilityDefinition.PERSON_CONTACT_READ,
+                "role_id": role.pk,
+                "reason": "password=should-not-be-recorded",
+            },
+            format="json",
+        )
+        self.assertEqual(unsafe_reason.status_code, 400)
 
         role_change = client.post(
             "/api/v1/staff/governance/superuser-actions/",
@@ -344,6 +380,18 @@ class GovernanceApiTests(TestCase):
     def test_superuser_without_crm_role_cannot_read_governance(self):
         superuser = self.create_staff("governance-api-no-role-superuser@example.com", superuser=True)
         response = self.login(superuser).get("/api/v1/staff/governance/targets/")
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_staff_capability_holder_cannot_read_governance(self):
+        business_user = User.objects.create_user(
+            email="governance-api-business-admin@example.com",
+            password=self.password,
+            person_first_name="Business",
+            person_last_name="Administrator",
+            person_record_type=Person.RecordType.TECHNICAL,
+        )
+        StaffRoleAssignment.objects.create(user=business_user, role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN))
+        response = self.login(business_user).get("/api/v1/staff/governance/targets/")
         self.assertEqual(response.status_code, 403)
 
     def test_histories_expose_proposals_and_decisions_without_personal_contact_data(self):

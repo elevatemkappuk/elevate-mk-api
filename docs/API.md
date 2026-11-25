@@ -441,9 +441,13 @@ authenticated administrator. For ordinary administrators it is empty while a
 matching proposal is pending; otherwise it contains the applicable
 `ROLE_DEFAULT_ENABLE` or `ROLE_DEFAULT_DISABLE` operation. An admitted
 superuser receives the applicable direct operation even when an ordinary
-proposal is pending, and the CRM sends it to `/superuser-actions/`. Clients
-must not infer authorization from the current state or reproduce governance
-rules locally.
+proposal is pending, with `execution_mode: DIRECT_SUPERUSER`; ordinary rows use
+`execution_mode: PROPOSAL`. The CRM sends direct rows to `/superuser-actions/`.
+Clients must not infer authorization from the current state or reproduce
+governance rules locally.
+
+Target capability projections include `permitted_action_modes`, mapping each
+backend-permitted operation to `DIRECT`, `PROPOSAL`, or `DIRECT_SUPERUSER`.
 
 Proposal payloads likewise include backend-calculated `permitted_actions`:
 the proposer receives only `cancel`, while a distinct ordinary authorized

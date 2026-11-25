@@ -20,6 +20,7 @@ from staff_access.models import (
     StaffEmailChangeRequest,
     StaffInvitation,
     StaffRole,
+    INDIVIDUAL_PROPOSAL_OPERATIONS,
 )
 from staff_access.permissions import (
     CRM_EFFECTIVE_ACCESS_DISCLOSURE_ALLOWLIST,
@@ -101,6 +102,8 @@ class GovernanceReadPermission(IsAuthenticated):
             return False
         if request.user.is_superuser:
             return user_has_any_active_staff_role(request.user, StaffRole.canonical_codes())
+        if getattr(request.user.person, "record_type", None) != Person.RecordType.STAFF:
+            return False
         return user_has_capability(
             request.user,
             CapabilityDefinition.STAFF_CAPABILITY_ADMIN,
@@ -179,6 +182,21 @@ def _governance_objects(data):
     return capability, role, target
 
 
+def _action_execution_mode(*, actor, capability, operation):
+    if actor.is_superuser:
+        return "DIRECT_SUPERUSER"
+    if (
+        capability.code == CapabilityDefinition.STAFF_CAPABILITY_ADMIN
+        and operation in {
+            CapabilityProposal.Operation.INDIVIDUAL_GRANT,
+            CapabilityProposal.Operation.INDIVIDUAL_RESTORE,
+            CapabilityProposal.Operation.INDIVIDUAL_UNRESTRICT,
+        }
+    ):
+        return "PROPOSAL"
+    return "DIRECT"
+
+
 class StaffEffectiveAccessView(APIView):
     authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, HasCrmOperationalAccess]
@@ -252,6 +270,7 @@ class GovernanceTargetDetailView(APIView):
                     "assignment_state": None if assignment is None else assignment.state,
                     "restriction_active": restriction is not None,
                     "permitted_actions": [],
+                    "permitted_action_modes": {},
                 }
                 continue
             if assignment is None and restriction is None:
@@ -266,10 +285,19 @@ class GovernanceTargetDetailView(APIView):
                 actions.append(CapabilityProposal.Operation.INDIVIDUAL_RESTRICT)
             else:
                 actions.append(CapabilityProposal.Operation.INDIVIDUAL_UNRESTRICT)
+            action_modes = {
+                action: _action_execution_mode(
+                    actor=request.user,
+                    capability=capability,
+                    operation=action,
+                )
+                for action in actions
+            }
             capability_state[capability.code] = {
                 "assignment_state": None if assignment is None else assignment.state,
                 "restriction_active": restriction is not None,
                 "permitted_actions": sorted(set(actions)),
+                "permitted_action_modes": action_modes,
             }
 
         return Response({
@@ -360,6 +388,7 @@ class GovernanceRoleDefaultsView(APIView):
                         if is_enabled
                         else CapabilityProposal.Operation.ROLE_DEFAULT_ENABLE
                     ],
+                    "execution_mode": "DIRECT_SUPERUSER" if request.user.is_superuser else "PROPOSAL",
                 })
         return Response({
             "policy_version": CapabilityPolicyState.objects.get(
@@ -378,9 +407,17 @@ class GovernanceProposalCreateView(APIView):
         serializer.is_valid(raise_exception=True)
         try:
             capability, role, target = _governance_objects(serializer.validated_data)
+            operation = serializer.validated_data["operation"]
+            if operation not in CapabilityProposal.ROLE_DEFAULT_OPERATIONS and not (
+                capability.code == "STAFF_CAPABILITY_ADMIN"
+                and operation in INDIVIDUAL_PROPOSAL_OPERATIONS
+            ):
+                raise serializers.ValidationError(
+                    "This operation is not available through the proposal workflow."
+                )
             proposal = create_capability_proposal(
                 actor_user=request.user,
-                operation=serializer.validated_data["operation"],
+                operation=operation,
                 capability=capability,
                 reason=serializer.validated_data["reason"],
                 role=role,
