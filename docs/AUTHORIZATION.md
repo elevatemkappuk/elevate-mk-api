@@ -387,3 +387,22 @@ Current targeted evidence: the isolated PostgreSQL focused authorization and
 privacy regression set passed 69/69, including the 9/9 remediation subset.
 This verifies the local implementation only; operational activation and
 cross-repository runtime behavior remain unverified.
+## Phase 1A.4D privacy and legal-hold API authorization
+
+The privacy-audit history endpoint requires CRM session authentication, an
+active operational CRM role, `PRIVACY_AUDIT_READ`, and an authorized Community,
+Business-compatible, or Staff Person scope. Technical Persons are denied.
+`LEGAL_HOLD_ADMIN` independently authorizes hold administration and does not
+require `PRIVACY_AUDIT_READ`. Django superuser operations remain the approved
+audited exception and still require CRM admission.
+
+Authorization and Person scope are enforced before filtering, counts, and
+pagination. Denials use safe opaque references and reason codes. Mobile JWT
+authentication and `/auth/me/` remain unchanged. Capability disclosure remains
+the existing narrow projection until the CRM parser is updated in the
+coordinated frontend rollout.
+
+The backend continues to disclose only the existing `STAFF_CAPABILITY_ADMIN`
+allowlist until the CRM parser is coordinated. `PRIVACY_AUDIT_READ` and
+`LEGAL_HOLD_ADMIN` are enforced by the new backend endpoints but are not yet
+advertised to the unchanged CRM client.

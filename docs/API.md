@@ -3081,3 +3081,29 @@ approval workflow. Anonymous Join remains generic; an existing-record member
 is prompted to review the composed canonical profile after authentication.
 Review Profile followed by explicit acknowledgement and the My Profile
 Looks Good action both use this acknowledgement behavior.
+## Phase 1A.4D backend privacy contracts
+
+Implemented / runtime-unverified: the API now defines separate CRM-session
+routes for privacy audit history and legal-hold administration. Privacy audit
+history is exposed at `GET /api/v1/people/{person_id}/privacy-audit-history/`
+with bounded `page`, `page_size`, `occurred_from`, `occurred_to`,
+`activity_type`, `outcome`, and `superuser_operation` filters. Authorization is
+evaluated before filtering and pagination. Responses omit raw metadata,
+credentials, unrestricted identifiers, and legal-hold justifications.
+
+Legal-hold routes are:
+
+- `GET|POST /api/v1/privacy/legal-holds/`
+- `GET /api/v1/privacy/legal-holds/{id}/`
+- `POST /api/v1/privacy/legal-holds/{public_id}/release-requests/`
+- `POST /api/v1/privacy/legal-hold-release-requests/{public_id}/approve/`
+- `POST /api/v1/privacy/legal-hold-release-requests/{public_id}/reject/`
+- `POST /api/v1/privacy/legal-holds/{public_id}/direct-release/` for the audited Django-superuser exception.
+
+They use the existing service layer, CRM session authentication, opaque public
+hold identifiers, `LEGAL_HOLD_ADMIN`, mandatory reasons, and audited release
+transitions. Rejection transport is not yet implemented because the existing
+transitions. Release requests are `PENDING`, `APPROVED`, or `REJECTED`;
+rejection preserves the active hold and permits a subsequent request. Ordinary
+approval and rejection require a distinct authorized decision-maker. The direct
+release route is superuser-only and remains CRM-admitted and audited.

@@ -442,3 +442,25 @@ before/resulting state; raw AuditEvent metadata is not exposed.
 The API denial and projection behavior is implemented and the 17-test focused
 governance run passed in isolated PostgreSQL. Angular validation and
 independent OWASP acceptance for this batch remain separately unverified.
+## Phase 1A.4D privacy history and legal holds
+
+Implemented / runtime-unverified. The backend exposes a dedicated privacy audit
+history projection separate from operational Person History and CRM-session
+legal-hold routes backed by the existing privacy services. `PRIVACY_AUDIT_READ`
+and `LEGAL_HOLD_ADMIN` remain independent capabilities. Person scope,
+authorization, filters, counts, and pagination are evaluated server-side.
+
+Privacy projections use safe actor and event fields; raw metadata, credentials,
+unrestricted identifiers, and full legal-hold justifications are excluded.
+Future legal-hold lifecycle events preserve normalized Person associations when
+an authoritative relationship exists. Historical reconciliation and backfill
+remain deferred and require separate approval; unresolved records remain
+protected from retention disposal.
+
+The existing release-request model supports pending and approved states only.
+Release requests now support pending, approved, and rejected states through
+`audit.0023_legalhold_release_rejection`; rejection preserves the active hold
+and permits a subsequent request. No retention
+automation, deletion, anonymisation, or GDPR-FUTURE-001 implementation is part
+of this stage. Runtime tests, migration application, CRM integration, and OWASP
+acceptance remain unverified until consolidated Phase 1A.4D.4 validation.

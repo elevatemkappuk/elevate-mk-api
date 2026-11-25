@@ -1,4 +1,5 @@
 from django.db.models import Q
+import hashlib
 
 from audit.models import AuditEvent
 from staff_access.models import StaffRole
@@ -143,9 +144,45 @@ def get_privacy_audit_queryset_for_user(user, *, person):
     ):
         return AuditEvent.objects.none()
     return AuditEvent.objects.privacy().select_related("actor_user").only(
-        "id", "action", "entity_type", "entity_id", "actor_user", "occurred_at"
+        "id",
+        "action",
+        "entity_type",
+        "entity_id",
+        "actor_user",
+        "actor_user__email",
+        "occurred_at",
+        "changes",
     ).filter(build_person_audit_scope_q(person.pk)).order_by("-occurred_at", "-id")
 
 
 def is_safe_change_scalar(value):
     return value is None or isinstance(value, (bool, int, float, str))
+
+
+def record_privacy_authorization_failure(*, request, denial_code, person_id=None, operation="PRIVACY_READ"):
+    """Persist a safe privacy denial without recording request data or identifiers."""
+    from audit.services import record_audit_event
+
+    actor = getattr(request, "user", None)
+    if not getattr(actor, "is_authenticated", False):
+        actor = None
+    target = "privacy"
+    if person_id is not None:
+        target = hashlib.sha256(f"privacy-person:{person_id}".encode()).hexdigest()[:24]
+    try:
+        record_audit_event(
+            action=AuditEvent.Action.CAPABILITY_PERMISSION_MUTATED,
+            actor_user=actor,
+            entity_type="PrivacyAuthorization",
+            entity_id=target,
+            metadata={
+                "event_type": "PRIVACY_AUTHORIZATION_DENIED",
+                "denial_code": str(denial_code),
+                "operation": str(operation),
+                "outcome": "DENIED",
+            },
+            audit_domain=AuditEvent.Domain.PRIVACY,
+        )
+    except Exception:
+        return False
+    return True

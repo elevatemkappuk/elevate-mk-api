@@ -407,6 +407,7 @@ class LegalHoldReleaseRequest(models.Model):
     class Status(models.TextChoices):
         PENDING = "PENDING", "Pending"
         APPROVED = "APPROVED", "Approved"
+        REJECTED = "REJECTED", "Rejected"
 
     public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     legal_hold = models.ForeignKey(
@@ -431,6 +432,15 @@ class LegalHoldReleaseRequest(models.Model):
     )
     approved_at = models.DateTimeField(null=True, blank=True)
     approval_reason = models.TextField(blank=True)
+    rejected_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="legal_hold_release_rejections",
+    )
+    rejected_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     objects = ImmutableRetentionQuerySet.as_manager()

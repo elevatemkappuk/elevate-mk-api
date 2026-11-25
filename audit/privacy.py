@@ -50,6 +50,10 @@ def create_legal_hold(*, actor_user, reason, person=None, audit_event=None, requ
         reason=reason,
         placed_by=actor_user,
     )
+    subject_person = person
+    if subject_person is None and audit_event is not None:
+        subject = audit_event.subjects.filter(subject_type=AuditEventSubject.SubjectType.PERSON).first()
+        subject_person = getattr(subject, "person", None)
     record_audit_event(
         action=AuditEvent.Action.LEGAL_HOLD_PLACED,
         actor_user=actor_user,
@@ -57,6 +61,7 @@ def create_legal_hold(*, actor_user, reason, person=None, audit_event=None, requ
         entity_id=hold.public_id,
         metadata={"scope": hold.scope, "person_id": str(person.pk) if person is not None else None},
         audit_domain=AuditEvent.Domain.PRIVACY,
+        subject_person=subject_person,
     )
     return hold
 
@@ -72,6 +77,10 @@ def request_legal_hold_release(*, actor_user, hold, reason):
         reason=reason,
         requested_by=actor_user,
     )
+    subject_person = hold.person
+    if subject_person is None and hold.audit_event_id:
+        subject = hold.audit_event.subjects.filter(subject_type=AuditEventSubject.SubjectType.PERSON).first()
+        subject_person = getattr(subject, "person", None)
     record_audit_event(
         action=AuditEvent.Action.LEGAL_HOLD_RELEASE_REQUESTED,
         actor_user=actor_user,
@@ -79,6 +88,7 @@ def request_legal_hold_release(*, actor_user, hold, reason):
         entity_id=hold.public_id,
         metadata={"release_request_id": str(request.public_id)},
         audit_domain=AuditEvent.Domain.PRIVACY,
+        subject_person=subject_person,
     )
     return request
 
@@ -105,6 +115,10 @@ def approve_legal_hold_release(*, actor_user, release_request, reason):
     hold.released_at = timezone.now()
     hold.release_reason = reason
     hold.save(update_fields=["status", "released_by", "released_at", "release_reason", "updated_at"])
+    subject_person = hold.person
+    if subject_person is None and hold.audit_event_id:
+        subject = hold.audit_event.subjects.filter(subject_type=AuditEventSubject.SubjectType.PERSON).first()
+        subject_person = getattr(subject, "person", None)
     record_audit_event(
         action=AuditEvent.Action.LEGAL_HOLD_RELEASED,
         actor_user=actor_user,
@@ -112,8 +126,42 @@ def approve_legal_hold_release(*, actor_user, release_request, reason):
         entity_id=hold.public_id,
         metadata={"release_request_id": str(release_request.public_id)},
         audit_domain=AuditEvent.Domain.PRIVACY,
+        subject_person=subject_person,
     )
     return hold
+
+
+@transaction.atomic
+def reject_legal_hold_release(*, actor_user, release_request, reason):
+    _require_manager(actor_user)
+    reason = _reason(reason)
+    release_request = LegalHoldReleaseRequest.objects.select_for_update().select_related("legal_hold", "requested_by").get(pk=release_request.pk)
+    hold = LegalHold.objects.select_for_update().get(pk=release_request.legal_hold_id)
+    if release_request.status != LegalHoldReleaseRequest.Status.PENDING:
+        raise ValidationError("The release request is no longer pending.")
+    if hold.status != LegalHold.Status.ACTIVE:
+        raise ValidationError("The legal hold is no longer active.")
+    if release_request.requested_by_id == actor_user.pk and not getattr(actor_user, "is_superuser", False):
+        raise PermissionDenied("A legal-hold release cannot be self-rejected.")
+    release_request.status = LegalHoldReleaseRequest.Status.REJECTED
+    release_request.rejected_by = actor_user
+    release_request.rejected_at = timezone.now()
+    release_request.rejection_reason = reason
+    release_request.save(update_fields=["status", "rejected_by", "rejected_at", "rejection_reason"])
+    subject_person = hold.person
+    if subject_person is None and hold.audit_event_id:
+        subject = hold.audit_event.subjects.filter(subject_type=AuditEventSubject.SubjectType.PERSON).first()
+        subject_person = getattr(subject, "person", None)
+    record_audit_event(
+        action=AuditEvent.Action.LEGAL_HOLD_RELEASE_REQUESTED,
+        actor_user=actor_user,
+        entity_type="LegalHoldReleaseRequest",
+        entity_id=release_request.public_id,
+        metadata={"lifecycle": "REJECTED", "release_request_id": str(release_request.public_id)},
+        audit_domain=AuditEvent.Domain.PRIVACY,
+        subject_person=subject_person,
+    )
+    return release_request
 
 
 @transaction.atomic

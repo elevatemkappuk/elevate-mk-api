@@ -1589,3 +1589,11 @@ No disposal or operational-database migration is enabled by this stage.
 Current targeted evidence: isolated PostgreSQL migration and schema checks
 passed, the remediation subset passed 9/9, and the broader authorized focused
 set passed 69/69. The configured operational database was not migrated.
+### Phase 1A.4D release rejection migration
+
+Migration `audit.0023_legalhold_release_rejection` adds the `REJECTED` release
+request state and immutable rejection actor, timestamp, and reason fields.
+Existing pending and approved records are preserved. The existing conditional
+unique constraint continues to allow one pending request per hold while
+permitting a new request after rejection. Migration application remains
+unverified in this implementation stage.
