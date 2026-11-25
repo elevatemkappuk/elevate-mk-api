@@ -1,4 +1,6 @@
 from django.db import transaction
+import logging
+import hashlib
 from rest_framework.permissions import BasePermission
 
 from audit.models import AuditEvent
@@ -16,6 +18,46 @@ from staff_access.models import (
 PRIVACY_CAPABILITY_CODES = frozenset(CapabilityDefinition.canonical_codes())
 CRM_EFFECTIVE_ACCESS_DISCLOSURE_ALLOWLIST = frozenset({CapabilityDefinition.STAFF_CAPABILITY_ADMIN})
 CRM_OPERATIONAL_ROLE_CODES = tuple(code for code, _name in StaffRole.CANONICAL_ROLES)
+GOVERNANCE_DENIAL_ACTION = AuditEvent.Action.CAPABILITY_PERMISSION_MUTATED
+logger = logging.getLogger(__name__)
+
+
+def _governance_target_reference(request):
+    data = getattr(request, "data", {}) or {}
+    for key in ("target_user_id", "role_id", "proposal_id"):
+        value = data.get(key)
+        if value not in (None, ""):
+            return hashlib.sha256(f"governance:{key}:{value}".encode()).hexdigest()[:24]
+    return "governance"
+
+
+def record_governance_authorization_failure(*, request, denial_code, operation=None):
+    allowed_operations = {
+        "ROLE_DEFAULT_ENABLE", "ROLE_DEFAULT_DISABLE", "INDIVIDUAL_GRANT",
+        "INDIVIDUAL_RESTORE", "INDIVIDUAL_SUSPEND", "INDIVIDUAL_REVOKE",
+        "INDIVIDUAL_RESTRICT", "INDIVIDUAL_UNRESTRICT", "approve", "reject", "cancel",
+    }
+    actor = getattr(request, "user", None)
+    if not getattr(actor, "is_authenticated", False):
+        actor = None
+    normalized_operation = operation if isinstance(operation, str) and operation in allowed_operations else "UNKNOWN"
+    try:
+        record_audit_event(
+            action=GOVERNANCE_DENIAL_ACTION,
+            actor_user=actor,
+            entity_type="GovernanceAuthorization",
+            entity_id=_governance_target_reference(request),
+            metadata={
+                "event_type": "GOVERNANCE_AUTHORIZATION_DENIED",
+                "denial_code": str(denial_code),
+                "operation": normalized_operation,
+                "outcome": "DENIED",
+            },
+        )
+    except Exception:
+        # Preserve the original authorization response if audit persistence is unavailable;
+        # the denied operation has not entered a governance mutation transaction.
+        logger.exception("Failed to persist governance authorization denial audit event.")
 
 
 def get_active_staff_role_codes_for_user(user):

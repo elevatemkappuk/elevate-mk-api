@@ -1,11 +1,13 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Q
+import hashlib
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 from rest_framework import generics, serializers, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from audit.models import AuditEvent
 
 from accounts.authentication import CRM_SESSION_AUTHENTICATION_CLASSES
 from staff_access.models import (
@@ -20,13 +22,13 @@ from staff_access.models import (
     StaffEmailChangeRequest,
     StaffInvitation,
     StaffRole,
-    INDIVIDUAL_PROPOSAL_OPERATIONS,
 )
 from staff_access.permissions import (
     CRM_EFFECTIVE_ACCESS_DISCLOSURE_ALLOWLIST,
     HasActiveStaffRoleCodes,
     HasCrmOperationalAccess,
     get_effective_capability_codes_for_user,
+    record_governance_authorization_failure,
     user_has_any_active_staff_role,
 )
 from staff_access.serializers import (
@@ -73,23 +75,32 @@ class OrdinaryGovernancePermission(IsAuthenticated):
     message = "An active, non-superuser privacy administrator is required."
 
     def has_permission(self, request, view):
-        return (
-            super().has_permission(request, view)
-            and not request.user.is_superuser
-            and user_has_capability(request.user, CapabilityDefinition.STAFF_CAPABILITY_ADMIN, request=request)
-        )
+        if not super().has_permission(request, view):
+            record_governance_authorization_failure(request=request, denial_code="AUTHENTICATION_REQUIRED")
+            return False
+        if request.user.is_superuser:
+            record_governance_authorization_failure(request=request, denial_code="SUPERUSER_WRONG_EXECUTION_PATH")
+            return False
+        allowed = user_has_capability(request.user, CapabilityDefinition.STAFF_CAPABILITY_ADMIN, request=request)
+        if not allowed:
+            record_governance_authorization_failure(request=request, denial_code="STAFF_CAPABILITY_ADMIN_REQUIRED", operation=request.data.get("operation"))
+        return allowed
 
 
 class SuperuserGovernancePermission(IsAuthenticated):
     message = "An active Django superuser with CRM access is required."
 
     def has_permission(self, request, view):
-        return (
-            super().has_permission(request, view)
-            and request.user.is_active
-            and request.user.is_superuser
-            and user_has_any_active_staff_role(request.user, StaffRole.canonical_codes())
-        )
+        if not super().has_permission(request, view):
+            record_governance_authorization_failure(request=request, denial_code="AUTHENTICATION_REQUIRED")
+            return False
+        if not request.user.is_active or not request.user.is_superuser:
+            record_governance_authorization_failure(request=request, denial_code="SUPERUSER_REQUIRED")
+            return False
+        allowed = user_has_any_active_staff_role(request.user, StaffRole.canonical_codes())
+        if not allowed:
+            record_governance_authorization_failure(request=request, denial_code="CRM_ROLE_REQUIRED")
+        return allowed
 
 
 class GovernanceReadPermission(IsAuthenticated):
@@ -98,17 +109,28 @@ class GovernanceReadPermission(IsAuthenticated):
     message = "An authorized privacy administrator is required."
 
     def has_permission(self, request, view):
-        if not super().has_permission(request, view) or not request.user.is_active:
+        if not super().has_permission(request, view):
+            record_governance_authorization_failure(request=request, denial_code="AUTHENTICATION_REQUIRED")
+            return False
+        if not request.user.is_active:
+            record_governance_authorization_failure(request=request, denial_code="INACTIVE_ACCOUNT")
             return False
         if request.user.is_superuser:
-            return user_has_any_active_staff_role(request.user, StaffRole.canonical_codes())
+            allowed = user_has_any_active_staff_role(request.user, StaffRole.canonical_codes())
+            if not allowed:
+                record_governance_authorization_failure(request=request, denial_code="CRM_ROLE_REQUIRED")
+            return allowed
         if getattr(request.user.person, "record_type", None) != Person.RecordType.STAFF:
+            record_governance_authorization_failure(request=request, denial_code="STAFF_PERSON_REQUIRED")
             return False
-        return user_has_capability(
+        allowed = user_has_capability(
             request.user,
             CapabilityDefinition.STAFF_CAPABILITY_ADMIN,
             request=request,
         )
+        if not allowed:
+            record_governance_authorization_failure(request=request, denial_code="STAFF_CAPABILITY_ADMIN_REQUIRED")
+        return allowed
 
 
 def _governance_error(error):
@@ -125,6 +147,31 @@ def _governance_error(error):
     return serializers.ValidationError(str(error))
 
 
+def _governance_denial_code(error):
+    message = str(error).lower()
+    if "proposer" in message and "approve" in message:
+        return "SELF_APPROVAL_PROHIBITED"
+    if "self" in message:
+        return "SELF_ADMINISTRATION_PROHIBITED"
+    if "target" in message and "eligible" in message:
+        return "TARGET_INELIGIBLE"
+    if "policy" in message and "stale" in message:
+        return "STALE_POLICY"
+    if "restricted" in message:
+        return "ACTIVE_RESTRICTION"
+    if "superuser" in message:
+        return "SUPERUSER_AUTHORITY_REQUIRED"
+    return "GOVERNANCE_POLICY_DENIED"
+
+
+def _is_security_relevant_validation(error):
+    message = str(error).lower()
+    return any(token in message for token in (
+        "acting user", "active staff", "canonical crm role", "eligible",
+        "restricted", "self-approval", "self administration",
+    ))
+
+
 def _pending_proposal_conflict(*, target_user=None, role=None, capability=None):
     filters = {"status": CapabilityProposal.Status.PENDING, "capability": capability}
     filters["target_user" if target_user is not None else "role"] = target_user or role
@@ -136,6 +183,26 @@ def _pending_proposal_conflict(*, target_user=None, role=None, capability=None):
     if proposal is not None:
         payload["proposal_id"] = str(proposal.public_id)
     return Response(payload, status=status.HTTP_409_CONFLICT)
+
+
+def _safe_state_summary(snapshot):
+    snapshot = snapshot or {}
+    if snapshot.get("target_kind") == "role_default":
+        role_default = snapshot.get("role_default") or {}
+        return {
+            "target_kind": "role_default",
+            "role_active": bool(snapshot.get("role_active")),
+            "enabled": role_default.get("enabled"),
+        }
+    assignment = snapshot.get("assignment") or {}
+    restriction = snapshot.get("restriction") or {}
+    return {
+        "target_kind": "individual",
+        "target_active": bool(snapshot.get("target_user_is_active")),
+        "active_role_codes": list(snapshot.get("target_active_role_codes") or []),
+        "assignment_state": assignment.get("state"),
+        "restriction_active": bool(restriction.get("active")),
+    }
 
 
 def _proposal_payload(proposal, *, actor=None):
@@ -155,7 +222,7 @@ def _proposal_payload(proposal, *, actor=None):
         "proposed_by_id": proposal.proposed_by_id,
         "reason": proposal.reason,
         "policy_version": proposal.policy_version,
-        "expected_target_state": proposal.expected_target_state,
+        "expected_target_state": _safe_state_summary(proposal.expected_target_state),
         "expires_at": proposal.expires_at,
         "created_at": proposal.created_at,
         "resolved_at": proposal.resolved_at,
@@ -168,6 +235,40 @@ def _proposal_payload(proposal, *, actor=None):
             "created_at": decision.created_at,
         },
         "permitted_actions": permitted_actions,
+        "history_entry_type": "proposal",
+        "actor_user_id": proposal.proposed_by_id,
+        "timestamp": proposal.created_at,
+        "target_label": f"Role {proposal.role.code}" if proposal.role_id else f"User {proposal.target_user_id}",
+        "proposed_state": _safe_state_summary(proposal.expected_target_state),
+        "superuser_operation": False,
+    }
+
+
+def _direct_audit_history_payload(event):
+    metadata = event.metadata or {}
+    changes = event.changes or {}
+    capability_id = metadata.get("capability_id")
+    capability = CapabilityDefinition.objects.filter(pk=capability_id).values_list("code", flat=True).first()
+    role_id = metadata.get("target_role_id")
+    target_user_id = metadata.get("target_user_id")
+    return {
+        "public_id": f"audit-{hashlib.sha256(f'audit:{event.pk}'.encode()).hexdigest()[:24]}",
+        "history_entry_type": "audit",
+        "operation": metadata.get("operation", "GOVERNANCE_MUTATION"),
+        "status": "APPROVED",
+        "role_id": role_id,
+        "role_code": StaffRole.objects.filter(pk=role_id).values_list("code", flat=True).first() if role_id else None,
+        "target_user_id": target_user_id,
+        "target_label": f"Role {StaffRole.objects.filter(pk=role_id).values_list('code', flat=True).first()}" if role_id else f"User {target_user_id}",
+        "capability": capability or "UNKNOWN",
+        "actor_user_id": event.actor_user_id,
+        "timestamp": event.occurred_at,
+        "reason": metadata.get("reason"),
+        "proposed_state": changes.get("before") if "before" in changes else _safe_state_summary(changes.get("before_state")),
+        "resulting_state": changes.get("after") if "after" in changes else _safe_state_summary(changes.get("after_state")),
+        "decision": {"outcome": "APPLIED", "decided_by_id": event.actor_user_id, "created_at": event.occurred_at},
+        "superuser_operation": metadata.get("superuser_authority") is True,
+        "permitted_actions": [],
     }
 
 
@@ -250,10 +351,31 @@ class GovernanceTargetDetailView(APIView):
 
         assignments = StaffCapabilityAssignment.objects.filter(
             user=target,
-            state__in=StaffCapabilityAssignment.current_states(),
+            state__in=(
+                StaffCapabilityAssignment.State.ACTIVE,
+                StaffCapabilityAssignment.State.SUSPENDED,
+                StaffCapabilityAssignment.State.REVOKED,
+            ),
         ).select_related("capability")
         restrictions = StaffCapabilityRestriction.objects.active().filter(user=target).select_related("capability")
         role_assignments = target.staff_role_assignments.select_related("role").order_by("role__code")
+        active_role_codes = {
+            item.role.code for item in role_assignments
+            if item.is_active and item.role.is_active and item.role.code in StaffRole.canonical_codes()
+        }
+        enabled_role_default_codes = set(
+            RoleCapabilityDefault.objects.filter(
+                role__code__in=active_role_codes,
+                role__is_active=True,
+                is_enabled=True,
+            ).values_list("capability__code", flat=True)
+        )
+        pending_target_proposals = {
+            item.capability_id: item for item in CapabilityProposal.objects.filter(
+                target_user=target,
+                status=CapabilityProposal.Status.PENDING,
+            ).order_by("-created_at")
+        }
         target_is_eligible = (
             (request.user.is_superuser or target.pk != request.user.pk)
             and target.is_active
@@ -264,6 +386,38 @@ class GovernanceTargetDetailView(APIView):
         for capability in CapabilityDefinition.objects.filter(is_active=True).order_by("code"):
             assignment = next((item for item in assignments if item.capability_id == capability.pk), None)
             restriction = next((item for item in restrictions if item.capability_id == capability.pk and item.is_active), None)
+            pending = pending_target_proposals.get(capability.pk)
+            target_can_evaluate = bool(target.is_active and active_role_codes)
+            if target.is_superuser and target.is_active:
+                effective = True
+                effective_sources = ["SUPERUSER_BYPASS"]
+                effective_reason = "Effective through the audited Django superuser bypass."
+            elif not target_can_evaluate:
+                effective = False
+                effective_sources = []
+                effective_reason = "The target is inactive or has no active operational CRM role."
+            elif restriction is not None:
+                effective = False
+                effective_sources = ["EXPLICIT_RESTRICTION"]
+                effective_reason = "Explicit restriction overrides grants and role defaults."
+            elif capability.code in enabled_role_default_codes or (assignment is not None and assignment.state == StaffCapabilityAssignment.State.ACTIVE):
+                effective = True
+                effective_sources = (["ROLE_DEFAULT"] if capability.code in enabled_role_default_codes else []) + (["INDIVIDUAL_GRANT"] if assignment is not None and assignment.state == StaffCapabilityAssignment.State.ACTIVE else [])
+                effective_reason = "Effective from an active role default or individual grant."
+            elif assignment is not None and assignment.state in (StaffCapabilityAssignment.State.SUSPENDED, StaffCapabilityAssignment.State.REVOKED):
+                effective = False
+                effective_sources = [assignment.state]
+                effective_reason = f"The individual assignment is {assignment.state.lower()}; no active role default grants this capability."
+            else:
+                effective = False
+                effective_sources = []
+                effective_reason = "No active role default or individual grant is present."
+            explanation = {
+                "effective": effective,
+                "sources": effective_sources,
+                "reason": effective_reason,
+                "pending_change": None if pending is None else {"operation": pending.operation, "status": pending.status},
+            }
             actions = []
             if not target_is_eligible:
                 capability_state[capability.code] = {
@@ -271,9 +425,11 @@ class GovernanceTargetDetailView(APIView):
                     "restriction_active": restriction is not None,
                     "permitted_actions": [],
                     "permitted_action_modes": {},
+                    "effective": effective,
+                    "effective_explanation": explanation,
                 }
                 continue
-            if assignment is None and restriction is None:
+            if (assignment is None or assignment.state == StaffCapabilityAssignment.State.REVOKED) and restriction is None:
                 actions.append(CapabilityProposal.Operation.INDIVIDUAL_GRANT)
             elif assignment is not None and assignment.state == StaffCapabilityAssignment.State.SUSPENDED and restriction is None:
                 actions.append(CapabilityProposal.Operation.INDIVIDUAL_RESTORE)
@@ -298,6 +454,8 @@ class GovernanceTargetDetailView(APIView):
                 "restriction_active": restriction is not None,
                 "permitted_actions": sorted(set(actions)),
                 "permitted_action_modes": action_modes,
+                "effective": effective,
+                "effective_explanation": explanation,
             }
 
         return Response({
@@ -410,8 +568,17 @@ class GovernanceProposalCreateView(APIView):
             operation = serializer.validated_data["operation"]
             if operation not in CapabilityProposal.ROLE_DEFAULT_OPERATIONS and not (
                 capability.code == "STAFF_CAPABILITY_ADMIN"
-                and operation in INDIVIDUAL_PROPOSAL_OPERATIONS
+                and operation in {
+                    CapabilityProposal.Operation.INDIVIDUAL_GRANT,
+                    CapabilityProposal.Operation.INDIVIDUAL_RESTORE,
+                    CapabilityProposal.Operation.INDIVIDUAL_UNRESTRICT,
+                }
             ):
+                record_governance_authorization_failure(
+                    request=request,
+                    denial_code="INVALID_EXECUTION_MODE",
+                    operation=operation,
+                )
                 raise serializers.ValidationError(
                     "This operation is not available through the proposal workflow."
                 )
@@ -427,6 +594,8 @@ class GovernanceProposalCreateView(APIView):
         except IntegrityError:
             return _pending_proposal_conflict(target_user=target, role=role, capability=capability)
         except (DjangoValidationError, PermissionError, CapabilityDefinition.DoesNotExist, StaffRole.DoesNotExist, User.DoesNotExist) as error:
+            if isinstance(error, PermissionError) or _is_security_relevant_validation(error):
+                record_governance_authorization_failure(request=request, denial_code=_governance_denial_code(error), operation=serializer.validated_data.get("operation"))
             raise _governance_error(error)
         return Response(_proposal_payload(proposal, actor=request.user), status=status.HTTP_201_CREATED)
 
@@ -440,6 +609,11 @@ class GovernanceIndividualChangeView(APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         if data["operation"] in CapabilityProposal.ROLE_DEFAULT_OPERATIONS:
+            record_governance_authorization_failure(
+                request=request,
+                denial_code="INVALID_EXECUTION_MODE",
+                operation=data.get("operation"),
+            )
             raise serializers.ValidationError("Role-default changes must use the proposal workflow.")
         try:
             capability, _role, target = _governance_objects(data)
@@ -454,6 +628,8 @@ class GovernanceIndividualChangeView(APIView):
         except IntegrityError:
             return _pending_proposal_conflict(target_user=target, capability=capability)
         except (DjangoValidationError, PermissionError, CapabilityDefinition.DoesNotExist, User.DoesNotExist) as error:
+            if isinstance(error, PermissionError) or _is_security_relevant_validation(error):
+                record_governance_authorization_failure(request=request, denial_code=_governance_denial_code(error), operation=data.get("operation"))
             raise _governance_error(error)
         return Response(_proposal_payload(proposal, actor=request.user))
 
@@ -483,6 +659,8 @@ class GovernanceProposalActionView(APIView):
             else:
                 return Response({"detail": "Unknown proposal action."}, status=status.HTTP_404_NOT_FOUND)
         except (DjangoValidationError, PermissionError) as error:
+            if isinstance(error, PermissionError):
+                record_governance_authorization_failure(request=request, denial_code=_governance_denial_code(error), operation=action)
             raise _governance_error(error)
         return Response(_proposal_payload(result, actor=request.user))
 
@@ -501,7 +679,23 @@ class GovernanceHistoryView(APIView):
             proposals = proposals.filter(decision__isnull=False)
         else:
             return Response({"detail": "Unknown history type."}, status=status.HTTP_404_NOT_FOUND)
-        return Response({"results": [_proposal_payload(item, actor=request.user) for item in proposals[:200]]})
+        results = [_proposal_payload(item, actor=request.user) for item in proposals[:200]]
+        audit_events = AuditEvent.objects.filter(
+            action=AuditEvent.Action.CAPABILITY_PERMISSION_MUTATED,
+            metadata__mutation_phase="AFTER",
+            metadata__superuser_authority=True,
+        ).order_by("-occurred_at")[:200]
+        for event in audit_events:
+            metadata = event.metadata or {}
+            if history_type == "individual" and not metadata.get("target_user_id"):
+                continue
+            if history_type == "role-defaults" and not metadata.get("target_role_id"):
+                continue
+            if history_type == "decisions":
+                continue
+            results.append(_direct_audit_history_payload(event))
+        results.sort(key=lambda item: item.get("timestamp") or "", reverse=True)
+        return Response({"results": results[:200]})
 
 
 class GovernanceSuperuserActionView(APIView):
@@ -524,6 +718,8 @@ class GovernanceSuperuserActionView(APIView):
                 request=request,
             )
         except (DjangoValidationError, PermissionError, CapabilityDefinition.DoesNotExist, StaffRole.DoesNotExist, User.DoesNotExist) as error:
+            if isinstance(error, PermissionError):
+                record_governance_authorization_failure(request=request, denial_code=_governance_denial_code(error), operation=data.get("operation"))
             raise _governance_error(error)
         return Response({
             "status": "APPLIED",

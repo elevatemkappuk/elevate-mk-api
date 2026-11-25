@@ -414,10 +414,31 @@ not a substitute for secrets handling.
 - Horizontal escalation prevention: **Implemented; partially runtime verified.**
 - Vertical escalation prevention: **Implemented; partially runtime verified.**
 - Authorization revocation: **Implemented; runtime verified in focused paths.**
-- Security-sensitive authorization-failure logging: **Unverified**; no explicit
-  governance authorization-failure audit path was confirmed.
+- Security-sensitive authorization-failure logging: **Implemented; verified in
+  the focused 17/17 governance API run.** Denials use the canonical
+  `CAPABILITY_PERMISSION_MUTATED` audit action with
+  `event_type=GOVERNANCE_AUTHORIZATION_DENIED`, safe reason codes, an
+  opaque target reference, and no request payload or credentials.
 - Privileged-operation auditing: **Implemented; runtime verified in focused tests.**
 - Functional access-control regression testing: **Verified for the 17/17 API
   governance suite; broader cross-repository coverage remains separate.**
 - OWASP review: **Implemented scoped review; independent runtime security
   evidence remains unverified.**
+
+The governance API records applicable denials for missing capability,
+ineligible staff, CRM admission, prohibited execution paths and superuser
+admission failures. Domain denials raised after a governance transaction
+rolls back are recorded after rollback. Audit-write failures are logged
+server-side without changing the original authorization response.
+
+Target detail responses include backend-calculated `effective` and
+`effective_explanation` values. The explanation identifies role-default,
+individual-grant, explicit-restriction, suspended/revoked, superuser-bypass,
+or no-effective-grant sources and keeps pending proposals separate from the
+effective result. History combines safe proposal and direct-superuser AFTER
+projections with actor, timestamp, target, operation, outcome, reason, and
+before/resulting state; raw AuditEvent metadata is not exposed.
+
+The API denial and projection behavior is implemented and the 17-test focused
+governance run passed in isolated PostgreSQL. Angular validation and
+independent OWASP acceptance for this batch remain separately unverified.

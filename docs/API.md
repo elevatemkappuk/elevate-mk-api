@@ -455,6 +455,24 @@ administrator receives `approve` and `reject`. Admitted superusers can inspect
 proposal history but do not receive actions that would convert an ordinary
 proposal into a superuser operation. Terminal proposals expose no actions.
 
+Governance history is a safe projection rather than raw `AuditEvent` access.
+Entries identify operation, capability, target, actor, timestamp, outcome,
+reason and available before/resulting state. Direct superuser AFTER events are
+marked `superuser_operation: true`; credentials, contact fields and
+unrestricted audit metadata are excluded.
+
+Target detail capability states additionally provide backend-calculated
+`effective` and `effective_explanation` values. The explanation identifies
+effective sources and reason, including explicit restriction precedence and
+suspended/revoked assignment state; `pending_change` never changes the
+effective result. Angular must render these values and must not reproduce the
+evaluator.
+
+Applicable governance authorization denials use the canonical
+`CAPABILITY_PERMISSION_MUTATED` audit action with metadata
+`event_type: GOVERNANCE_AUTHORIZATION_DENIED`, a safe denial code, an
+allowlisted operation, `outcome: DENIED`, and an opaque target reference.
+
 ## OpenAPI Documentation
 Current documentation endpoints:
 

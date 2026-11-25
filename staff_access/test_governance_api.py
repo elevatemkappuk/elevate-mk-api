@@ -2,6 +2,7 @@ from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from accounts.models import User
+from audit.models import AuditEvent
 from people.models import Person
 from staff_access.models import (
     CapabilityDefinition,
@@ -91,6 +92,7 @@ class GovernanceApiTests(TestCase):
         self.assertNotIn("email", response.data)
         self.assertIn(CapabilityDefinition.PERSON_CONTACT_READ, response.data["capabilities"])
         self.assertIn("permitted_actions", response.data["capabilities"][CapabilityDefinition.PERSON_CONTACT_READ])
+        self.assertIn("effective_explanation", response.data["capabilities"][CapabilityDefinition.PERSON_CONTACT_READ])
 
     def test_staff_directory_is_searchable_without_contact_disclosure(self):
         response = self.admin_client.get("/api/v1/staff/governance/targets/?q=Governance")
@@ -181,6 +183,25 @@ class GovernanceApiTests(TestCase):
             ).exists()
         )
 
+        direct_operation = self.admin_client.post(
+            "/api/v1/staff/governance/proposals/",
+            {
+                "operation": "INDIVIDUAL_SUSPEND",
+                "capability": CapabilityDefinition.STAFF_CAPABILITY_ADMIN,
+                "target_user_id": self.target.pk,
+                "reason": "Suspension must use the direct governance path",
+            },
+            format="json",
+        )
+        self.assertEqual(direct_operation.status_code, 400)
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                action=AuditEvent.Action.CAPABILITY_PERMISSION_MUTATED,
+                metadata__event_type="GOVERNANCE_AUTHORIZATION_DENIED",
+                metadata__denial_code="INVALID_EXECUTION_MODE",
+            ).exists()
+        )
+
     def test_proposal_endpoint_rejects_operations_that_use_direct_path(self):
         response = self.admin_client.post(
             "/api/v1/staff/governance/proposals/",
@@ -234,7 +255,8 @@ class GovernanceApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         state = response.data["capabilities"][capability.code]
-        self.assertIsNone(state["assignment_state"])
+        self.assertEqual(state["assignment_state"], StaffCapabilityAssignment.State.REVOKED)
+        self.assertFalse(state["effective"])
         self.assertIn("INDIVIDUAL_GRANT", state["permitted_actions"])
 
     def test_target_projection_with_active_restriction_has_only_relevant_state(self):
@@ -246,6 +268,8 @@ class GovernanceApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         state = response.data["capabilities"][capability.code]
         self.assertTrue(state["restriction_active"])
+        self.assertFalse(state["effective"])
+        self.assertIn("EXPLICIT_RESTRICTION", state["effective_explanation"]["sources"])
         self.assertNotIn("INDIVIDUAL_GRANT", state["permitted_actions"])
 
     def test_target_projection_does_not_advertise_unsupported_suspend(self):
@@ -376,11 +400,23 @@ class GovernanceApiTests(TestCase):
                 state=StaffCapabilityAssignment.State.ACTIVE,
             ).exists()
         )
+        history = client.get("/api/v1/staff/governance/history/individual/")
+        self.assertEqual(history.status_code, 200)
+        direct_entries = [entry for entry in history.data["results"] if entry.get("superuser_operation")]
+        self.assertTrue(direct_entries)
+        self.assertTrue(any(entry.get("resulting_state") == StaffCapabilityAssignment.State.ACTIVE for entry in direct_entries))
 
     def test_superuser_without_crm_role_cannot_read_governance(self):
         superuser = self.create_staff("governance-api-no-role-superuser@example.com", superuser=True)
         response = self.login(superuser).get("/api/v1/staff/governance/targets/")
         self.assertEqual(response.status_code, 403)
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                action=AuditEvent.Action.CAPABILITY_PERMISSION_MUTATED,
+                actor_user=superuser,
+                metadata__event_type="GOVERNANCE_AUTHORIZATION_DENIED",
+            ).exists()
+        )
 
     def test_non_staff_capability_holder_cannot_read_governance(self):
         business_user = User.objects.create_user(
@@ -393,6 +429,14 @@ class GovernanceApiTests(TestCase):
         StaffRoleAssignment.objects.create(user=business_user, role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN))
         response = self.login(business_user).get("/api/v1/staff/governance/targets/")
         self.assertEqual(response.status_code, 403)
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                action=AuditEvent.Action.CAPABILITY_PERMISSION_MUTATED,
+                actor_user=business_user,
+                metadata__event_type="GOVERNANCE_AUTHORIZATION_DENIED",
+                metadata__denial_code="STAFF_PERSON_REQUIRED",
+            ).exists()
+        )
 
     def test_histories_expose_proposals_and_decisions_without_personal_contact_data(self):
         response = self.admin_client.get("/api/v1/staff/governance/history/individual/")
