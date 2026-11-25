@@ -338,9 +338,10 @@ Staff CRM session. The successful response contains exactly:
 }
 ```
 
-The `capability_codes` value is projected from the single approved CRM
-disclosure allowlist entry, `STAFF_CAPABILITY_ADMIN`; the other capability
-codes remain excluded. The endpoint admits only authenticated
+The historical `capability_codes` value was projected from the then-current
+single CRM disclosure allowlist entry, `STAFF_CAPABILITY_ADMIN`; the later
+Phase 1A.4D rollout expands the coordinated allowlist as documented below.
+The endpoint admits only authenticated
 sessions with an active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` role;
 anonymous callers receive `401`, non-CRM authenticated users receive `403`, and
 mobile JWTs are not accepted. Django `is_staff` or `is_superuser` alone does not
@@ -381,8 +382,9 @@ field visibility rules, so privacy events are excluded before count and
 pagination. The dedicated privacy projection service requires an active user,
 `PRIVACY_AUDIT_READ`, and an authorized business-domain Person scope before
 returning privacy-domain events; STAFF subjects remain available only through
-the existing CRM-admin record boundary. No public privacy-audit endpoint or Angular integration
-is introduced.
+the existing CRM-admin record boundary. No public privacy-audit endpoint is
+introduced by the API; the CRM consumes the protected projection through its
+separate repository-owned integration.
 
 The focused validation command set was: `manage.py check --fail-level ERROR`,
 `manage.py makemigrations --check --dry-run`, isolated PostgreSQL migration
@@ -439,28 +441,38 @@ effective result. History combines safe proposal and direct-superuser AFTER
 projections with actor, timestamp, target, operation, outcome, reason, and
 before/resulting state; raw AuditEvent metadata is not exposed.
 
-The API denial and projection behavior is implemented and the 17-test focused
-governance run passed in isolated PostgreSQL. Angular validation and
-independent OWASP acceptance for this batch remain separately unverified.
+The API denial and projection behavior is implemented. The final isolated
+validation pass recorded 126/126 backend tests, including migration and
+PostgreSQL concurrency coverage, and 9/9 API privacy-history/legal-hold tests.
+The API denial audit now records route-specific operation labels for privacy
+audit and legal-hold authorization failures. The persistent UAT database is
+`elevate_gdpr_phase1a4c_manual`; operational, staging, deployment, and browser
+verification remain separate evidence.
 ## Phase 1A.4D privacy history and legal holds
 
-Implemented / runtime-unverified. The backend exposes a dedicated privacy audit
+Implemented / isolated validation verified. The backend exposes a dedicated privacy audit
 history projection separate from operational Person History and CRM-session
 legal-hold routes backed by the existing privacy services. `PRIVACY_AUDIT_READ`
 and `LEGAL_HOLD_ADMIN` remain independent capabilities. Person scope,
 authorization, filters, counts, and pagination are evaluated server-side.
 
-Privacy projections use safe actor and event fields; raw metadata, credentials,
-unrestricted identifiers, and full legal-hold justifications are excluded.
+Privacy-audit projections use safe actor and event fields; raw metadata,
+credentials, unrestricted identifiers, and full legal-hold justifications are
+excluded. Authorized legal-hold administration projections separately include
+the bounded justifications required to review holds and release requests.
 Future legal-hold lifecycle events preserve normalized Person associations when
 an authoritative relationship exists. Historical reconciliation and backfill
 remain deferred and require separate approval; unresolved records remain
 protected from retention disposal.
 
-The existing release-request model supports pending and approved states only.
-Release requests now support pending, approved, and rejected states through
-`audit.0023_legalhold_release_rejection`; rejection preserves the active hold
-and permits a subsequent request. No retention
+The release-request model supports pending, approved, and rejected states
+through `audit.0023_legalhold_release_rejection`; rejection preserves the
+active hold and permits a subsequent request. Legal-hold list/detail
+projections include safe release-request summaries and backend-calculated
+approval/rejection actions, allowing an independent authorized administrator
+to discover pending requests after login or refresh without manual request-ID
+entry. No retention
 automation, deletion, anonymisation, or GDPR-FUTURE-001 implementation is part
-of this stage. Runtime tests, migration application, CRM integration, and OWASP
-acceptance remain unverified until consolidated Phase 1A.4D.4 validation.
+of this stage. Operational/staging deployment, browser workflow,
+cross-repository compatibility, and independent runtime OWASP acceptance remain
+unverified.

@@ -16,7 +16,11 @@ from staff_access.models import (
 
 
 PRIVACY_CAPABILITY_CODES = frozenset(CapabilityDefinition.canonical_codes())
-CRM_EFFECTIVE_ACCESS_DISCLOSURE_ALLOWLIST = frozenset({CapabilityDefinition.STAFF_CAPABILITY_ADMIN})
+CRM_EFFECTIVE_ACCESS_DISCLOSURE_ALLOWLIST = frozenset({
+    CapabilityDefinition.STAFF_CAPABILITY_ADMIN,
+    CapabilityDefinition.PRIVACY_AUDIT_READ,
+    CapabilityDefinition.LEGAL_HOLD_ADMIN,
+})
 CRM_OPERATIONAL_ROLE_CODES = tuple(code for code, _name in StaffRole.CANONICAL_ROLES)
 GOVERNANCE_DENIAL_ACTION = AuditEvent.Action.CAPABILITY_PERMISSION_MUTATED
 logger = logging.getLogger(__name__)

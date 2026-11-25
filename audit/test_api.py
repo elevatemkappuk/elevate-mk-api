@@ -89,7 +89,7 @@ class PrivacyAuditAndLegalHoldApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["count"], 1)
-        self.assertEqual(response.data["results"][0]["id"], event.id)
+        self.assertEqual(response.data["results"][0]["id"], str(event.id))
         self.assertNotIn("metadata", response.data["results"][0])
         self.assertNotIn("entity_id", response.data["results"][0])
 
@@ -141,6 +141,54 @@ class PrivacyAuditAndLegalHoldApiTests(TestCase):
         self.assertEqual(approve_response.status_code, 200)
         self.assertEqual(approve_response.data["status"], LegalHold.Status.RELEASED)
         self.assertFalse(LegalHold.objects.filter(public_id=hold_id, status=LegalHold.Status.ACTIVE).exists())
+
+    def test_legal_hold_access_denial_records_route_operation(self):
+        StaffCapabilityAssignment.objects.filter(
+            user=self.other_admin,
+            capability__code=CapabilityDefinition.LEGAL_HOLD_ADMIN,
+        ).delete()
+        self.authenticate(self.other_admin)
+
+        response = self.client.get(self.holds_url)
+
+        self.assertEqual(response.status_code, 403)
+        denial = AuditEvent.objects.filter(
+            action=AuditEvent.Action.CAPABILITY_PERMISSION_MUTATED,
+            metadata__event_type="PRIVACY_AUTHORIZATION_DENIED",
+            metadata__denial_code="LEGAL_HOLD_ADMIN_REQUIRED",
+        ).latest("id")
+        self.assertEqual(denial.metadata["operation"], "LEGAL_HOLD_ACCESS")
+
+    def test_legal_hold_projection_exposes_safe_release_requests_to_independent_reviewer(self):
+        self.authenticate(self.admin)
+        create_response = self.client.post(self.holds_url, {"person_id": self.person.pk, "reason": "Investigation"}, format="json")
+        hold_id = create_response.data["public_id"]
+        request_response = self.client.post(
+            f"/api/v1/privacy/legal-holds/{hold_id}/release-requests/",
+            {"reason": "Independent review requested"}, format="json",
+        )
+        self.authenticate(self.other_admin)
+        response = self.client.get(self.holds_url)
+        self.assertEqual(response.status_code, 200)
+        release_request = response.data["results"][0]["release_requests"][0]
+        self.assertEqual(release_request["public_id"], request_response.data["public_id"])
+        self.assertEqual(release_request["status"], LegalHoldReleaseRequest.Status.PENDING)
+        self.assertEqual(release_request["permitted_actions"], ["approve", "reject"])
+        self.assertEqual(release_request["requested_by_id"], self.admin.pk)
+        self.assertEqual(release_request["justification"], "Independent review requested")
+        self.assertNotIn("requested_by", release_request)
+
+    def test_release_request_projection_hides_self_approval_actions(self):
+        self.authenticate(self.admin)
+        create_response = self.client.post(self.holds_url, {"person_id": self.person.pk, "reason": "Investigation"}, format="json")
+        hold_id = create_response.data["public_id"]
+        self.client.post(
+            f"/api/v1/privacy/legal-holds/{hold_id}/release-requests/",
+            {"reason": "Independent review requested"}, format="json",
+        )
+        response = self.client.get(self.holds_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["results"][0]["release_requests"][0]["permitted_actions"], [])
 
     def test_technical_person_cannot_become_a_person_hold_target(self):
         self.authenticate(self.admin)
@@ -196,3 +244,7 @@ class PrivacyAuditAndLegalHoldApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["status"], LegalHold.Status.RELEASED)
         self.assertTrue(AuditEvent.objects.filter(action=AuditEvent.Action.LEGAL_HOLD_RELEASED, actor_user=self.superuser).exists())
+        request = LegalHoldReleaseRequest.objects.get(public_id=request_response.data["public_id"])
+        self.assertEqual(request.status, LegalHoldReleaseRequest.Status.APPROVED)
+        event = AuditEvent.objects.filter(action=AuditEvent.Action.LEGAL_HOLD_RELEASED, actor_user=self.superuser).latest("id")
+        self.assertTrue(event.metadata["superuser_authority"])

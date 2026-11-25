@@ -15,7 +15,7 @@ from audit.policies import (
     get_privacy_audit_queryset_for_user,
     record_privacy_authorization_failure,
 )
-from audit.privacy import approve_legal_hold_release, create_legal_hold, reject_legal_hold_release, request_legal_hold_release
+from audit.privacy import approve_legal_hold_release, create_legal_hold, direct_release_legal_hold, reject_legal_hold_release, request_legal_hold_release
 from people.models import Person
 from staff_access.models import CapabilityDefinition, StaffRole
 from staff_access.permissions import HasCrmOperationalAccess, user_has_any_active_staff_role, user_has_capability
@@ -41,6 +41,12 @@ class PrivacyHistoryPagination(PageNumberPagination):
     max_page_size = 100
 
 
+class LegalHoldPagination(PageNumberPagination):
+    page_size = 25
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
 class PrivacyHistorySerializer(serializers.Serializer):
     id = serializers.CharField()
     action = serializers.CharField()
@@ -53,6 +59,8 @@ class PrivacyHistorySerializer(serializers.Serializer):
     capability = serializers.SerializerMethodField()
 
     def get_description(self, event):
+        if (event.metadata or {}).get("operation") == "LEGAL_HOLD_RELEASE_REJECTED":
+            return "Legal hold release rejected"
         return get_person_audit_description(event.action)
 
     def get_actor(self, event):
@@ -91,6 +99,7 @@ class LegalHoldSerializer(serializers.Serializer):
     justification = serializers.SerializerMethodField()
     permitted_actions = serializers.SerializerMethodField()
     execution_mode = serializers.SerializerMethodField()
+    release_requests = serializers.SerializerMethodField()
 
     def get_audit_event_reference(self, hold):
         return _event_reference(hold.audit_event_id) if hold.audit_event_id else None
@@ -105,13 +114,41 @@ class LegalHoldSerializer(serializers.Serializer):
         request = self.context.get("request")
         if not request or hold.status != LegalHold.Status.ACTIVE:
             return []
-        if request.user.is_superuser or user_has_capability(request.user, CapabilityDefinition.LEGAL_HOLD_ADMIN):
+        if request.user.is_superuser:
+            return ["direct_release"]
+        if user_has_capability(request.user, CapabilityDefinition.LEGAL_HOLD_ADMIN):
             return ["request_release"]
         return []
 
     def get_execution_mode(self, hold):
         request = self.context.get("request")
         return "DIRECT_SUPERUSER" if request and request.user.is_superuser else "GOVERNED"
+
+    def get_release_requests(self, hold):
+        request = self.context.get("request")
+        if not request:
+            return []
+        actor = request.user
+        results = []
+        for release_request in hold.release_requests.all():
+            permitted_actions = []
+            if release_request.status == LegalHoldReleaseRequest.Status.PENDING:
+                if actor.is_superuser or release_request.requested_by_id != actor.pk:
+                    permitted_actions = ["approve", "reject"]
+            results.append({
+                "public_id": str(release_request.public_id),
+                "status": release_request.status,
+                "justification": release_request.reason,
+                "requested_by_id": release_request.requested_by_id,
+                "requested_at": release_request.requested_at,
+                "approved_by_id": release_request.approved_by_id,
+                "approved_at": release_request.approved_at,
+                "rejected_by_id": release_request.rejected_by_id,
+                "rejected_at": release_request.rejected_at,
+                "rejection_reason": release_request.rejection_reason or None,
+                "permitted_actions": permitted_actions,
+            })
+        return results
 
 
 class PrivacyAdministratorPermission(IsAuthenticated):
@@ -126,9 +163,23 @@ class PrivacyAdministratorPermission(IsAuthenticated):
         return True
 
 
+class PrivacyAuditReadPermission(PrivacyAdministratorPermission):
+    def has_permission(self, request, view):
+        if not super().has_permission(request, view):
+            return False
+        allowed = user_has_capability(request.user, CapabilityDefinition.PRIVACY_AUDIT_READ, request=request)
+        if not allowed:
+            record_privacy_authorization_failure(
+                request=request,
+                denial_code="PRIVACY_AUDIT_READ_REQUIRED",
+                operation="PRIVACY_AUDIT_READ",
+            )
+        return allowed
+
+
 class PrivacyAuditHistoryView(generics.ListAPIView):
     authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
-    permission_classes = [PrivacyAdministratorPermission, HasCrmOperationalAccess]
+    permission_classes = [PrivacyAuditReadPermission, HasCrmOperationalAccess]
     serializer_class = PrivacyHistorySerializer
     pagination_class = PrivacyHistoryPagination
 
@@ -140,9 +191,6 @@ class PrivacyAuditHistoryView(generics.ListAPIView):
             return AuditEvent.objects.none()
         if person.record_type == Person.RecordType.STAFF and not user_has_any_active_staff_role(self.request.user, (StaffRole.CRM_ADMIN,)):
             record_privacy_authorization_failure(request=self.request, denial_code="STAFF_PERSON_SCOPE_DENIED", person_id=person_id)
-            return AuditEvent.objects.none()
-        if not user_has_capability(self.request.user, CapabilityDefinition.PRIVACY_AUDIT_READ, request=self.request):
-            record_privacy_authorization_failure(request=self.request, denial_code="PRIVACY_AUDIT_READ_REQUIRED", person_id=person_id)
             return AuditEvent.objects.none()
         queryset = filter_person_audit_visibility_for_user(
             get_privacy_audit_queryset_for_user(self.request.user, person=person), self.request.user
@@ -169,7 +217,11 @@ class LegalHoldPermission(PrivacyAdministratorPermission):
             return True
         allowed = user_has_capability(request.user, CapabilityDefinition.LEGAL_HOLD_ADMIN, request=request)
         if not allowed:
-            record_privacy_authorization_failure(request=request, denial_code="LEGAL_HOLD_ADMIN_REQUIRED")
+            record_privacy_authorization_failure(
+                request=request,
+                denial_code="LEGAL_HOLD_ADMIN_REQUIRED",
+                operation="LEGAL_HOLD_ACCESS",
+            )
         return allowed
 
 
@@ -177,9 +229,10 @@ class LegalHoldListCreateView(generics.ListCreateAPIView):
     authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [LegalHoldPermission, HasCrmOperationalAccess]
     serializer_class = LegalHoldSerializer
+    pagination_class = LegalHoldPagination
 
     def get_queryset(self):
-        queryset = LegalHold.objects.select_related("person", "audit_event", "placed_by", "released_by")
+        queryset = LegalHold.objects.select_related("person", "audit_event", "placed_by", "released_by").prefetch_related("release_requests")
         person_id = self.request.query_params.get("person_id")
         if person_id:
             queryset = queryset.filter(Q(person_id=person_id) | Q(audit_event__subjects__person_id=person_id)).distinct()
@@ -197,12 +250,20 @@ class LegalHoldListCreateView(generics.ListCreateAPIView):
         else:
             event = _resolve_event_reference(event_reference)
         if person is None and event is None:
-            record_privacy_authorization_failure(request=request, denial_code="TARGET_SCOPE_DENIED")
+            record_privacy_authorization_failure(
+                request=request,
+                denial_code="TARGET_SCOPE_DENIED",
+                operation="LEGAL_HOLD_CREATE",
+            )
             return Response({"detail": "Target not found."}, status=status.HTTP_404_NOT_FOUND)
         try:
             hold = create_legal_hold(actor_user=request.user, reason=request.data.get("reason"), person=person, audit_event=event, request=request)
         except (PermissionDenied, ValidationError) as error:
-            record_privacy_authorization_failure(request=request, denial_code="LEGAL_HOLD_POLICY_DENIED")
+            record_privacy_authorization_failure(
+                request=request,
+                denial_code="LEGAL_HOLD_POLICY_DENIED",
+                operation="LEGAL_HOLD_CREATE",
+            )
             return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(self.get_serializer(hold).data, status=status.HTTP_201_CREATED)
 
@@ -213,7 +274,7 @@ class LegalHoldDetailView(generics.RetrieveAPIView):
     serializer_class = LegalHoldSerializer
     lookup_field = "public_id"
     lookup_url_kwarg = "public_id"
-    queryset = LegalHold.objects.select_related("person", "audit_event", "placed_by", "released_by")
+    queryset = LegalHold.objects.select_related("person", "audit_event", "placed_by", "released_by").prefetch_related("release_requests")
 
 
 class LegalHoldReleaseRequestView(APIView):
@@ -227,7 +288,11 @@ class LegalHoldReleaseRequestView(APIView):
         try:
             release_request = request_legal_hold_release(actor_user=request.user, hold=hold, reason=request.data.get("reason"))
         except (PermissionDenied, ValidationError) as error:
-            record_privacy_authorization_failure(request=request, denial_code="LEGAL_HOLD_RELEASE_DENIED")
+            record_privacy_authorization_failure(
+                request=request,
+                denial_code="LEGAL_HOLD_RELEASE_DENIED",
+                operation="LEGAL_HOLD_RELEASE_REQUEST",
+            )
             return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
         return Response({"public_id": str(release_request.public_id), "status": release_request.status}, status=status.HTTP_201_CREATED)
 
@@ -243,7 +308,11 @@ class LegalHoldReleaseApprovalView(APIView):
         try:
             hold = approve_legal_hold_release(actor_user=request.user, release_request=release_request, reason=request.data.get("reason"))
         except (PermissionDenied, ValidationError) as error:
-            record_privacy_authorization_failure(request=request, denial_code="LEGAL_HOLD_RELEASE_APPROVAL_DENIED")
+            record_privacy_authorization_failure(
+                request=request,
+                denial_code="LEGAL_HOLD_RELEASE_APPROVAL_DENIED",
+                operation="LEGAL_HOLD_RELEASE_APPROVAL",
+            )
             return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(LegalHoldSerializer(hold, context={"request": request}).data, status=status.HTTP_200_OK)
 
@@ -259,7 +328,11 @@ class LegalHoldReleaseRejectionView(APIView):
         try:
             rejected = reject_legal_hold_release(actor_user=request.user, release_request=release_request, reason=request.data.get("reason"))
         except (PermissionDenied, ValidationError) as error:
-            record_privacy_authorization_failure(request=request, denial_code="LEGAL_HOLD_RELEASE_REJECTION_DENIED")
+            record_privacy_authorization_failure(
+                request=request,
+                denial_code="LEGAL_HOLD_RELEASE_REJECTION_DENIED",
+                operation="LEGAL_HOLD_RELEASE_REJECTION",
+            )
             return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
         return Response({
             "public_id": str(rejected.public_id),
@@ -276,4 +349,12 @@ class LegalHoldDirectReleaseView(LegalHoldReleaseApprovalView):
         if not request.user.is_superuser:
             record_privacy_authorization_failure(request=request, denial_code="SUPERUSER_REQUIRED", operation="LEGAL_HOLD_DIRECT_RELEASE")
             return Response({"detail": "An active Django superuser is required."}, status=status.HTTP_403_FORBIDDEN)
-        return super().post(request, public_id)
+        hold = LegalHold.objects.filter(public_id=public_id).first()
+        if hold is None:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            released = direct_release_legal_hold(actor_user=request.user, hold=hold, reason=request.data.get("reason"))
+        except (PermissionDenied, ValidationError) as error:
+            record_privacy_authorization_failure(request=request, denial_code="LEGAL_HOLD_DIRECT_RELEASE_DENIED", operation="LEGAL_HOLD_DIRECT_RELEASE")
+            return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(LegalHoldSerializer(released, context={"request": request}).data, status=status.HTTP_200_OK)

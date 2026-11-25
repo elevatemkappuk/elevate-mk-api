@@ -20,6 +20,7 @@ from staff_access.admin import StaffRoleAdmin, StaffRoleAssignmentAdmin
 from staff_access.exceptions import FinalCrmAdminProtectionError
 from staff_access.models import (
     CapabilityDefinition,
+    CapabilityPolicyState,
     RoleCapabilityDefault,
     StaffCapabilityAssignment,
     StaffCapabilityRestriction,
@@ -668,6 +669,7 @@ class StaffAdminTests(TestCase):
                 "target_user_id": str(self.target_user.id),
                 "staff_role_id": str(self.crm_admin_role.id),
                 "staff_role_code": self.crm_admin_role.code,
+                "policy_version": CapabilityPolicyState.objects.get(singleton_key=1).version,
             },
         )
         self.assertEqual(event.changes, {"is_active": {"from": None, "to": True}})
@@ -700,6 +702,7 @@ class StaffAdminTests(TestCase):
                 "target_user_id": str(self.target_user.id),
                 "staff_role_id": str(self.crm_admin_role.id),
                 "staff_role_code": self.crm_admin_role.code,
+                "policy_version": CapabilityPolicyState.objects.get(singleton_key=1).version,
             },
         )
         self.assertEqual(event.changes, {"is_active": {"from": True, "to": False}})
@@ -733,6 +736,7 @@ class StaffAdminTests(TestCase):
                 "target_user_id": str(self.target_user.id),
                 "staff_role_id": str(self.crm_admin_role.id),
                 "staff_role_code": self.crm_admin_role.code,
+                "policy_version": CapabilityPolicyState.objects.get(singleton_key=1).version,
             },
         )
         self.assertEqual(event.changes, {"is_active": {"from": False, "to": True}})
@@ -762,6 +766,7 @@ class StaffAdminTests(TestCase):
                 "target_user_id": str(self.target_user.id),
                 "staff_role_id": str(self.crm_viewer_role.id),
                 "staff_role_code": self.crm_viewer_role.code,
+                "policy_version": CapabilityPolicyState.objects.get(singleton_key=1).version,
             },
         )
 
@@ -772,20 +777,19 @@ class StaffAdminTests(TestCase):
             role=self.crm_admin_role,
             assigned_by=self.admin_user,
         )
+        before_events = AuditEvent.objects.count()
 
         duplicate_attempt = StaffRoleAssignment(user=self.target_user, role=self.crm_admin_role)
         self.assignment_admin.save_model(request, duplicate_attempt, form=None, change=False)
 
         self.assertEqual(StaffRoleAssignment.objects.filter(user=self.target_user, role=self.crm_admin_role).count(), 1)
         self.assertEqual(duplicate_attempt.pk, existing.pk)
-        self.assertEqual(
-            AuditEvent.objects.exclude(action=AuditEvent.Action.CAPABILITY_POLICY_BASELINED).count(),
-            0,
-        )
+        self.assertEqual(AuditEvent.objects.count(), before_events)
 
     def test_staff_role_assignment_admin_grant_rolls_back_when_audit_write_fails(self):
         request = self.build_request()
         assignment = StaffRoleAssignment(user=self.target_user, role=self.crm_admin_role)
+        before_events = AuditEvent.objects.count()
 
         with patch("staff_access.admin.record_audit_event", side_effect=RuntimeError("audit down")):
             with self.assertRaises(RuntimeError):
@@ -794,10 +798,7 @@ class StaffAdminTests(TestCase):
         self.assertFalse(
             StaffRoleAssignment.objects.filter(user=self.target_user, role=self.crm_admin_role).exists()
         )
-        self.assertEqual(
-            AuditEvent.objects.exclude(action=AuditEvent.Action.CAPABILITY_POLICY_BASELINED).count(),
-            0,
-        )
+        self.assertEqual(AuditEvent.objects.count(), before_events)
 
     def test_staff_role_assignment_admin_reactivation_rolls_back_when_audit_write_fails(self):
         request = self.build_request()

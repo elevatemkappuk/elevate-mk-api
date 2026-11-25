@@ -801,12 +801,12 @@ Successful response:
 
 ```json
 {
-  "capability_codes": ["STAFF_CAPABILITY_ADMIN"],
+  "capability_codes": ["LEGAL_HOLD_ADMIN", "PRIVACY_AUDIT_READ", "STAFF_CAPABILITY_ADMIN"],
   "policy_version": 2
 }
 ```
 
-- `capability_codes` is the effective capability-code projection after the backend evaluator is applied. The current CRM disclosure allowlist contains only `STAFF_CAPABILITY_ADMIN`; all other capability codes remain excluded from this projection.
+- `capability_codes` is the effective capability-code projection after the backend evaluator is applied. The coordinated Phase 1A.4D allowlist contains `STAFF_CAPABILITY_ADMIN`, `PRIVACY_AUDIT_READ`, and `LEGAL_HOLD_ADMIN`; all other capability codes remain excluded.
 - `policy_version` is the current capability-policy version read for this evaluation; `2` is the verified current example value, not a fixed contract value. It is informational for the client; it is not a capability grant, authorization token, mutation precondition, or client-controlled version.
 - The view locks the singleton capability-policy state and evaluates the requested disclosure set in one database transaction, so the returned policy version and projection are from the same transactionally consistent evaluation. The endpoint does not mutate policy state.
 - The response sets `Cache-Control: private, no-store` and must not be retained as shared or stored client state.
@@ -814,12 +814,12 @@ Successful response:
 Superuser boundary:
 
 - A Django superuser still requires an active operational CRM role to pass endpoint admission.
-- After admission, the existing superuser evaluator path remains authoritative and records its transactional `PRIVACY_SUPERUSER_BYPASS` audit event. Superuser authority does not expand the public response contract beyond the single allowlisted capability.
+- After admission, the existing superuser evaluator path remains authoritative and records its transactional `PRIVACY_SUPERUSER_BYPASS` audit event. Superuser authority does not expand the public response contract beyond the allowlisted capabilities.
 
 Evidence status:
 
-- **Implemented / Source-inspected:** route, view, serializer, CRM-session authentication, active-role permission, single-capability disclosure allowlist, transactional policy-state read, superuser boundary, and `private, no-store` response header were inspected in `staff_access/urls.py`, `staff_access/views.py`, `staff_access/serializers.py`, and `staff_access/permissions.py`.
-- **Verified / isolated local runtime:** `http://localhost:8000` served the API against `elevate_gdpr_phase1a4c_manual`; synthetic admin and delegated manager sessions received only `STAFF_CAPABILITY_ADMIN`, while an explicitly restricted account received no capability projection. The operational `elevate` database was not used.
+- **Implemented / Source-inspected:** route, view, serializer, CRM-session authentication, active-role permission, three-capability disclosure allowlist, transactional policy-state read, superuser boundary, and `private, no-store` response header were inspected in `staff_access/urls.py`, `staff_access/views.py`, `staff_access/serializers.py`, and `staff_access/permissions.py`.
+- **Verified / isolated local runtime (historical Phase 1A.4A evidence):** `http://localhost:8000` served the API against `elevate_gdpr_phase1a4c_manual`; synthetic admin and delegated manager sessions received the then-current `STAFF_CAPABILITY_ADMIN` projection, while an explicitly restricted account received no capability projection. The later three-capability allowlist rollout remains source-inspected and requires current isolated validation. The operational `elevate` database was not used.
 - **Verified — focused API evidence:** 34/34 Phase 1A.4A focused tests passed against isolated PostgreSQL database `test_elevate_gdpr_phase1a4a_20261124`; `manage.py check` passed; `makemigrations --check --dry-run` reported `No changes detected`; `migrate --plan` reported no planned migration operations; and `git diff --check` was clean. No schema or migration files changed, and no migrations were applied for Phase 1A.4A.
 - **Unverified:** broader runtime behavior, deployment behavior, CRM tests/build/runtime, and cross-repository CRM consumption.
 
@@ -3089,12 +3089,14 @@ history is exposed at `GET /api/v1/people/{person_id}/privacy-audit-history/`
 with bounded `page`, `page_size`, `occurred_from`, `occurred_to`,
 `activity_type`, `outcome`, and `superuser_operation` filters. Authorization is
 evaluated before filtering and pagination. Responses omit raw metadata,
-credentials, unrestricted identifiers, and legal-hold justifications.
+credentials, and unrestricted identifiers. Authorized legal-hold responses
+may include the hold or release-request justification required for that
+workflow; these values are not part of the privacy-audit history projection.
 
 Legal-hold routes are:
 
 - `GET|POST /api/v1/privacy/legal-holds/`
-- `GET /api/v1/privacy/legal-holds/{id}/`
+- `GET /api/v1/privacy/legal-holds/{public_id}/`
 - `POST /api/v1/privacy/legal-holds/{public_id}/release-requests/`
 - `POST /api/v1/privacy/legal-hold-release-requests/{public_id}/approve/`
 - `POST /api/v1/privacy/legal-hold-release-requests/{public_id}/reject/`
@@ -3102,8 +3104,14 @@ Legal-hold routes are:
 
 They use the existing service layer, CRM session authentication, opaque public
 hold identifiers, `LEGAL_HOLD_ADMIN`, mandatory reasons, and audited release
-transitions. Rejection transport is not yet implemented because the existing
-transitions. Release requests are `PENDING`, `APPROVED`, or `REJECTED`;
+transitions. The list and detail projections include safe release-request
+summaries with public request IDs, status, safe actor IDs, timestamps,
+justification, rejection reason, and backend-calculated `permitted_actions`.
+List responses use bounded page-number pagination (`page`, optional
+`page_size`, maximum 100); the detail response contains one hold projection.
+An independent authorized administrator can discover pending requests after a
+fresh login or refresh without receiving an internal database ID. Release
+requests are `PENDING`, `APPROVED`, or `REJECTED`;
 rejection preserves the active hold and permits a subsequent request. Ordinary
 approval and rejection require a distinct authorized decision-maker. The direct
 release route is superuser-only and remains CRM-admitted and audited.

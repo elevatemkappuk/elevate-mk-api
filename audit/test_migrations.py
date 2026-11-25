@@ -1,8 +1,11 @@
 from importlib import import_module
 
 from django.apps import apps
-from django.test import TestCase
+from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
+from django.test import TestCase, TransactionTestCase
 
+from accounts.models import User
 from audit.models import AuditEvent, AuditEventSubject
 from people.models import Person
 from staff_access.models import CapabilityDefinition, CapabilityPolicyState, RoleCapabilityDefault
@@ -70,3 +73,67 @@ class NormalizedSubjectBackfillMigrationTests(TestCase):
         self.assertFalse(
             RoleCapabilityDefault.objects.filter(capability__code="LEGAL_HOLD_ADMIN").exists()
         )
+
+
+class LegalHoldReleaseRejectionMigrationTests(TransactionTestCase):
+    reset_sequences = True
+
+    migration_0022 = "0022_auditeventsubject_legalhold_legalholdreleaserequest_and_more"
+    migration_0023 = "0023_legalhold_release_rejection"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.executor = MigrationExecutor(connection)
+        cls.executor.migrate([("audit", cls.migration_0022)])
+        cls.old_apps = cls.executor.loader.project_state(
+            [("audit", cls.migration_0022)]
+        ).apps
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.executor.migrate(cls.executor.loader.graph.leaf_nodes())
+        connection.close()
+        super().tearDownClass()
+
+    def test_existing_pending_release_request_survives_rejection_migration(self):
+        LegalHold = self.old_apps.get_model("audit", "LegalHold")
+        ReleaseRequest = self.old_apps.get_model("audit", "LegalHoldReleaseRequest")
+
+        person = Person.objects.create(
+            first_name="Synthetic",
+            last_name="Migration Subject",
+            record_type="COMMUNITY",
+        )
+        user = User.objects.create_user(
+            email="migration-release@example.com",
+            password="testpass123",
+            person=person,
+        )
+        hold = LegalHold.objects.create(
+            scope="PERSON",
+            status="ACTIVE",
+            reason="Synthetic migration verification",
+            person_id=person.pk,
+            placed_by_id=user.pk,
+        )
+        release_request = ReleaseRequest.objects.create(
+            legal_hold=hold,
+            requested_by_id=user.pk,
+            reason="Synthetic pending release",
+        )
+
+        self.executor = MigrationExecutor(connection)
+        self.executor.migrate([("audit", self.migration_0023)])
+        current_apps = self.executor.loader.project_state(
+            [("audit", self.migration_0023)]
+        ).apps
+        current_request = current_apps.get_model("audit", "LegalHoldReleaseRequest").objects.get(
+            pk=release_request.pk
+        )
+
+        self.assertEqual(current_request.status, "PENDING")
+        self.assertEqual(current_request.reason, "Synthetic pending release")
+        self.assertIsNone(current_request.rejected_at)
+        self.assertIsNone(current_request.rejected_by_id)
+        self.assertEqual(current_request.rejection_reason, "")

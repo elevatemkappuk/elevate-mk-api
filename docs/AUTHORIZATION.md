@@ -328,7 +328,7 @@ submission boundary, not a CRM authorization exception. It uses its own DTO,
 service, response projection, CSRF protection, and anonymous throttle. It does not
 grant access to People, Membership, ProfessionalProfile, audit, or other CRM APIs.
 
-## Phase 1A.4A effective Staff Access projection
+## Phase 1A.4A effective Staff Access projection (historical; superseded)
 
 Status: **Implemented / source-inspected; runtime verification not claimed.**
 
@@ -341,12 +341,10 @@ by authentication and an active operational `CRM_ADMIN`, `CRM_MANAGER`, or
 one of those roles receive `403`. A mobile JWT, Django `is_staff`, or Django
 `is_superuser` alone does not satisfy endpoint admission.
 
-The CRM capability disclosure allowlist is intentionally empty at this stage.
-The endpoint therefore returns `capability_codes: []` for every admitted caller;
-this prevents premature exposure of capability decisions before a later approved
-CRM consumer and disclosure policy exist. Phase 1A.4B Staff Access lifecycle
-integration is implemented; capability-consuming administration and disclosure
-expansion remain deferred.
+Historically, the CRM capability disclosure allowlist was intentionally empty
+at this stage. The endpoint therefore returned `capability_codes: []` for every
+admitted caller. This historical contract is superseded by the coordinated
+Phase 1A.4D disclosure described below.
 
 `policy_version` is the current capability-policy version observed for the
 evaluation. It is informational only: it is not a grant, token, client-controlled
@@ -398,11 +396,13 @@ audited exception and still require CRM admission.
 
 Authorization and Person scope are enforced before filtering, counts, and
 pagination. Denials use safe opaque references and reason codes. Mobile JWT
-authentication and `/auth/me/` remain unchanged. Capability disclosure remains
-the existing narrow projection until the CRM parser is updated in the
-coordinated frontend rollout.
+authentication and `/auth/me/` remain unchanged. The coordinated CRM rollout
+now consumes the backend allowlist containing `STAFF_CAPABILITY_ADMIN`,
+`PRIVACY_AUDIT_READ`, and `LEGAL_HOLD_ADMIN`; older CRM clients must not be
+activated against this disclosure.
 
-The backend continues to disclose only the existing `STAFF_CAPABILITY_ADMIN`
-allowlist until the CRM parser is coordinated. `PRIVACY_AUDIT_READ` and
-`LEGAL_HOLD_ADMIN` are enforced by the new backend endpoints but are not yet
-advertised to the unchanged CRM client.
+Privacy audit history denies admitted CRM users without
+`PRIVACY_AUDIT_READ` with `403 Forbidden` before filtering, pagination, or
+projection. Legal-hold list/detail responses expose only safe release-request
+summaries and backend-calculated approval/rejection actions; self-approval
+remains denied.

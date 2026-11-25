@@ -69,6 +69,7 @@ def create_legal_hold(*, actor_user, reason, person=None, audit_event=None, requ
 @transaction.atomic
 def request_legal_hold_release(*, actor_user, hold, reason):
     _require_manager(actor_user)
+    hold = LegalHold.objects.select_for_update().get(pk=hold.pk)
     if hold.status != LegalHold.Status.ACTIVE:
         raise ValidationError("Only active legal holds may be released.")
     reason = _reason(reason)
@@ -97,8 +98,9 @@ def request_legal_hold_release(*, actor_user, hold, reason):
 def approve_legal_hold_release(*, actor_user, release_request, reason):
     _require_manager(actor_user)
     reason = _reason(reason)
-    release_request = LegalHoldReleaseRequest.objects.select_for_update().select_related("legal_hold", "requested_by").get(pk=release_request.pk)
+    release_request = LegalHoldReleaseRequest.objects.select_related("legal_hold", "requested_by").get(pk=release_request.pk)
     hold = LegalHold.objects.select_for_update().get(pk=release_request.legal_hold_id)
+    release_request = LegalHoldReleaseRequest.objects.select_for_update().select_related("legal_hold", "requested_by").get(pk=release_request.pk)
     if release_request.status != LegalHoldReleaseRequest.Status.PENDING:
         raise ValidationError("The release request is no longer pending.")
     if hold.status != LegalHold.Status.ACTIVE:
@@ -132,11 +134,57 @@ def approve_legal_hold_release(*, actor_user, release_request, reason):
 
 
 @transaction.atomic
+def direct_release_legal_hold(*, actor_user, hold, reason):
+    if not getattr(actor_user, "is_active", False) or not getattr(actor_user, "is_superuser", False):
+        raise PermissionDenied("An active Django superuser is required.")
+    reason = _reason(reason)
+    hold = LegalHold.objects.select_for_update().get(pk=hold.pk)
+    if hold.status != LegalHold.Status.ACTIVE:
+        raise ValidationError("Only active legal holds may be released.")
+    pending_request = (
+        LegalHoldReleaseRequest.objects.select_for_update()
+        .filter(legal_hold=hold, status=LegalHoldReleaseRequest.Status.PENDING)
+        .first()
+    )
+    now = timezone.now()
+    if pending_request is not None:
+        pending_request.status = LegalHoldReleaseRequest.Status.APPROVED
+        pending_request.approved_by = actor_user
+        pending_request.approved_at = now
+        pending_request.approval_reason = reason
+        pending_request.save(update_fields=["status", "approved_by", "approved_at", "approval_reason"])
+    hold.status = LegalHold.Status.RELEASED
+    hold.released_by = actor_user
+    hold.released_at = now
+    hold.release_reason = reason
+    hold.save(update_fields=["status", "released_by", "released_at", "release_reason", "updated_at"])
+    subject_person = hold.person
+    if subject_person is None and hold.audit_event_id:
+        subject = hold.audit_event.subjects.filter(subject_type=AuditEventSubject.SubjectType.PERSON).first()
+        subject_person = getattr(subject, "person", None)
+    record_audit_event(
+        action=AuditEvent.Action.LEGAL_HOLD_RELEASED,
+        actor_user=actor_user,
+        entity_type="LegalHold",
+        entity_id=hold.public_id,
+        metadata={
+            "operation": "LEGAL_HOLD_DIRECT_RELEASE",
+            "superuser_authority": True,
+            "release_request_id": str(pending_request.public_id) if pending_request else None,
+        },
+        audit_domain=AuditEvent.Domain.PRIVACY,
+        subject_person=subject_person,
+    )
+    return hold
+
+
+@transaction.atomic
 def reject_legal_hold_release(*, actor_user, release_request, reason):
     _require_manager(actor_user)
     reason = _reason(reason)
-    release_request = LegalHoldReleaseRequest.objects.select_for_update().select_related("legal_hold", "requested_by").get(pk=release_request.pk)
+    release_request = LegalHoldReleaseRequest.objects.select_related("legal_hold", "requested_by").get(pk=release_request.pk)
     hold = LegalHold.objects.select_for_update().get(pk=release_request.legal_hold_id)
+    release_request = LegalHoldReleaseRequest.objects.select_for_update().select_related("legal_hold", "requested_by").get(pk=release_request.pk)
     if release_request.status != LegalHoldReleaseRequest.Status.PENDING:
         raise ValidationError("The release request is no longer pending.")
     if hold.status != LegalHold.Status.ACTIVE:
@@ -157,7 +205,12 @@ def reject_legal_hold_release(*, actor_user, release_request, reason):
         actor_user=actor_user,
         entity_type="LegalHoldReleaseRequest",
         entity_id=release_request.public_id,
-        metadata={"lifecycle": "REJECTED", "release_request_id": str(release_request.public_id)},
+        metadata={
+            "lifecycle": "REJECTED",
+            "operation": "LEGAL_HOLD_RELEASE_REJECTED",
+            "outcome": "REJECTED",
+            "release_request_id": str(release_request.public_id),
+        },
         audit_domain=AuditEvent.Domain.PRIVACY,
         subject_person=subject_person,
     )

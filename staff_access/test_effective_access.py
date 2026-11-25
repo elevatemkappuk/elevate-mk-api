@@ -75,7 +75,11 @@ class EffectiveAccessEndpointTests(TestCase):
         )
         self.assertEqual(
             CRM_EFFECTIVE_ACCESS_DISCLOSURE_ALLOWLIST,
-            frozenset({CapabilityDefinition.STAFF_CAPABILITY_ADMIN}),
+            frozenset({
+                CapabilityDefinition.STAFF_CAPABILITY_ADMIN,
+                CapabilityDefinition.PRIVACY_AUDIT_READ,
+                CapabilityDefinition.LEGAL_HOLD_ADMIN,
+            }),
         )
 
     def test_all_active_operational_crm_roles_are_admitted(self):
@@ -109,7 +113,11 @@ class EffectiveAccessEndpointTests(TestCase):
         self.assertEqual(called_args, (self.manager,))
         self.assertEqual(
             called_kwargs["requested_codes"],
-            frozenset({CapabilityDefinition.STAFF_CAPABILITY_ADMIN}),
+            frozenset({
+                CapabilityDefinition.STAFF_CAPABILITY_ADMIN,
+                CapabilityDefinition.PRIVACY_AUDIT_READ,
+                CapabilityDefinition.LEGAL_HOLD_ADMIN,
+            }),
         )
         self.assertIsInstance(called_kwargs["request"], Request)
         self.assertIs(called_kwargs["request"]._request, response.wsgi_request)
@@ -161,5 +169,5 @@ class EffectiveAccessEndpointTests(TestCase):
         self.assertEqual(bypass.count(), before + 1)
         self.assertEqual(
             bypass.latest("id").metadata["capability_codes"],
-            [CapabilityDefinition.STAFF_CAPABILITY_ADMIN],
+            sorted(CRM_EFFECTIVE_ACCESS_DISCLOSURE_ALLOWLIST),
         )
