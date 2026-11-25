@@ -118,7 +118,8 @@ validated in this stage.
 - **Implemented / Source-inspected for Phase 1A.4A:** the exact
   `GET /api/v1/staff/access/me/` route and two-field response contract
   (`capability_codes`, `policy_version`), CRM-session and active-role admission,
-  empty CRM disclosure allowlist, superuser boundary, transactionally consistent
+  the then-empty CRM disclosure allowlist (superseded by the approved single
+  `STAFF_CAPABILITY_ADMIN` allowlist in the later Phase 1A.4C contract), superuser boundary, transactionally consistent
   policy-version read, and `Cache-Control: private, no-store` behavior were
   inspected in the Staff Access route, view, serializer, and permission source.
 - **Verified — focused API evidence for Phase 1A.4A:** 34/34 focused tests
@@ -180,20 +181,26 @@ assertions are not treated as remediation failures.
 Status: **Implemented / focused API validation verified; CRM consumption is
 planned for Phase 1A.4C.3.**
 
-The API exposes safe governance administration routes for target access detail,
-role-default state, proposal creation and resolution, individual mutations,
-governance history, and the dedicated audited Django-superuser operation path.
+The API exposes safe governance administration routes for searchable Staff
+target selection, target access detail, role-default state, proposal creation
+and resolution, individual mutations, governance history, and the dedicated
+audited Django-superuser operation path.
 Ordinary routes require an effective `STAFF_CAPABILITY_ADMIN` capability and
 remain subject to the existing eligibility, restriction, separation-of-duty,
 policy-version and transactional-audit rules. The superuser route requires an
 authenticated active Django superuser with CRM admission and invokes the
 existing direct-operation service; it does not accept client authority flags.
 
-The target projection contains identifiers, staff-role state, capability state
-and backend-permitted actions only. Person contact and demographic fields,
-exports, search projections and exceptional restricted-access workflows remain
-outside this stage. Focused API validation passed 6/6 tests; deployment,
-operational activation and CRM runtime consumption remain unverified.
+The directory and target projections contain identifiers, safe Staff display
+metadata, staff-role state, capability state and backend-permitted actions only.
+Person contact and demographic fields, general Person search, exports and
+exceptional restricted-access workflows remain outside this stage. Ordinary
+individual changes are immediate where authorized; grant/restore/unrestrict of
+`STAFF_CAPABILITY_ADMIN` remains proposal-based. Duplicate pending proposals
+are returned as sanitized HTTP 409 conflicts. Focused governance API validation
+passed 21/21 tests against isolated PostgreSQL; the isolated Phase 1A.4C manual
+API runtime is verified, while deployment and operational activation remain
+unverified.
 
 ## Security and privacy limitations
 
@@ -297,21 +304,22 @@ deferred or unverified.
 
 ## Phase 1A.4A effective Staff Access projection
 
-Status: **Implemented / source-inspected; runtime verification not claimed.**
+Status: **Implemented / isolated local runtime verified; deployment and
+operational runtime remain unverified.**
 
 The API now exposes exactly `GET /api/v1/staff/access/me/` for an authenticated
 Staff CRM session. The successful response contains exactly:
 
 ```json
 {
-  "capability_codes": [],
+  "capability_codes": ["STAFF_CAPABILITY_ADMIN"],
   "policy_version": 2
 }
 ```
 
-The `capability_codes` value is currently empty by deliberate policy: the CRM
-disclosure allowlist is an empty set until a later approved CRM capability
-consumer and disclosure decision exist. The endpoint admits only authenticated
+The `capability_codes` value is projected from the single approved CRM
+disclosure allowlist entry, `STAFF_CAPABILITY_ADMIN`; the other capability
+codes remain excluded. The endpoint admits only authenticated
 sessions with an active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` role;
 anonymous callers receive `401`, non-CRM authenticated users receive `403`, and
 mobile JWTs are not accepted. Django `is_staff` or `is_superuser` alone does not
@@ -319,20 +327,22 @@ admit access.
 
 `policy_version` is an informational snapshot of the capability-policy version,
 not a grant, token, client precondition, or authorization result. The view locks
-the singleton policy state and evaluates the empty requested disclosure set in
-one transaction, without mutating policy state. Responses set
+the singleton policy state and evaluates the allowlisted disclosure set in one
+transaction, without mutating policy state. Responses set
 `Cache-Control: private, no-store`.
 
 An admitted Django superuser retains the existing audited superuser evaluator
-boundary, including transactional `PRIVACY_SUPERUSER_BYPASS` recording, but the
-empty CRM allowlist keeps the response capability list empty. Phase 1A.4B is
-deferred. This contract is source-inspected from `staff_access/urls.py`,
+boundary, including transactional `PRIVACY_SUPERUSER_BYPASS` recording, without
+expanding the public response beyond the single allowlisted capability. Phase
+1A.4B is implemented. This contract is source-inspected from `staff_access/urls.py`,
 `views.py`, `serializers.py`, and `permissions.py`. The focused API suite passed
 34/34 against isolated PostgreSQL database
 `test_elevate_gdpr_phase1a4a_20261124`; the Django check, migration-drift check,
 migration plan, and `git diff --check` were clean as recorded above. No schema
 or migration files changed or were applied. CRM tests/build/runtime, deployment,
-and cross-repository CRM consumption remain unverified.
+and cross-repository CRM consumption were unverified in the earlier 1A.4A
+evidence; the later isolated Phase 1A.4C manual environment verified the live
+projection contract without using the operational database.
 
 ## Targeted remediation status
 

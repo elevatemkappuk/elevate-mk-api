@@ -12,6 +12,7 @@ from staff_access.views import (
     StaffReactivateView,
     StaffEffectiveAccessView,
     GovernanceTargetDetailView,
+    GovernanceStaffDirectoryView,
     GovernanceRoleDefaultsView,
     GovernanceProposalCreateView,
     GovernanceIndividualChangeView,
@@ -24,6 +25,7 @@ from staff_access.views import (
 urlpatterns = [
     path("staff/access/me/", StaffEffectiveAccessView.as_view(), name="staff-effective-access-me"),
     path("staff/governance/targets/<int:user_id>/", GovernanceTargetDetailView.as_view(), name="staff-governance-target-detail"),
+    path("staff/governance/targets/", GovernanceStaffDirectoryView.as_view(), name="staff-governance-target-directory"),
     path("staff/governance/role-defaults/", GovernanceRoleDefaultsView.as_view(), name="staff-governance-role-defaults"),
     path("staff/governance/proposals/", GovernanceProposalCreateView.as_view(), name="staff-governance-proposal-create"),
     path("staff/governance/individual-changes/", GovernanceIndividualChangeView.as_view(), name="staff-governance-individual-change"),

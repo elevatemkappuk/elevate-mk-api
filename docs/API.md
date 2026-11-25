@@ -406,6 +406,7 @@ contact or demographic fields.
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
+| `GET` | `/api/v1/staff/governance/targets/` | Privacy-safe searchable Staff directory for governance target selection |
 | `GET` | `/api/v1/staff/governance/targets/{user_id}/` | Safe target access detail and backend-permitted actions |
 | `GET` | `/api/v1/staff/governance/role-defaults/` | Role-default state and policy version |
 | `POST` | `/api/v1/staff/governance/proposals/` | Create a governed proposal |
@@ -417,6 +418,19 @@ contact or demographic fields.
 Unsafe requests use the existing CRM Django session authentication and CSRF
 boundary. The superuser route derives authority from the authenticated server
 session; client-supplied flags cannot establish superuser authority.
+
+The directory returns only User/Person identifiers, display name, record type,
+active state, active canonical CRM role codes, eligibility, and whether the
+viewer may manage the target. It does not return email, phone, demographic,
+or other contact fields. `q` searches canonical Staff first and last names;
+results are capped by the paginated response contract. The direct target URL
+remains available as a secondary compatibility lookup.
+
+Ordinary individual changes are applied immediately when the backend permits
+them. `STAFF_CAPABILITY_ADMIN` grant, restore, and unrestrict operations use
+the proposal workflow. A duplicate pending proposal returns HTTP `409` with
+stable code `PENDING_PROPOSAL_EXISTS` and a public proposal identifier when
+available; raw database errors are not exposed.
 
 ## OpenAPI Documentation
 Current documentation endpoints:
@@ -746,12 +760,12 @@ Successful response:
 
 ```json
 {
-  "capability_codes": [],
+  "capability_codes": ["STAFF_CAPABILITY_ADMIN"],
   "policy_version": 2
 }
 ```
 
-- `capability_codes` is the effective capability-code projection after the backend evaluator is applied. The current CRM disclosure allowlist is intentionally empty, so this field is currently always `[]`; the allowlist remains empty until a later approved CRM capability consumer and disclosure decision exist.
+- `capability_codes` is the effective capability-code projection after the backend evaluator is applied. The current CRM disclosure allowlist contains only `STAFF_CAPABILITY_ADMIN`; all other capability codes remain excluded from this projection.
 - `policy_version` is the current capability-policy version read for this evaluation; `2` is the verified current example value, not a fixed contract value. It is informational for the client; it is not a capability grant, authorization token, mutation precondition, or client-controlled version.
 - The view locks the singleton capability-policy state and evaluates the requested disclosure set in one database transaction, so the returned policy version and projection are from the same transactionally consistent evaluation. The endpoint does not mutate policy state.
 - The response sets `Cache-Control: private, no-store` and must not be retained as shared or stored client state.
@@ -759,11 +773,12 @@ Successful response:
 Superuser boundary:
 
 - A Django superuser still requires an active operational CRM role to pass endpoint admission.
-- After admission, the existing superuser evaluator path remains authoritative and records its transactional `PRIVACY_SUPERUSER_BYPASS` audit event. Because the CRM disclosure allowlist is empty, the response still contains `"capability_codes": []`; superuser authority does not expand the public response contract.
+- After admission, the existing superuser evaluator path remains authoritative and records its transactional `PRIVACY_SUPERUSER_BYPASS` audit event. Superuser authority does not expand the public response contract beyond the single allowlisted capability.
 
 Evidence status:
 
-- **Implemented / Source-inspected:** route, view, serializer, CRM-session authentication, active-role permission, empty disclosure allowlist, transactional policy-state read, superuser boundary, and `private, no-store` response header were inspected in `staff_access/urls.py`, `staff_access/views.py`, `staff_access/serializers.py`, and `staff_access/permissions.py`.
+- **Implemented / Source-inspected:** route, view, serializer, CRM-session authentication, active-role permission, single-capability disclosure allowlist, transactional policy-state read, superuser boundary, and `private, no-store` response header were inspected in `staff_access/urls.py`, `staff_access/views.py`, `staff_access/serializers.py`, and `staff_access/permissions.py`.
+- **Verified / isolated local runtime:** `http://localhost:8000` served the API against `elevate_gdpr_phase1a4c_manual`; synthetic admin and delegated manager sessions received only `STAFF_CAPABILITY_ADMIN`, while an explicitly restricted account received no capability projection. The operational `elevate` database was not used.
 - **Verified — focused API evidence:** 34/34 Phase 1A.4A focused tests passed against isolated PostgreSQL database `test_elevate_gdpr_phase1a4a_20261124`; `manage.py check` passed; `makemigrations --check --dry-run` reported `No changes detected`; `migrate --plan` reported no planned migration operations; and `git diff --check` was clean. No schema or migration files changed, and no migrations were applied for Phase 1A.4A.
 - **Unverified:** broader runtime behavior, deployment behavior, CRM tests/build/runtime, and cross-repository CRM consumption.
 

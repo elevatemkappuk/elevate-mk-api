@@ -62,7 +62,7 @@ class EffectiveAccessEndpointTests(TestCase):
         self.assertEqual(response.status_code, 200)
         return client
 
-    def test_response_has_exact_empty_projection_and_policy_version(self):
+    def test_response_has_allowlisted_projection_and_policy_version(self):
         client = self.session_client(self.manager)
         response = client.get(self.url)
 
@@ -73,7 +73,10 @@ class EffectiveAccessEndpointTests(TestCase):
             response.data["policy_version"],
             CapabilityPolicyState.objects.get(singleton_key=1, key="capability-governance").version,
         )
-        self.assertEqual(CRM_EFFECTIVE_ACCESS_DISCLOSURE_ALLOWLIST, frozenset())
+        self.assertEqual(
+            CRM_EFFECTIVE_ACCESS_DISCLOSURE_ALLOWLIST,
+            frozenset({CapabilityDefinition.STAFF_CAPABILITY_ADMIN}),
+        )
 
     def test_all_active_operational_crm_roles_are_admitted(self):
         for user in (self.admin, self.manager, self.viewer):
@@ -95,7 +98,7 @@ class EffectiveAccessEndpointTests(TestCase):
 
         self.assertEqual(response["Cache-Control"], "private, no-store")
 
-    def test_endpoint_passes_empty_allowlist_and_request_to_single_evaluator_call(self):
+    def test_endpoint_passes_allowlist_and_request_to_single_evaluator_call(self):
         client = self.session_client(self.manager)
         with patch("staff_access.views.get_effective_capability_codes_for_user", return_value=set()) as evaluator:
             response = client.get(self.url)
@@ -104,7 +107,10 @@ class EffectiveAccessEndpointTests(TestCase):
         evaluator.assert_called_once()
         called_args, called_kwargs = evaluator.call_args
         self.assertEqual(called_args, (self.manager,))
-        self.assertEqual(called_kwargs["requested_codes"], frozenset())
+        self.assertEqual(
+            called_kwargs["requested_codes"],
+            frozenset({CapabilityDefinition.STAFF_CAPABILITY_ADMIN}),
+        )
         self.assertIsInstance(called_kwargs["request"], Request)
         self.assertIs(called_kwargs["request"]._request, response.wsgi_request)
         self.assertEqual(called_kwargs["request"].user.pk, self.manager.pk)
@@ -153,4 +159,7 @@ class EffectiveAccessEndpointTests(TestCase):
         self.assertEqual(response.status_code, 200)
         bypass = AuditEvent.objects.filter(action=AuditEvent.Action.PRIVACY_SUPERUSER_BYPASS)
         self.assertEqual(bypass.count(), before + 1)
-        self.assertEqual(bypass.latest("id").metadata["capability_codes"], [])
+        self.assertEqual(
+            bypass.latest("id").metadata["capability_codes"],
+            [CapabilityDefinition.STAFF_CAPABILITY_ADMIN],
+        )

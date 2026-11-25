@@ -14,7 +14,7 @@ from staff_access.models import (
 
 
 PRIVACY_CAPABILITY_CODES = frozenset(CapabilityDefinition.canonical_codes())
-CRM_EFFECTIVE_ACCESS_DISCLOSURE_ALLOWLIST = frozenset()
+CRM_EFFECTIVE_ACCESS_DISCLOSURE_ALLOWLIST = frozenset({CapabilityDefinition.STAFF_CAPABILITY_ADMIN})
 CRM_OPERATIONAL_ROLE_CODES = tuple(code for code, _name in StaffRole.CANONICAL_ROLES)
 
 

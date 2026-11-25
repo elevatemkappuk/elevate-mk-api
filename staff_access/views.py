@@ -1,5 +1,6 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db import transaction
+from django.db import IntegrityError, transaction
+from django.db.models import Q
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 from rest_framework import generics, serializers, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -104,6 +105,19 @@ def _governance_error(error):
     return serializers.ValidationError(str(error))
 
 
+def _pending_proposal_conflict(*, target_user=None, role=None, capability=None):
+    filters = {"status": CapabilityProposal.Status.PENDING, "capability": capability}
+    filters["target_user" if target_user is not None else "role"] = target_user or role
+    proposal = CapabilityProposal.objects.filter(**filters).order_by("pk").first()
+    payload = {
+        "code": "PENDING_PROPOSAL_EXISTS",
+        "detail": "A pending governance proposal already exists for this target and capability.",
+    }
+    if proposal is not None:
+        payload["proposal_id"] = str(proposal.public_id)
+    return Response(payload, status=status.HTTP_409_CONFLICT)
+
+
 def _proposal_payload(proposal):
     decision = getattr(proposal, "decision", None)
     return {
@@ -152,7 +166,7 @@ class StaffEffectiveAccessView(APIView):
         summary="Get the current CRM access projection",
         description=(
             "Returns the backend-evaluated CRM access projection for the authenticated Staff CRM session. "
-            "Capability disclosure is intentionally empty until a later approved CRM capability consumer exists."
+            "Only the approved STAFF_CAPABILITY_ADMIN capability is disclosed to CRM."
         ),
         responses={
             200: EffectiveAccessSerializer,
@@ -194,20 +208,38 @@ class GovernanceTargetDetailView(APIView):
         if target.person.record_type != Person.RecordType.STAFF:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        assignments = StaffCapabilityAssignment.objects.filter(user=target).select_related("capability")
-        restrictions = StaffCapabilityRestriction.objects.filter(user=target).select_related("capability")
+        assignments = StaffCapabilityAssignment.objects.filter(
+            user=target,
+            state__in=StaffCapabilityAssignment.current_states(),
+        ).select_related("capability")
+        restrictions = StaffCapabilityRestriction.objects.active().filter(user=target).select_related("capability")
         role_assignments = target.staff_role_assignments.select_related("role").order_by("role__code")
+        target_is_eligible = (
+            target.pk != request.user.pk
+            and target.is_active
+            and target.person.record_type == Person.RecordType.STAFF
+            and any(item.is_active and item.role.is_active and item.role.code in StaffRole.canonical_codes() for item in role_assignments)
+        )
         capability_state = {}
         for capability in CapabilityDefinition.objects.filter(is_active=True).order_by("code"):
             assignment = next((item for item in assignments if item.capability_id == capability.pk), None)
             restriction = next((item for item in restrictions if item.capability_id == capability.pk and item.is_active), None)
             actions = []
+            if not target_is_eligible:
+                capability_state[capability.code] = {
+                    "assignment_state": None if assignment is None else assignment.state,
+                    "restriction_active": restriction is not None,
+                    "permitted_actions": [],
+                }
+                continue
             if assignment is None and restriction is None:
                 actions.append(CapabilityProposal.Operation.INDIVIDUAL_GRANT)
             elif assignment is not None and assignment.state == StaffCapabilityAssignment.State.SUSPENDED and restriction is None:
                 actions.append(CapabilityProposal.Operation.INDIVIDUAL_RESTORE)
             if assignment is not None and assignment.state == StaffCapabilityAssignment.State.ACTIVE:
-                actions.extend((CapabilityProposal.Operation.INDIVIDUAL_SUSPEND, CapabilityProposal.Operation.INDIVIDUAL_REVOKE))
+                if capability.code == CapabilityDefinition.STAFF_CAPABILITY_ADMIN:
+                    actions.append(CapabilityProposal.Operation.INDIVIDUAL_SUSPEND)
+                actions.append(CapabilityProposal.Operation.INDIVIDUAL_REVOKE)
             if restriction is None:
                 actions.append(CapabilityProposal.Operation.INDIVIDUAL_RESTRICT)
             else:
@@ -229,6 +261,45 @@ class GovernanceTargetDetailView(APIView):
             ],
             "capabilities": capability_state,
         })
+
+
+class GovernanceStaffDirectoryView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [OrdinaryGovernancePermission]
+
+    def get(self, request):
+        query = str(request.query_params.get("q", "")).strip()
+        try:
+            page = max(1, int(request.query_params.get("page", 1)))
+            page_size = min(50, max(1, int(request.query_params.get("page_size", 25))))
+        except (TypeError, ValueError):
+            raise serializers.ValidationError("Invalid pagination parameters.")
+        users = User.objects.select_related("person").filter(
+            person__record_type=Person.RecordType.STAFF,
+        ).order_by("person__last_name", "person__first_name", "pk")
+        if query:
+            users = users.filter(
+                Q(person__first_name__icontains=query)
+                | Q(person__last_name__icontains=query)
+            )
+        total = users.count()
+        rows = []
+        for target in users[(page - 1) * page_size : page * page_size]:
+            role_rows = list(target.staff_role_assignments.select_related("role").order_by("role__code"))
+            active_roles = [
+                row.role.code for row in role_rows
+                if row.is_active and row.role.is_active and row.role.code in StaffRole.canonical_codes()
+            ]
+            rows.append({
+                "user_id": target.pk,
+                "display_name": f"{target.person.first_name} {target.person.last_name}".strip(),
+                "record_type": target.person.record_type,
+                "is_active": target.is_active,
+                "role_codes": active_roles,
+                "eligible": bool(target.is_active and active_roles),
+                "can_manage_privacy_permissions": target.pk != request.user.pk and bool(target.is_active and active_roles),
+            })
+        return Response({"count": total, "page": page, "page_size": page_size, "results": rows})
 
 
 class GovernanceRoleDefaultsView(APIView):
@@ -272,6 +343,8 @@ class GovernanceProposalCreateView(APIView):
                 target_user=target,
                 request=request,
             )
+        except IntegrityError:
+            return _pending_proposal_conflict(target_user=target, role=role, capability=capability)
         except (DjangoValidationError, PermissionError, CapabilityDefinition.DoesNotExist, StaffRole.DoesNotExist, User.DoesNotExist) as error:
             raise _governance_error(error)
         return Response(_proposal_payload(proposal), status=status.HTTP_201_CREATED)
@@ -297,6 +370,8 @@ class GovernanceIndividualChangeView(APIView):
                 reason=data["reason"],
                 request=request,
             )
+        except IntegrityError:
+            return _pending_proposal_conflict(target_user=target, capability=capability)
         except (DjangoValidationError, PermissionError, CapabilityDefinition.DoesNotExist, User.DoesNotExist) as error:
             raise _governance_error(error)
         return Response(_proposal_payload(proposal))

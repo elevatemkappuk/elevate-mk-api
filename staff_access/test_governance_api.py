@@ -6,8 +6,10 @@ from people.models import Person
 from staff_access.models import (
     CapabilityDefinition,
     CapabilityPolicyState,
+    CapabilityProposal,
     RoleCapabilityDefault,
     StaffCapabilityAssignment,
+    StaffCapabilityRestriction,
     StaffRole,
     StaffRoleAssignment,
 )
@@ -89,6 +91,19 @@ class GovernanceApiTests(TestCase):
         self.assertIn(CapabilityDefinition.PERSON_CONTACT_READ, response.data["capabilities"])
         self.assertIn("permitted_actions", response.data["capabilities"][CapabilityDefinition.PERSON_CONTACT_READ])
 
+    def test_staff_directory_is_searchable_without_contact_disclosure(self):
+        response = self.admin_client.get("/api/v1/staff/governance/targets/?q=Governance")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertGreaterEqual(response.data["count"], 1)
+        self.assertTrue(response.data["results"])
+        row = next(item for item in response.data["results"] if item["user_id"] == self.target.pk)
+        self.assertEqual(row["display_name"], "Governance API")
+        self.assertIn(StaffRole.CRM_MANAGER, row["role_codes"])
+        self.assertNotIn("email", row)
+        self.assertNotIn("phone", row)
+        self.assertNotIn("demographics", row)
+
     def test_ordinary_admin_can_create_and_approve_role_default_proposal(self):
         role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
         response = self.admin_client.post(
@@ -133,6 +148,93 @@ class GovernanceApiTests(TestCase):
             StaffCapabilityAssignment.objects.get(user=self.target, capability=capability).state,
             StaffCapabilityAssignment.State.SUSPENDED,
         )
+
+    def test_ordinary_individual_grant_is_applied_without_pending_proposal(self):
+        capability = CapabilityDefinition.objects.get(code=CapabilityDefinition.PERSON_DEMOGRAPHIC_READ)
+
+        response = self.admin_client.post(
+            "/api/v1/staff/governance/individual-changes/",
+            {
+                "operation": "INDIVIDUAL_GRANT",
+                "capability": capability.code,
+                "target_user_id": self.target.pk,
+                "reason": "Grant ordinary demographic access",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["status"], "APPROVED")
+        self.assertTrue(
+            StaffCapabilityAssignment.objects.filter(
+                user=self.target,
+                capability=capability,
+                state=StaffCapabilityAssignment.State.ACTIVE,
+            ).exists()
+        )
+        self.assertFalse(
+            CapabilityProposal.objects.filter(
+                target_user=self.target,
+                capability=capability,
+                status=CapabilityProposal.Status.PENDING,
+            ).exists()
+        )
+
+    def test_duplicate_pending_proposal_returns_sanitized_conflict(self):
+        capability = CapabilityDefinition.objects.get(code=CapabilityDefinition.PERSON_DEMOGRAPHIC_READ)
+        payload = {
+            "operation": "INDIVIDUAL_GRANT",
+            "capability": capability.code,
+            "target_user_id": self.target.pk,
+            "reason": "Pending proposal conflict contract",
+        }
+
+        first = self.admin_client.post("/api/v1/staff/governance/proposals/", payload, format="json")
+        second = self.admin_client.post("/api/v1/staff/governance/proposals/", payload, format="json")
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 409)
+        self.assertEqual(second.data["code"], "PENDING_PROPOSAL_EXISTS")
+        self.assertIn("proposal_id", second.data)
+        self.assertNotIn("IntegrityError", str(second.data))
+
+    def test_target_projection_ignores_revoked_history_for_current_actions(self):
+        capability = CapabilityDefinition.objects.get(code=CapabilityDefinition.PERSON_EXPORT)
+        StaffCapabilityAssignment.objects.create(
+            user=self.target,
+            capability=capability,
+            state=StaffCapabilityAssignment.State.REVOKED,
+            granted_by=self.admin,
+        )
+
+        response = self.admin_client.get(f"/api/v1/staff/governance/targets/{self.target.pk}/")
+
+        self.assertEqual(response.status_code, 200)
+        state = response.data["capabilities"][capability.code]
+        self.assertIsNone(state["assignment_state"])
+        self.assertIn("INDIVIDUAL_GRANT", state["permitted_actions"])
+
+    def test_target_projection_with_active_restriction_has_only_relevant_state(self):
+        capability = CapabilityDefinition.objects.get(code=CapabilityDefinition.PERSON_EXPORT)
+        StaffCapabilityRestriction.objects.create(user=self.target, capability=capability, restricted_by=self.admin)
+
+        response = self.admin_client.get(f"/api/v1/staff/governance/targets/{self.target.pk}/")
+
+        self.assertEqual(response.status_code, 200)
+        state = response.data["capabilities"][capability.code]
+        self.assertTrue(state["restriction_active"])
+        self.assertNotIn("INDIVIDUAL_GRANT", state["permitted_actions"])
+
+    def test_target_projection_does_not_advertise_unsupported_suspend(self):
+        capability = CapabilityDefinition.objects.get(code=CapabilityDefinition.PERSON_CONTACT_READ)
+        StaffCapabilityAssignment.objects.create(user=self.target, capability=capability, granted_by=self.admin)
+
+        response = self.admin_client.get(f"/api/v1/staff/governance/targets/{self.target.pk}/")
+
+        self.assertEqual(response.status_code, 200)
+        actions = response.data["capabilities"][capability.code]["permitted_actions"]
+        self.assertNotIn("INDIVIDUAL_SUSPEND", actions)
+        self.assertIn("INDIVIDUAL_REVOKE", actions)
 
     def test_superuser_endpoint_requires_superuser_and_is_separate(self):
         ordinary = self.admin_client.post(
