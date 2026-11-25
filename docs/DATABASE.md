@@ -1607,11 +1607,13 @@ unverified in this implementation stage.
 
 ### Phase 1B.1 People privacy schema impact
 
-Phase 1B.1 adds no model, index, constraint, or migration. Privacy capability
+Phase 1B.1 adds no model, index, or data constraint. Privacy capability
 evaluation is applied at the API projection, search, and write-validation
 boundaries over existing Person and related account data. No database values
 are rewritten or masked in storage. The two capability definitions and their
-role defaults are existing capability-foundation data; runtime disclosure is
-documented in `AUTHORIZATION.md` and `API.md`.
+role defaults are existing capability-foundation data. The generated
+`audit.0024_alter_auditevent_action` migration adds only the
+`PRIVACY_PERSON_DISCLOSED` action choice; it is not applied. Runtime disclosure
+behavior is documented in `AUTHORIZATION.md`, `API.md`, and `GDPR.md`.
 
 Status: **Implemented / source-inspected; database checks and tests unexecuted**.

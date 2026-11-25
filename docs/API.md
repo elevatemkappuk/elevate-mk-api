@@ -3152,16 +3152,18 @@ verification deferred to GDPR Phase 1C hardening**. The API and CRM must be
 released together for the expanded effective-capability disclosure contract;
 older strict CRM clients may not understand the two new capability codes.
 
-Deliberate protected-data access auditing is implemented for explicit protected
-Person detail and overview disclosures through the dedicated
-`PRIVACY_PERSON_DISCLOSED` action. The event is written before the protected
-response and uses the existing privacy audit service, trusted provenance and
-normalized `AuditEventSubject` Person association. Safe metadata contains only
-the operation, disclosure category, capability codes, outcome and superuser
-authority indicator; raw Person values, credentials, request payloads and
-search terms are excluded. Audit persistence failure prevents the response.
-List, directory, masked and ordinary unprotected reads do not generate this
-disclosure event. Denial auditing remains on the existing authorization-failure
-contract, and comprehensive Person access auditing remains `GDPR-FUTURE-001`.
-The required audit-choice migration is generated but not applied; automated and
-runtime verification remain deferred to GDPR Phase 1C hardening.
+The dedicated `PRIVACY_PERSON_DISCLOSED` action is implemented for approved
+protected disclosures made through the existing Django-superuser bypass path.
+For those detail and overview responses, the event is written before the
+protected response and uses the existing privacy audit service, trusted
+provenance and normalized `AuditEventSubject` Person association. Safe metadata
+contains only the operation, disclosure category, capability codes, outcome and
+superuser authority indicator; raw Person values, credentials, request payloads
+and search terms are excluded. Audit persistence failure prevents the response.
+Ordinary authorized detail, overview and directory reads, masked responses and
+unprotected reads do not generate blanket disclosure events. No new reveal
+workflow was introduced. Denial auditing remains on the existing
+authorization-failure contract, and comprehensive Person access auditing
+remains `GDPR-FUTURE-001`. The required audit-choice migration is generated but
+not applied; automated and runtime verification remain deferred to GDPR Phase 1C
+hardening.

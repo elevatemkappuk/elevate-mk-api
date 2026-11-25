@@ -556,19 +556,27 @@ responses remain minimal and do not expose contact or demographic values.
 Malformed or short contact values are safely represented as `Restricted`,
 while absent values remain not provided. Superuser evaluation continues through
 the existing audited capability evaluator. No blanket ordinary Person-view
-audit was introduced. Explicit protected Person detail and overview
-disclosures now use the dedicated `PRIVACY_PERSON_DISCLOSED` action. The event
-is persisted before the protected response, uses trusted provenance and a
-normalized Person subject, and records only safe operation, disclosure
-category, capability, outcome and superuser-authority metadata. Audit failure
-fails closed. Masked, list and ordinary unprotected reads do not generate raw
-disclosure events; denial auditing remains on the existing failure contract;
-and comprehensive Person access auditing remains `GDPR-FUTURE-001`.
+audit was introduced. Approved protected disclosures through the existing
+Django-superuser bypass path use the dedicated `PRIVACY_PERSON_DISCLOSED`
+action. The event is persisted before the protected response, uses trusted
+provenance and a normalized Person subject, and records only safe operation,
+disclosure category, capability, outcome and superuser-authority metadata.
+Audit failure fails closed. Ordinary authorized detail, overview and directory
+reads, masked responses and list reads do not generate raw disclosure events;
+no new reveal workflow was introduced; denial auditing remains on the existing
+failure contract; and comprehensive Person access auditing remains
+`GDPR-FUTURE-001`.
 
 The choice migration `audit.0024_alter_auditevent_action.py` is generated but
 not applied. The new regression tests are **Implemented / Unexecuted**, and
 runtime migration, disclosure, failure-rollback and Privacy Audit verification
 remain deferred to GDPR Phase 1C hardening.
+
+The final UAT and UI-polishing backlog includes manual verification of the
+People privacy projections, superuser disclosure-audit behavior, Privacy Audit
+activity filtering, masked/restricted indicators, protected search and form
+feedback. These are verification and presentation follow-ups, not additional
+privacy scope.
 
 Tests covering masked projections, restricted demographics, contact-search
 suppression, protected writes, safe malformed values, and the superuser

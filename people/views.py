@@ -460,12 +460,13 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
     )
     def get(self, request, *args, **kwargs):
         person = self.get_object()
-        record_person_privacy_disclosure(
-            request=request,
-            person=person,
-            capabilities=person_privacy_capabilities(request=request),
-            operation="PERSON_DETAIL",
-        )
+        if request.user.is_superuser:
+            record_person_privacy_disclosure(
+                request=request,
+                person=person,
+                capabilities=person_privacy_capabilities(request=request),
+                operation="PERSON_DETAIL",
+            )
         return super().get(request, *args, **kwargs)
 
     def get_queryset(self):
@@ -767,12 +768,13 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
     )
     def get(self, request, *args, **kwargs):
         person = self.get_object()
-        record_person_privacy_disclosure(
-            request=request,
-            person=person,
-            capabilities=person_privacy_capabilities(request=request),
-            operation="PERSON_OVERVIEW",
-        )
+        if request.user.is_superuser:
+            record_person_privacy_disclosure(
+                request=request,
+                person=person,
+                capabilities=person_privacy_capabilities(request=request),
+                operation="PERSON_OVERVIEW",
+            )
         return super().get(request, *args, **kwargs)
 
     def get_queryset(self):

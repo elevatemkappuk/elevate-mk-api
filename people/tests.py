@@ -1891,21 +1891,12 @@ class PersonPrivacyApiTests(TestCase):
         self.assertEqual(response.data["primary_email"], "amina@example.com")
         self.assertEqual(response.data["gender"], Person.Gender.FEMALE)
 
-    def test_deliberate_protected_disclosure_is_audited_with_safe_person_subject(self):
+    def test_ordinary_protected_read_does_not_create_blanket_disclosure_event(self):
         self.client.force_authenticate(self.manager)
         response = self.client.get(f"/api/v1/people/{self.person.pk}/")
 
         self.assertEqual(response.status_code, 200)
-        event = AuditEvent.objects.get(action=AuditEvent.Action.PRIVACY_PERSON_DISCLOSED)
-        self.assertEqual(event.actor_user_id, self.manager.id)
-        self.assertEqual(event.entity_type, "Person")
-        self.assertEqual(event.entity_id, str(self.person.pk))
-        self.assertEqual(event.metadata["disclosure_category"], "CONTACT")
-        self.assertEqual(event.metadata["capability_codes"], ["PERSON_CONTACT_READ"])
-        self.assertFalse(event.metadata["superuser_authority"])
-        self.assertNotIn("amina@example.com", str(event.metadata))
-        self.assertNotIn("+447700900123", str(event.metadata))
-        self.assertTrue(event.subjects.filter(person=self.person).exists())
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.PRIVACY_PERSON_DISCLOSED).count(), 0)
 
     def test_superuser_disclosure_records_bypass_without_raw_person_data(self):
         superuser = User.objects.create_superuser(
@@ -1935,7 +1926,14 @@ class PersonPrivacyApiTests(TestCase):
         self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.PRIVACY_PERSON_DISCLOSED).count(), 0)
 
     def test_mandatory_disclosure_audit_failure_prevents_protected_response(self):
-        self.client.force_authenticate(self.manager)
+        superuser = User.objects.create_superuser(
+            email="privacy-disclosure-failure-superuser@example.com",
+            password="testpass123",
+            person_first_name="Privacy",
+            person_last_name="Failure Superuser",
+        )
+        StaffRoleAssignment.objects.assign_role(user=superuser, role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN))
+        self.client.force_authenticate(superuser)
         with mock.patch("people.privacy.record_audit_event", side_effect=RuntimeError("audit unavailable")):
             with self.assertRaises(RuntimeError):
                 self.client.get(f"/api/v1/people/{self.person.pk}/")
