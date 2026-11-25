@@ -327,6 +327,7 @@ class TokenLogoutView(APIView):
 @method_decorator(csrf_protect, name="dispatch")
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
+    authentication_classes = [CrmSessionAuthentication]
 
     @extend_schema(
         operation_id="auth_logout",

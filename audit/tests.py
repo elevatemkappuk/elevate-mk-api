@@ -34,6 +34,18 @@ class AuditEventModelTests(TestCase):
         self.assertEqual(event.entity_type, "User")
         self.assertEqual(event.entity_id, str(self.user.id))
 
+    def test_untrusted_system_context_does_not_persist_caller_request_context(self):
+        event = record_audit_event(
+            action=AuditEvent.Action.LOGIN_FAILED,
+            entity_type="Authentication",
+            request_id="caller-supplied-request-id",
+            ip_address="203.0.113.10",
+        )
+
+        self.assertIsNone(event.request_id)
+        self.assertIsNone(event.ip_address)
+        self.assertFalse(event.provenance_trusted)
+
     def test_actor_user_may_be_null(self):
         event = record_audit_event(
             action=AuditEvent.Action.LOGIN_FAILED,

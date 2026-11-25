@@ -489,3 +489,44 @@ guard. Pending requests remove the ordinary `request_release`
 action until rejected or otherwise resolved. Person-wide and event-specific
 targets continue through the existing services and signed opaque references;
 no migration is required.
+
+## Phase 1A.4E and 1A.6 consolidated status
+
+Status: **Implemented / source-inspected; automated tests and final hardening
+execution deferred.** API/CRM contracts continue to use Django session
+authentication for Staff CRM routes; mobile JWT authentication remains limited
+to its documented mobile and Community surfaces. Capability evaluation,
+revocation, privacy governance, and safe projections remain backend-authoritative
+and compatible with the accepted CRM consumers.
+
+Phase 1A.5 legacy reconciliation is explicitly skipped because the current
+dataset is test data. No reconciliation tooling, management command, dashboard,
+record reclassification, deletion, or operational data remediation was added.
+New role assignments now require an active STAFF user, or the approved active
+Django superuser exception, and an active canonical Staff role.
+
+The following source-level corrections are implemented: ordinary Django Admin
+cannot self-assign Staff roles or directly edit existing StaffRoleAssignment
+rows; new inactive or non-STAFF role assignments are rejected; and untrusted
+system audit callers cannot persist caller-supplied request identifiers or IP
+addresses. The CRM session logout route now explicitly rejects mobile JWT
+authentication; the approved superuser exception remains available. Added regression
+tests are **Implemented / Unverified** because test execution is deferred to
+final GDPR hardening.
+
+AUTH-002 remains resolved within its reviewed raw AuditEvent Admin scope.
+GOV-003, GOV-005, uncovered GOV-006 privileged-writer paths, AUTH-001 residual
+operational surfaces, trusted-provenance hardening beyond the implemented
+source correction, operational migrations/deployment, and formal legal/privacy
+approval remain final-hardening or activation dependencies. They are not
+silently risk-accepted. Automatic disposal, anonymisation, Person masking,
+export enforcement, and GDPR-FUTURE-001 remain deferred.
+
+These obligations are carried into the consolidated GDPR Phase 1C final
+hardening stage. The implementation-stage specialist acceptance gate was not
+completed for every specialist because the active agent-thread limit prevented
+delegation; no independent acceptance is claimed. All regression tests added
+in this stage remain **Implemented / Unexecuted** until Phase 1C hardening.
+Production activation requires final security, QA, architecture and
+documentation acceptance, runtime/deployment verification, and any required
+legal or privacy approvals.

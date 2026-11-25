@@ -35,7 +35,7 @@ class CampaignFoundationApiTests(TestCase):
         self._preference(self.opted_out, MarketingPreference.State.OPTED_OUT)
 
     def _staff(self, email, role):
-        user = User.objects.create_user(email=email, password="password123", person_first_name="Campaign", person_last_name="Staff", person_record_type=Person.RecordType.TECHNICAL)
+        user = User.objects.create_user(email=email, password="password123", person_first_name="Campaign", person_last_name="Staff", person_record_type=Person.RecordType.STAFF)
         StaffRoleAssignment.objects.assign_role(user=user, role=StaffRole.objects.get(code=role))
         return user
 

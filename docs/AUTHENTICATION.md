@@ -361,10 +361,11 @@ Current logout endpoint:
 Current logout flow:
 
 1. An authenticated client sends the logout request.
-2. While the authenticated actor is still available, `LogoutView` writes an append-only `AuditEvent` with action `LOGOUT`.
-3. `LogoutView` then calls Django `logout(request)`.
-4. Django clears the authenticated session state.
-5. Subsequent protected requests from that client are anonymous unless a new login occurs.
+2. `LogoutView` accepts only the Django CRM session authentication class; mobile JWT logout remains exclusively on `TokenLogoutView`.
+3. While the authenticated actor is still available, `LogoutView` writes an append-only `AuditEvent` with action `LOGOUT`.
+4. `LogoutView` then calls Django `logout(request)`.
+5. Django clears the authenticated session state.
+6. Subsequent protected requests from that client are anonymous unless a new login occurs.
 
 Request-flow diagram:
 ```text

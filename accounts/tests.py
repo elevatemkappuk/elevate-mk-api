@@ -765,6 +765,22 @@ class AuthenticationApiTests(TestCase):
         self.assertEqual(response.status_code, 204)
         self.assertNotIn("_auth_user_id", self.client.session)
 
+    def test_mobile_jwt_cannot_use_crm_session_logout(self):
+        token_response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+
+        response = self.client.post(
+            self.logout_url,
+            {},
+            format="json",
+            HTTP_AUTHORIZATION=f"Bearer {token_response.data['access']}",
+        )
+
+        self.assertEqual(response.status_code, 401)
+
     def test_authenticated_access_fails_after_logout(self):
         self.client.post(
             self.login_url,

@@ -11,6 +11,7 @@ from django.utils import timezone
 from accounts.models import User
 from audit.models import AuditEvent
 from audit.services import record_audit_event
+from people.models import Person
 from staff_access.exceptions import FinalCrmAdminProtectionError
 from staff_access.models import (
     CAPABILITY_POLICY_STATE_KEY,
@@ -180,18 +181,18 @@ def assign_staff_role(*, user, role, assigned_by=None, audit=True, return_detail
         locked_roles = list(StaffRole.objects.select_for_update().order_by("pk"))
         locked_role = next(item for item in locked_roles if item.pk == role.pk)
 
+        if locked_role.code not in StaffRole.canonical_codes() or not locked_role.is_active:
+            raise ValidationError("Only active canonical Staff roles can be assigned.")
+
         existing_assignments = list(
             StaffRoleAssignment.objects.select_for_update()
             .filter(user_id=user.pk)
             .order_by("pk")
         )
         locked_user = user.__class__.objects.select_for_update().get(pk=user.pk)
-        if locked_user.person.record_type == "COMMUNITY":
-            from memberships.models import Membership
-
-            if Membership.objects.filter(person_id=locked_user.person_id).exists():
-                raise ValidationError("A Community Person with Membership cannot be provisioned as Staff.")
-            raise ValidationError("Staff roles require a separately provisioned STAFF Person and User.")
+        eligible_person = locked_user.person.record_type == Person.RecordType.STAFF
+        if not locked_user.is_active or (not eligible_person and not locked_user.is_superuser):
+            raise ValidationError("Staff roles require an active STAFF user or the approved active superuser exception.")
 
         assignment = next(
             (item for item in existing_assignments if item.role_id == locked_role.pk),

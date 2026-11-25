@@ -37,7 +37,7 @@ class TrustedAuditProvenance:
     provenance_id: str
     request_id: str | None = None
     ip_address: str | None = None
-    trusted: bool = True
+    trusted: bool = False
 
 
 _provenance_context = ContextVar("audit_provenance", default=None)
@@ -61,6 +61,7 @@ def build_http_provenance(request):
         provenance_id=uuid.uuid4().hex,
         request_id=uuid.uuid4().hex,
         ip_address=None,
+        trusted=True,
     )
 
 
@@ -114,6 +115,7 @@ def record_audit_event(
         resolved_provenance = TrustedAuditProvenance(
             source=AuditEvent.ProvenanceSource.SYSTEM,
             provenance_id=uuid.uuid4().hex,
+            trusted=False,
         )
     if resolved_provenance.source not in AuditEvent.ProvenanceSource.values:
         raise ValueError(f"Unsupported provenance source: {resolved_provenance.source}")
@@ -124,8 +126,16 @@ def record_audit_event(
         entity_id=entity_id,
         metadata=metadata,
     )
-    trusted_request_id = resolved_provenance.request_id if resolved_provenance.source == AuditEvent.ProvenanceSource.HTTP_REQUEST else request_id
-    trusted_ip = resolved_provenance.ip_address if resolved_provenance.source == AuditEvent.ProvenanceSource.HTTP_REQUEST else ip_address
+    trusted_request_id = (
+        resolved_provenance.request_id
+        if resolved_provenance.source == AuditEvent.ProvenanceSource.HTTP_REQUEST
+        else request_id if resolved_provenance.trusted else None
+    )
+    trusted_ip = (
+        resolved_provenance.ip_address
+        if resolved_provenance.source == AuditEvent.ProvenanceSource.HTTP_REQUEST
+        else ip_address if resolved_provenance.trusted else None
+    )
     with transaction.atomic():
         event = AuditEvent(
             actor_user=actor_user,

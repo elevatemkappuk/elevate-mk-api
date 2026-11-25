@@ -1,5 +1,6 @@
 from django.contrib import admin
 from django.contrib import messages
+from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.utils.translation import ngettext
 
@@ -171,8 +172,10 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
 
     def save_model(self, request, obj, form, change):
         if change:
-            super().save_model(request, obj, form, change)
-            return
+            raise PermissionDenied("Existing Staff role assignments must be changed through lifecycle actions.")
+
+        if obj.user_id == request.user.pk and not getattr(request.user, "is_superuser", False):
+            raise PermissionDenied("Staff role assignments cannot target the acting user.")
 
         with transaction.atomic():
             assignment, created, reactivated, policy_version = StaffRoleAssignment.objects.assign_role(
@@ -248,6 +251,8 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
                 .select_related("role")
                 .filter(is_active=False)
             )
+            if any(assignment.user_id == request.user.pk for assignment in assignments) and not getattr(request.user, "is_superuser", False):
+                raise PermissionDenied("Staff role assignments cannot target the acting user.")
             for assignment in assignments:
                 assignment, created, reactivated, policy_version = StaffRoleAssignment.objects.assign_role(
                     user=assignment.user,

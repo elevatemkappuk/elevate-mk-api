@@ -52,8 +52,9 @@ class AuthenticationAuditTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         event = AuditEvent.objects.get(action=AuditEvent.Action.LOGIN_SUCCEEDED)
-        self.assertEqual(event.request_id, "request-123")
-        self.assertEqual(event.ip_address, "192.0.2.10")
+        self.assertTrue(event.request_id)
+        self.assertNotEqual(event.request_id, "request-123")
+        self.assertIsNone(event.ip_address)
         self.assertEqual(event.metadata, {"authentication": "jwt"})
         self.assertNotIn(response.data["access"], str({"metadata": event.metadata, "changes": event.changes}))
         self.assertNotIn(response.data["refresh"], str({"metadata": event.metadata, "changes": event.changes}))
@@ -69,8 +70,9 @@ class AuthenticationAuditTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         event = AuditEvent.objects.get(action=AuditEvent.Action.LOGIN_FAILED)
-        self.assertEqual(event.request_id, "request-failed")
-        self.assertEqual(event.ip_address, "192.0.2.11")
+        self.assertTrue(event.request_id)
+        self.assertNotEqual(event.request_id, "request-failed")
+        self.assertIsNone(event.ip_address)
         self.assertNotIn(self.password, str({"metadata": event.metadata, "changes": event.changes}))
 
     def test_mobile_logout_audit_contains_only_an_opaque_session_reference(self):
@@ -114,7 +116,8 @@ class AuthenticationAuditTests(TestCase):
         self.assertEqual(response.status_code, 401)
         event = AuditEvent.objects.get(action=AuditEvent.Action.SESSION_EXPIRED)
         self.assertEqual(event.metadata["reason"], "idle_timeout")
-        self.assertEqual(event.request_id, "expired-request")
+        self.assertTrue(event.request_id)
+        self.assertNotEqual(event.request_id, "expired-request")
         self.assertNotIn("sessionid", str({"metadata": event.metadata, "changes": event.changes}))
 
     def test_credential_revocation_audit_records_reason_and_count_only(self):

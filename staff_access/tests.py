@@ -3,7 +3,7 @@ from unittest import skipUnless
 from django.contrib.admin.sites import AdminSite
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.messages.storage.fallback import FallbackStorage
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import close_old_connections, connection, transaction
 from django.db import IntegrityError
 from django.http import HttpRequest
@@ -397,10 +397,11 @@ class StaffRoleAssignmentModelTests(TestCase):
     def test_assignments_to_inactive_roles_do_not_grant_access(self):
         self.viewer_role.is_active = False
         self.viewer_role.save(update_fields=["is_active"])
-        StaffRoleAssignment.objects.assign_role(user=self.user, role=self.viewer_role)
+        with self.assertRaises(ValidationError):
+            StaffRoleAssignment.objects.assign_role(user=self.user, role=self.viewer_role)
         self.assertFalse(StaffRoleAssignment.objects.active().exists())
 
-    def test_active_staff_role_assignment_still_works_for_technical_person_user(self):
+    def test_staff_role_assignment_rejects_new_technical_person_user(self):
         technical_user = User.objects.create_user(
             email="technical@example.com",
             password="testpass123",
@@ -409,10 +410,9 @@ class StaffRoleAssignmentModelTests(TestCase):
             person_record_type=Person.RecordType.TECHNICAL,
         )
 
-        assignment = StaffRoleAssignment.objects.assign_role(user=technical_user, role=self.admin_role)
-
-        self.assertEqual(assignment.user.person.record_type, Person.RecordType.TECHNICAL)
-        self.assertTrue(StaffRoleAssignment.objects.active().filter(pk=assignment.pk).exists())
+        with self.assertRaises(ValidationError):
+            StaffRoleAssignment.objects.assign_role(user=technical_user, role=self.admin_role)
+        self.assertFalse(StaffRoleAssignment.objects.filter(user=technical_user).exists())
 
 
 class FinalCrmAdminProtectionTests(TestCase):
@@ -563,13 +563,14 @@ class StaffPermissionTests(TestCase):
         response = self.client.get("/test-permissions/manager-or-admin/")
         self.assertEqual(response.status_code, 200)
 
-    def test_technical_person_user_with_active_staff_role_is_allowed(self):
+    def test_superuser_exception_allows_non_staff_person_with_active_staff_role(self):
         technical_user = User.objects.create_user(
             email="technical-staff@example.com",
             password="testpass123",
             person_first_name="Technical",
             person_last_name="Staff",
             person_record_type=Person.RecordType.TECHNICAL,
+            is_superuser=True,
         )
         StaffRoleAssignment.objects.assign_role(user=technical_user, role=self.admin_role)
         self.client.force_authenticate(user=technical_user)
@@ -622,9 +623,9 @@ class StaffAdminTests(TestCase):
         self.crm_admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
         self.crm_viewer_role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
 
-    def build_request(self):
+    def build_request(self, user=None):
         request = self.factory.post("/admin/")
-        request.user = self.admin_user
+        request.user = user or self.admin_user
         request.session = self.client.session
         setattr(request, "_messages", FallbackStorage(request))
         return request
@@ -673,6 +674,35 @@ class StaffAdminTests(TestCase):
             },
         )
         self.assertEqual(event.changes, {"is_active": {"from": None, "to": True}})
+
+    def test_staff_role_assignment_admin_rejects_self_assignment(self):
+        ordinary_admin = User.objects.create_user(
+            email="ordinary-admin@example.com",
+            password="testpass123",
+            person_first_name="Ordinary",
+            person_last_name="Admin",
+            person_record_type=Person.RecordType.STAFF,
+        )
+        request = self.build_request(ordinary_admin)
+        assignment = StaffRoleAssignment(user=ordinary_admin, role=self.crm_viewer_role)
+
+        with self.assertRaises(PermissionDenied):
+            self.assignment_admin.save_model(request, assignment, form=None, change=False)
+
+        self.assertFalse(
+            StaffRoleAssignment.objects.filter(user=ordinary_admin, role=self.crm_viewer_role).exists()
+        )
+
+    def test_staff_role_assignment_admin_rejects_direct_existing_row_changes(self):
+        request = self.build_request()
+        assignment = StaffRoleAssignment.objects.assign_role(
+            user=self.target_user,
+            role=self.crm_viewer_role,
+            assigned_by=self.admin_user,
+        )
+
+        with self.assertRaises(PermissionDenied):
+            self.assignment_admin.save_model(request, assignment, form=None, change=True)
 
     def test_staff_role_assignment_admin_revokes_selected_assignments(self):
         request = self.build_request()

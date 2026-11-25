@@ -413,3 +413,21 @@ target scope for contextual Person and event hold actions.
 Legal-hold Person selection uses a dedicated capability-protected projection
 containing only active non-technical Person identifiers and names; it does not
 reuse the broader contact/demographic People directory projection.
+
+### Phase 1A.4E and 1A.6 source-level closure status
+
+The accepted Phase 1A.4E integration preserves the separation between Django
+Staff CRM sessions and mobile JWT authentication, with capability enforcement,
+revocation, privacy governance, and safe API projections remaining backend
+authoritative. Phase 1A.5 legacy reconciliation is explicitly skipped for the
+test-only dataset; new Staff role assignment is limited to active STAFF users,
+or the approved active Django superuser exception, and active canonical roles.
+
+Ordinary Django Admin self-assignment and direct editing of existing
+`StaffRoleAssignment` rows are blocked. System audit events now discard
+caller-supplied request context unless an explicit trusted provenance is used;
+HTTP provenance continues to use the server-generated request identifier.
+Focused regression tests were added but are **Implemented / Unverified** until
+final GDPR hardening execution. Remaining operational writer coverage,
+reconciliation integration, deployment/migration validation, and any legal or
+privacy approvals remain activation dependencies.
