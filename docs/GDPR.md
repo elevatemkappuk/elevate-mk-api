@@ -530,3 +530,58 @@ in this stage remain **Implemented / Unexecuted** until Phase 1C hardening.
 Production activation requires final security, QA, architecture and
 documentation acceptance, runtime/deployment verification, and any required
 legal or privacy approvals.
+
+## Phase 1B.1 People privacy
+
+Status: **Implemented / source-inspected; verification unexecuted**.
+
+The API now enforces the approved `PERSON_CONTACT_READ` and
+`PERSON_DEMOGRAPHIC_READ` boundaries on People response projections, nested
+account contact projections, contact search, and protected writes. The
+existing Person/User separation, record-level authorization, capability
+precedence, audited Django superuser exception, and session/mobile JWT
+separation are preserved. Storage remains unchanged: masking and restricted
+indicators are response behavior, not database redaction.
+
+The verified implementation field inventory is: Person `first_name`,
+`last_name`, `primary_email`, `mobile`, `location`, `age_range`, `gender`,
+`archived_at`, timestamps, and `record_type`; nested overview contact fields
+`account_email` and `setup_email`; and existing professional-profile fields
+used by directory search. Contact protection currently covers
+`primary_email`, `mobile`, `account_email`, and `setup_email`. Demographic
+protection currently covers `age_range` and `gender`. Email/mobile search is
+capability-gated; counts and pagination follow the filtered queryset. Duplicate
+responses remain minimal and do not expose contact or demographic values.
+
+Malformed or short contact values are safely represented as `Restricted`,
+while absent values remain not provided. Superuser evaluation continues through
+the existing audited capability evaluator. No blanket ordinary Person-view
+audit was introduced. Explicit protected Person detail and overview
+disclosures now use the dedicated `PRIVACY_PERSON_DISCLOSED` action. The event
+is persisted before the protected response, uses trusted provenance and a
+normalized Person subject, and records only safe operation, disclosure
+category, capability, outcome and superuser-authority metadata. Audit failure
+fails closed. Masked, list and ordinary unprotected reads do not generate raw
+disclosure events; denial auditing remains on the existing failure contract;
+and comprehensive Person access auditing remains `GDPR-FUTURE-001`.
+
+The choice migration `audit.0024_alter_auditevent_action.py` is generated but
+not applied. The new regression tests are **Implemented / Unexecuted**, and
+runtime migration, disclosure, failure-rollback and Privacy Audit verification
+remain deferred to GDPR Phase 1C hardening.
+
+Tests covering masked projections, restricted demographics, contact-search
+suppression, protected writes, safe malformed values, and the superuser
+exception were added but are **Implemented / Unexecuted** under the approved
+deferred-test policy. Independent specialist acceptance was unavailable because
+the active agent-thread limit prevented delegation; no independent acceptance
+is claimed. Final hardening still requires the approved lightweight checks and
+runtime verification.
+
+The following classifications remain unresolved and require explicit legal,
+privacy, or product approval rather than silent technical classification:
+`location`; professional profile fields including job, company, career stage,
+LinkedIn, and industry; skills, interests, tags, notes, membership and
+marketing preferences; Community account lifecycle/provider data; and audit
+history. Person export enforcement, comprehensive Person record-access
+auditing (`GDPR-FUTURE-001`), and later privacy workflows remain deferred.

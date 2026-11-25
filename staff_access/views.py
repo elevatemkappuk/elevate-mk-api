@@ -307,7 +307,7 @@ class StaffEffectiveAccessView(APIView):
         summary="Get the current CRM access projection",
         description=(
             "Returns the backend-evaluated CRM access projection for the authenticated Staff CRM session. "
-            "Only the approved STAFF_CAPABILITY_ADMIN capability is disclosed to CRM."
+            "Only the approved CRM capability projection is disclosed to the session-authenticated CRM."
         ),
         responses={
             200: EffectiveAccessSerializer,

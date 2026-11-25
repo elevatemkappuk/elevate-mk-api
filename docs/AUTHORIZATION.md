@@ -414,6 +414,31 @@ Legal-hold Person selection uses a dedicated capability-protected projection
 containing only active non-technical Person identifiers and names; it does not
 reuse the broader contact/demographic People directory projection.
 
+## Phase 1B.1 People privacy enforcement
+
+`PERSON_CONTACT_READ` controls Person email/mobile disclosure, contact search,
+and contact-field submissions. `PERSON_DEMOGRAPHIC_READ` controls age-range and
+gender disclosure and submissions. The backend evaluates these capabilities
+after the existing CRM role and Person-scope checks; Django superusers retain
+their approved audited exception.
+
+Without the relevant capability, contact values are deterministically masked,
+demographics use the `Restricted` representation, and the response includes
+`privacy.contact_restricted` or `privacy.demographic_restricted`. Contact
+search is removed from the queryset for callers without contact capability,
+including counts and pagination. Protected fields supplied manually are
+rejected server-side, while unrelated fields remain independently writable
+where the existing Person role permits it.
+
+Explicit protected Person detail and overview disclosures are recorded with the
+dedicated `PRIVACY_PERSON_DISCLOSED` action before the protected response is
+returned. The existing privacy audit service supplies trusted provenance and a
+normalized Person subject; metadata is limited to safe operation, disclosure
+category, capability, outcome and superuser-authority fields. Audit failure
+fails closed. Masked, list and ordinary unprotected reads are not treated as
+raw disclosure events, and comprehensive Person access auditing remains the
+deferred `GDPR-FUTURE-001` enhancement.
+
 ### Phase 1A.4E and 1A.6 source-level closure status
 
 The accepted Phase 1A.4E integration preserves the separation between Django

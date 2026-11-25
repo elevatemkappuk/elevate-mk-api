@@ -121,6 +121,13 @@ The audit action `PRIVACY_SUPERUSER_BYPASS` is added by
 `audit.0020_alter_auditevent_action`. The audit migration preserves the
 existing action choices and appends the new action.
 
+The generated `audit.0024_alter_auditevent_action` migration appends
+`PRIVACY_PERSON_DISCLOSED` for deliberate protected Person detail and overview
+disclosures. It changes the action-choice metadata only; it creates no table,
+index or data rows and has not been applied. Disclosure events reuse the
+existing `AuditEventSubject` association and privacy audit service. Applying
+the migration and runtime verification remain deferred to GDPR Phase 1C.
+
 Phase 1A.3 extends the catalogue through
 `staff_access.0008_legal_hold_admin`, which depends on both
 `staff_access.0007_capability_governance` and
@@ -1597,3 +1604,14 @@ Existing pending and approved records are preserved. The existing conditional
 unique constraint continues to allow one pending request per hold while
 permitting a new request after rejection. Migration application remains
 unverified in this implementation stage.
+
+### Phase 1B.1 People privacy schema impact
+
+Phase 1B.1 adds no model, index, constraint, or migration. Privacy capability
+evaluation is applied at the API projection, search, and write-validation
+boundaries over existing Person and related account data. No database values
+are rewritten or masked in storage. The two capability definitions and their
+role defaults are existing capability-foundation data; runtime disclosure is
+documented in `AUTHORIZATION.md` and `API.md`.
+
+Status: **Implemented / source-inspected; database checks and tests unexecuted**.

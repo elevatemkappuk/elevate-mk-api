@@ -3125,3 +3125,43 @@ boundaries. Privacy-audit events expose `place_event_hold` and a signed opaque
 authorized decision-maker; the approved audited Django-superuser exception
 may perform direct self-approval or self-rejection. The direct release route
 is superuser-only and remains CRM-admitted and audited.
+
+### Phase 1B.1 People privacy projections
+
+People list, detail, overview, create, update, archive, restore, and related
+Person response paths use the backend-authoritative privacy projection. The
+`primary_email` and `mobile` fields require `PERSON_CONTACT_READ`; without it,
+email is deterministically partially masked and mobile exposes only its final
+two digits. Malformed or too-short values are represented as `Restricted`,
+and absent values remain absent/not provided. `age_range` and `gender` require
+`PERSON_DEMOGRAPHIC_READ` and otherwise return `Restricted` regardless of the
+stored value. Responses include `privacy.contact_restricted` and
+`privacy.demographic_restricted` indicators.
+
+Nested community-account `account_email` and `setup_email` values follow the
+same contact projection. Search clauses for email and mobile are omitted when
+the caller lacks `PERSON_CONTACT_READ`; name, job-title, and company search
+remain subject to existing record-scope rules. Counts, pagination, and
+duplicate-response projections use the resulting authorized queryset and do
+not disclose protected values. Protected contact or demographic fields are
+rejected on writes without the corresponding capability, while unrelated
+permitted fields remain writable.
+
+Status: **Implemented / source-inspected; automated tests and runtime
+verification deferred to GDPR Phase 1C hardening**. The API and CRM must be
+released together for the expanded effective-capability disclosure contract;
+older strict CRM clients may not understand the two new capability codes.
+
+Deliberate protected-data access auditing is implemented for explicit protected
+Person detail and overview disclosures through the dedicated
+`PRIVACY_PERSON_DISCLOSED` action. The event is written before the protected
+response and uses the existing privacy audit service, trusted provenance and
+normalized `AuditEventSubject` Person association. Safe metadata contains only
+the operation, disclosure category, capability codes, outcome and superuser
+authority indicator; raw Person values, credentials, request payloads and
+search terms are excluded. Audit persistence failure prevents the response.
+List, directory, masked and ordinary unprotected reads do not generate this
+disclosure event. Denial auditing remains on the existing authorization-failure
+contract, and comprehensive Person access auditing remains `GDPR-FUTURE-001`.
+The required audit-choice migration is generated but not applied; automated and
+runtime verification remain deferred to GDPR Phase 1C hardening.

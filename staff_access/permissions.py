@@ -20,6 +20,8 @@ CRM_EFFECTIVE_ACCESS_DISCLOSURE_ALLOWLIST = frozenset({
     CapabilityDefinition.STAFF_CAPABILITY_ADMIN,
     CapabilityDefinition.PRIVACY_AUDIT_READ,
     CapabilityDefinition.LEGAL_HOLD_ADMIN,
+    CapabilityDefinition.PERSON_CONTACT_READ,
+    CapabilityDefinition.PERSON_DEMOGRAPHIC_READ,
 })
 CRM_OPERATIONAL_ROLE_CODES = tuple(code for code, _name in StaffRole.CANONICAL_ROLES)
 GOVERNANCE_DENIAL_ACTION = AuditEvent.Action.CAPABILITY_PERMISSION_MUTATED

@@ -1783,3 +1783,160 @@ class PeopleDirectoryQueryApiTests(TestCase):
         ordered = self.client.get(self.url, {"record_state": "all", "ordering": "-membership_joined_at"})
         self.assertEqual(self.result_ids(archived_former), [self.former_member.id])
         self.assertEqual(self.result_ids(ordered)[:2], [self.active_member.id, self.former_member.id])
+
+
+@override_settings(ROOT_URLCONF="config.urls")
+class PersonPrivacyApiTests(TestCase):
+    def setUp(self):
+        ensure_canonical_staff_roles()
+        self.client = APIClient()
+        self.admin = self.create_staff("privacy-admin@example.com", StaffRole.CRM_ADMIN)
+        self.manager = self.create_staff("privacy-manager@example.com", StaffRole.CRM_MANAGER)
+        self.viewer = self.create_staff("privacy-viewer@example.com", StaffRole.CRM_VIEWER)
+        self.person = Person.objects.create(
+            first_name="Amina",
+            last_name="Zulu",
+            primary_email="amina@example.com",
+            mobile="+447700900123",
+            age_range=Person.AgeRange.AGE_25_29,
+            gender=Person.Gender.FEMALE,
+        )
+        self.account_user = User.objects.create_user(
+            email="account@example.com",
+            password="testpass123",
+            person=self.person,
+        )
+
+    def create_staff(self, email, role):
+        user = User.objects.create_user(
+            email=email,
+            password="testpass123",
+            person_first_name="Privacy",
+            person_last_name="Staff",
+            person_record_type=Person.RecordType.STAFF,
+        )
+        StaffRoleAssignment.objects.assign_role(user=user, role=StaffRole.objects.get(code=role))
+        return user
+
+    def test_viewer_receives_masked_contact_restricted_demographics_and_safe_account_email(self):
+        self.client.force_authenticate(self.viewer)
+        response = self.client.get(f"/api/v1/people/{self.person.pk}/overview/")
+
+        self.assertEqual(response.status_code, 200)
+        person = response.data["person"]
+        self.assertEqual(person["primary_email"], "a***@example.com")
+        self.assertEqual(person["mobile"], "******23")
+        self.assertEqual(person["age_range"], "Restricted")
+        self.assertEqual(person["gender"], "Restricted")
+        self.assertEqual(person["privacy"], {"contact_restricted": True, "demographic_restricted": True})
+        self.assertEqual(response.data["community_account"]["account_email"], "a***@example.com")
+
+    def test_manager_can_read_contact_but_not_demographics_and_cannot_search_by_contact(self):
+        self.client.force_authenticate(self.manager)
+        response = self.client.get("/api/v1/people/", {"q": "amina@example.com"})
+        self.assertEqual(response.data["count"], 0)
+
+        response = self.client.get(f"/api/v1/people/{self.person.pk}/")
+        self.assertEqual(response.data["primary_email"], "amina@example.com")
+        self.assertEqual(response.data["mobile"], "+447700900123")
+        self.assertEqual(response.data["age_range"], "Restricted")
+        self.assertEqual(response.data["gender"], "Restricted")
+        self.assertEqual(response.data["privacy"]["contact_restricted"], False)
+        self.assertEqual(response.data["privacy"]["demographic_restricted"], True)
+
+    def test_admin_can_read_approved_contact_and_demographic_fields(self):
+        self.client.force_authenticate(self.admin)
+        response = self.client.get(f"/api/v1/people/{self.person.pk}/")
+        self.assertEqual(response.data["primary_email"], "amina@example.com")
+        self.assertEqual(response.data["mobile"], "+447700900123")
+        self.assertEqual(response.data["age_range"], Person.AgeRange.AGE_25_29)
+        self.assertEqual(response.data["gender"], Person.Gender.FEMALE)
+        self.assertEqual(response.data["privacy"], {"contact_restricted": False, "demographic_restricted": False})
+
+    def test_malformed_and_missing_contacts_use_safe_representations(self):
+        person = Person.objects.create(first_name="Short", last_name="Value", primary_email="bad", mobile="12")
+        self.client.force_authenticate(self.viewer)
+        response = self.client.get(f"/api/v1/people/{person.pk}/")
+        self.assertEqual(response.data["primary_email"], "Restricted")
+        self.assertEqual(response.data["mobile"], "Restricted")
+
+    def test_manager_cannot_write_demographics_without_capability_but_can_write_location(self):
+        self.client.force_authenticate(self.manager)
+        denied = self.client.patch(
+            f"/api/v1/people/{self.person.pk}/",
+            {"age_range": Person.AgeRange.OVER_45},
+            format="json",
+        )
+        self.assertEqual(denied.status_code, 400)
+        self.assertIn("age_range", denied.data)
+
+        allowed = self.client.patch(
+            f"/api/v1/people/{self.person.pk}/",
+            {"location": "Milton Keynes"},
+            format="json",
+        )
+        self.assertEqual(allowed.status_code, 200)
+        self.assertEqual(allowed.data["location"], "Milton Keynes")
+
+    def test_superuser_exception_reads_raw_approved_fields(self):
+        superuser = User.objects.create_superuser(
+            email="privacy-superuser@example.com",
+            password="testpass123",
+            person_first_name="Privacy",
+            person_last_name="Superuser",
+        )
+        StaffRoleAssignment.objects.assign_role(user=superuser, role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN))
+        self.client.force_authenticate(superuser)
+        response = self.client.get(f"/api/v1/people/{self.person.pk}/")
+        self.assertEqual(response.data["primary_email"], "amina@example.com")
+        self.assertEqual(response.data["gender"], Person.Gender.FEMALE)
+
+    def test_deliberate_protected_disclosure_is_audited_with_safe_person_subject(self):
+        self.client.force_authenticate(self.manager)
+        response = self.client.get(f"/api/v1/people/{self.person.pk}/")
+
+        self.assertEqual(response.status_code, 200)
+        event = AuditEvent.objects.get(action=AuditEvent.Action.PRIVACY_PERSON_DISCLOSED)
+        self.assertEqual(event.actor_user_id, self.manager.id)
+        self.assertEqual(event.entity_type, "Person")
+        self.assertEqual(event.entity_id, str(self.person.pk))
+        self.assertEqual(event.metadata["disclosure_category"], "CONTACT")
+        self.assertEqual(event.metadata["capability_codes"], ["PERSON_CONTACT_READ"])
+        self.assertFalse(event.metadata["superuser_authority"])
+        self.assertNotIn("amina@example.com", str(event.metadata))
+        self.assertNotIn("+447700900123", str(event.metadata))
+        self.assertTrue(event.subjects.filter(person=self.person).exists())
+
+    def test_superuser_disclosure_records_bypass_without_raw_person_data(self):
+        superuser = User.objects.create_superuser(
+            email="privacy-disclosure-superuser@example.com",
+            password="testpass123",
+            person_first_name="Privacy",
+            person_last_name="Superuser",
+        )
+        StaffRoleAssignment.objects.assign_role(user=superuser, role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN))
+        self.client.force_authenticate(superuser)
+
+        response = self.client.get(f"/api/v1/people/{self.person.pk}/overview/")
+
+        self.assertEqual(response.status_code, 200)
+        event = AuditEvent.objects.get(action=AuditEvent.Action.PRIVACY_PERSON_DISCLOSED)
+        self.assertEqual(event.actor_user_id, superuser.id)
+        self.assertEqual(event.metadata["disclosure_category"], "CONTACT_AND_DEMOGRAPHIC")
+        self.assertTrue(event.metadata["superuser_authority"])
+        self.assertNotIn("amina@example.com", str(event.metadata))
+        self.assertNotIn("FEMALE", str(event.metadata))
+
+    def test_masked_read_does_not_create_protected_disclosure_event(self):
+        self.client.force_authenticate(self.viewer)
+        response = self.client.get(f"/api/v1/people/{self.person.pk}/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.PRIVACY_PERSON_DISCLOSED).count(), 0)
+
+    def test_mandatory_disclosure_audit_failure_prevents_protected_response(self):
+        self.client.force_authenticate(self.manager)
+        with mock.patch("people.privacy.record_audit_event", side_effect=RuntimeError("audit unavailable")):
+            with self.assertRaises(RuntimeError):
+                self.client.get(f"/api/v1/people/{self.person.pk}/")
+        self.assertEqual(AuditEvent.objects.filter(action=AuditEvent.Action.PRIVACY_PERSON_DISCLOSED).count(), 0)

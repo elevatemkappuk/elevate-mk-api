@@ -152,6 +152,7 @@ class AuditEvent(models.Model):
         CAMPAIGN_PROVIDER_FAILURE = "CAMPAIGN_PROVIDER_FAILURE", "Campaign provider failure"
         CAMPAIGN_PROVIDER_RETRY = "CAMPAIGN_PROVIDER_RETRY", "Campaign provider retry"
         PRIVACY_SUPERUSER_BYPASS = "PRIVACY_SUPERUSER_BYPASS", "Privacy capability superuser bypass"
+        PRIVACY_PERSON_DISCLOSED = "PRIVACY_PERSON_DISCLOSED", "Protected Person data disclosed"
         CAPABILITY_PROPOSAL_CREATED = "CAPABILITY_PROPOSAL_CREATED", "Capability proposal created"
         CAPABILITY_PROPOSAL_APPROVED = "CAPABILITY_PROPOSAL_APPROVED", "Capability proposal approved"
         CAPABILITY_PROPOSAL_REJECTED = "CAPABILITY_PROPOSAL_REJECTED", "Capability proposal rejected"

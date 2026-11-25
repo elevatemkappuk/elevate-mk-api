@@ -40,9 +40,10 @@ from people.serializers import (
 from people.services import CreateNewIdentityCollision, correct_person_classification, evaluate_create_new_identity
 from external_references.services import enqueue_coalesced_person_sync_job, enqueue_person_sync_job
 from people.querying import PeopleDirectoryQuery
+from people.privacy import person_privacy_capabilities, record_person_privacy_disclosure
 from memberships.models import Membership
 from community.models import CommunityAccountInvitation
-from staff_access.models import StaffRole
+from staff_access.models import CapabilityDefinition, StaffRole
 from staff_access.permissions import HasActiveStaffRoleCodes, user_has_any_active_staff_role
 from skills.models import PersonSkill
 from tags.models import PersonTag
@@ -225,7 +226,11 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
         ).select_related("transactional_email_job").order_by("-created_at", "-id")
         if not user_has_any_active_staff_role(self.request.user, (StaffRole.CRM_ADMIN,)):
             params = {**params, "record_type": [Person.RecordType.COMMUNITY.value]}
-        return PeopleDirectoryQuery(self.get_business_people_queryset(), params).apply().select_related(
+        return PeopleDirectoryQuery(
+            self.get_business_people_queryset(),
+            params,
+            allow_contact_search=CapabilityDefinition.PERSON_CONTACT_READ in person_privacy_capabilities(request=self.request),
+        ).apply().select_related(
             "user", "professional_profile", "membership",
         ).prefetch_related(
             Prefetch(
@@ -264,7 +269,7 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
         tags=["People"],
     )
     def post(self, request, *args, **kwargs):
-        input_serializer = PersonCreateSerializer(data=request.data)
+        input_serializer = PersonCreateSerializer(data=request.data, context={"request": request})
         input_serializer.is_valid(raise_exception=True)
 
         with transaction.atomic():
@@ -274,7 +279,7 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
                 "created": {"from": False, "to": True},
             }, identity_override_metadata(input_serializer.validated_data))
 
-        return Response(PersonListSerializer(person).data, status=status.HTTP_201_CREATED)
+        return Response(PersonListSerializer(person, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
     @staticmethod
     def create_person(validated_data):
@@ -368,7 +373,7 @@ class PersonMemberCreateView(generics.GenericAPIView):
         tags=["People", "Membership"],
     )
     def post(self, request, *args, **kwargs):
-        input_serializer = PersonMemberCreateSerializer(data=request.data)
+        input_serializer = PersonMemberCreateSerializer(data=request.data, context={"request": request})
         input_serializer.is_valid(raise_exception=True)
         person_data = PeopleListView.person_data(input_serializer.validated_data)
 
@@ -407,7 +412,7 @@ class PersonMemberCreateView(generics.GenericAPIView):
                 metadata={"person_id": str(person.id)},
             )
 
-        return Response(PersonListSerializer(person).data, status=status.HTTP_201_CREATED)
+        return Response(PersonListSerializer(person, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 
 class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
@@ -454,6 +459,13 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
         ],
     )
     def get(self, request, *args, **kwargs):
+        person = self.get_object()
+        record_person_privacy_disclosure(
+            request=request,
+            person=person,
+            capabilities=person_privacy_capabilities(request=request),
+            operation="PERSON_DETAIL",
+        )
         return super().get(request, *args, **kwargs)
 
     def get_queryset(self):
@@ -484,7 +496,7 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
         tags=["People"],
     )
     def patch(self, request, *args, **kwargs):
-        input_serializer = PersonUpdateSerializer(data=request.data)
+        input_serializer = PersonUpdateSerializer(data=request.data, context={"request": request})
         input_serializer.is_valid(raise_exception=True)
 
         with transaction.atomic():
@@ -556,7 +568,7 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
                         source_event_id=audit_event.id,
                     )
 
-        return Response(PersonListSerializer(person).data)
+        return Response(PersonListSerializer(person, context={"request": request}).data)
 
 
 class PersonClassificationCorrectionView(generics.GenericAPIView):
@@ -580,7 +592,7 @@ class PersonClassificationCorrectionView(generics.GenericAPIView):
             raise NotFound("Not found.")
         except DjangoValidationError as error:
             raise serializers.ValidationError(error.message_dict)
-        return Response(PersonListSerializer(person).data)
+        return Response(PersonListSerializer(person, context={"request": request}).data)
 
 
 class PersonArchiveView(BusinessPersonQuerysetMixin, generics.GenericAPIView):
@@ -609,7 +621,7 @@ class PersonArchiveView(BusinessPersonQuerysetMixin, generics.GenericAPIView):
             PeopleListView.record_person_audit(
                 AuditEvent.Action.PERSON_ARCHIVED, request.user, person, {"archived": {"from": False, "to": True}}
             )
-        return Response(PersonListSerializer(person).data)
+        return Response(PersonListSerializer(person, context={"request": request}).data)
 
     def get_locked_business_person(self):
         person = self.get_business_people_queryset().select_for_update().filter(
@@ -643,7 +655,7 @@ class PersonRestoreView(PersonArchiveView):
             PeopleListView.record_person_audit(
                 AuditEvent.Action.PERSON_RESTORED, request.user, person, {"archived": {"from": True, "to": False}}
             )
-        return Response(PersonListSerializer(person).data)
+        return Response(PersonListSerializer(person, context={"request": request}).data)
 
 
 class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
@@ -754,6 +766,13 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
         ],
     )
     def get(self, request, *args, **kwargs):
+        person = self.get_object()
+        record_person_privacy_disclosure(
+            request=request,
+            person=person,
+            capabilities=person_privacy_capabilities(request=request),
+            operation="PERSON_OVERVIEW",
+        )
         return super().get(request, *args, **kwargs)
 
     def get_queryset(self):

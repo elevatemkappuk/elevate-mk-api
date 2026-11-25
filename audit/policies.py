@@ -27,6 +27,7 @@ PERSON_AUDIT_DESCRIPTION_OVERRIDES = {
     AuditEvent.Action.PERSON_UPDATED: "Person updated",
     AuditEvent.Action.PERSON_ARCHIVED: "Person archived",
     AuditEvent.Action.PERSON_RESTORED: "Person restored",
+    AuditEvent.Action.PRIVACY_PERSON_DISCLOSED: "Protected Person data disclosed",
     AuditEvent.Action.MEMBERSHIP_CREATED: "Membership created",
     AuditEvent.Action.MEMBERSHIP_ENDED: "Membership ended",
     AuditEvent.Action.PROFESSIONAL_PROFILE_CREATED: "Professional profile created",
