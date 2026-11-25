@@ -191,7 +191,12 @@ policy-version and transactional-audit rules. The superuser route requires an
 authenticated active Django superuser with CRM admission and invokes the
 existing direct-operation service; it does not accept client authority flags.
 
-The directory and target projections contain identifiers, safe Staff display
+The shared governance read projections admit either an ordinary effective
+`STAFF_CAPABILITY_ADMIN` administrator or an active Django superuser with an
+active CRM role. Ordinary mutation routes remain unchanged. An admitted
+superuser receives direct role-default and individual actions through the
+dedicated audited route; ordinary administrators retain proposal and
+separation-of-duty rules. The directory and target projections contain identifiers, safe Staff display
 metadata, staff-role state, capability state and backend-permitted actions only.
 Person contact and demographic fields, general Person search, exports and
 exceptional restricted-access workflows remain outside this stage. Ordinary
@@ -201,6 +206,16 @@ are returned as sanitized HTTP 409 conflicts. Focused governance API validation
 passed 21/21 tests against isolated PostgreSQL; the isolated Phase 1A.4C manual
 API runtime is verified, while deployment and operational activation remain
 unverified.
+
+The role-default projection includes every active canonical CRM role and active
+capability, including disabled defaults. Each row includes backend-calculated
+`permitted_actions`; a matching pending proposal suppresses further actions,
+otherwise the row exposes only the applicable enable or disable operation.
+Proposal payloads similarly expose only the actions available to the current
+administrator: proposers may cancel, while distinct authorized administrators
+may approve or reject. Clients do not reproduce these governance decisions.
+This additive contract was validated by the focused governance API suite
+(12/12 tests in the current run).
 
 ## Security and privacy limitations
 

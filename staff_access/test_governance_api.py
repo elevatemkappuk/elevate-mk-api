@@ -264,6 +264,88 @@ class GovernanceApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["status"], "APPLIED")
 
+    def test_crm_admitted_superuser_can_read_governance_projections(self):
+        superuser = self.create_staff("governance-api-read-superuser@example.com", superuser=True)
+        StaffRoleAssignment.objects.assign_role(user=superuser, role=StaffRole.CRM_ADMIN)
+        client = self.login(superuser)
+
+        directory = client.get("/api/v1/staff/governance/targets/?q=Governance")
+        self.assertEqual(directory.status_code, 200)
+        self.assertTrue(any(row["user_id"] == self.target.pk for row in directory.data["results"]))
+        self.assertTrue(all("email" not in row for row in directory.data["results"]))
+
+        defaults = client.get("/api/v1/staff/governance/role-defaults/")
+        self.assertEqual(defaults.status_code, 200)
+        self.assertEqual(len(defaults.data["role_defaults"]), 21)
+        self.assertTrue(all(row["permitted_actions"] for row in defaults.data["role_defaults"]))
+
+        for history_type in ("individual", "role-defaults", "decisions"):
+            response = client.get(f"/api/v1/staff/governance/history/{history_type}/")
+            self.assertEqual(response.status_code, 200)
+
+    def test_superuser_direct_operations_require_reason_and_apply_without_proposal(self):
+        superuser = self.create_staff("governance-api-direct-superuser@example.com", superuser=True)
+        StaffRoleAssignment.objects.assign_role(user=superuser, role=StaffRole.CRM_ADMIN)
+        client = self.login(superuser)
+        role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
+
+        missing_reason = client.post(
+            "/api/v1/staff/governance/superuser-actions/",
+            {
+                "operation": "ROLE_DEFAULT_ENABLE",
+                "capability": CapabilityDefinition.PERSON_CONTACT_READ,
+                "role_id": role.pk,
+                "reason": "",
+            },
+            format="json",
+        )
+        self.assertEqual(missing_reason.status_code, 400)
+
+        role_change = client.post(
+            "/api/v1/staff/governance/superuser-actions/",
+            {
+                "operation": "ROLE_DEFAULT_ENABLE",
+                "capability": CapabilityDefinition.PERSON_CONTACT_READ,
+                "role_id": role.pk,
+                "reason": "Direct audited superuser role-default correction",
+            },
+            format="json",
+        )
+        self.assertEqual(role_change.status_code, 200, role_change.data)
+        self.assertEqual(role_change.data["status"], "APPLIED")
+        self.assertFalse(
+            CapabilityProposal.objects.filter(
+                role=role,
+                capability__code=CapabilityDefinition.PERSON_CONTACT_READ,
+                status=CapabilityProposal.Status.PENDING,
+            ).exists()
+        )
+
+        individual_change = client.post(
+            "/api/v1/staff/governance/superuser-actions/",
+            {
+                "operation": "INDIVIDUAL_GRANT",
+                "capability": CapabilityDefinition.PERSON_EXPORT,
+                "target_user_id": self.target.pk,
+                "reason": "Direct audited superuser individual grant",
+            },
+            format="json",
+        )
+        self.assertEqual(individual_change.status_code, 200, individual_change.data)
+        self.assertEqual(individual_change.data["status"], "APPLIED")
+        self.assertTrue(
+            StaffCapabilityAssignment.objects.filter(
+                user=self.target,
+                capability__code=CapabilityDefinition.PERSON_EXPORT,
+                state=StaffCapabilityAssignment.State.ACTIVE,
+            ).exists()
+        )
+
+    def test_superuser_without_crm_role_cannot_read_governance(self):
+        superuser = self.create_staff("governance-api-no-role-superuser@example.com", superuser=True)
+        response = self.login(superuser).get("/api/v1/staff/governance/targets/")
+        self.assertEqual(response.status_code, 403)
+
     def test_histories_expose_proposals_and_decisions_without_personal_contact_data(self):
         response = self.admin_client.get("/api/v1/staff/governance/history/individual/")
         self.assertEqual(response.status_code, 200)
@@ -280,3 +362,28 @@ class GovernanceApiTests(TestCase):
             response.data["policy_version"],
             CapabilityPolicyState.objects.get(singleton_key=1, key="capability-governance").version,
         )
+        viewer_contact = next(
+            row for row in response.data["role_defaults"]
+            if row["role_code"] == StaffRole.CRM_VIEWER
+            and row["capability"] == CapabilityDefinition.PERSON_CONTACT_READ
+        )
+        self.assertEqual(viewer_contact["permitted_actions"], ["ROLE_DEFAULT_ENABLE"])
+
+        role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
+        self.admin_client.post(
+            "/api/v1/staff/governance/proposals/",
+            {
+                "operation": "ROLE_DEFAULT_ENABLE",
+                "capability": CapabilityDefinition.PERSON_CONTACT_READ,
+                "role_id": role.pk,
+                "reason": "Pending role-default action projection",
+            },
+            format="json",
+        )
+        response = self.admin_client.get("/api/v1/staff/governance/role-defaults/")
+        viewer_contact = next(
+            row for row in response.data["role_defaults"]
+            if row["role_code"] == StaffRole.CRM_VIEWER
+            and row["capability"] == CapabilityDefinition.PERSON_CONTACT_READ
+        )
+        self.assertEqual(viewer_contact["permitted_actions"], [])

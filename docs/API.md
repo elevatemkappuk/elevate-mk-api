@@ -398,17 +398,19 @@ complete new email address.
 
 ### Staff governance API
 
-The Phase 1A.4C.2B governance routes are CRM-session-only and require an
-active, non-superuser effective `STAFF_CAPABILITY_ADMIN` capability, except
-for the dedicated superuser route. They return identifiers, role/capability
-state, proposal state and audit-safe metadata; they do not return Person
-contact or demographic fields.
+The Phase 1A.4C.2B governance routes are CRM-session-only. Governance reads
+require either an active effective `STAFF_CAPABILITY_ADMIN` capability or an
+active Django superuser with an operational CRM role. Ordinary mutation routes
+retain their existing eligibility and two-person rules; the dedicated audited
+superuser route is the only direct superuser mutation path. These routes return
+identifiers, role/capability state, proposal state and audit-safe metadata; they
+do not return Person contact or demographic fields.
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/v1/staff/governance/targets/` | Privacy-safe searchable Staff directory for governance target selection |
 | `GET` | `/api/v1/staff/governance/targets/{user_id}/` | Safe target access detail and backend-permitted actions |
-| `GET` | `/api/v1/staff/governance/role-defaults/` | Role-default state and policy version |
+| `GET` | `/api/v1/staff/governance/role-defaults/` | Role-default state, policy version and backend-permitted role-default actions |
 | `POST` | `/api/v1/staff/governance/proposals/` | Create a governed proposal |
 | `POST` | `/api/v1/staff/governance/individual-changes/` | Apply an ordinary single-admin individual mutation where permitted |
 | `POST` | `/api/v1/staff/governance/proposals/{proposal_id}/{approve\|reject\|cancel}/` | Resolve a proposal |
@@ -431,6 +433,23 @@ them. `STAFF_CAPABILITY_ADMIN` grant, restore, and unrestrict operations use
 the proposal workflow. A duplicate pending proposal returns HTTP `409` with
 stable code `PENDING_PROPOSAL_EXISTS` and a public proposal identifier when
 available; raw database errors are not exposed.
+
+The role-default response includes every active canonical CRM role and active
+capability, including disabled defaults represented with `is_enabled: false`.
+Each row includes `permitted_actions`, calculated by the backend for the
+authenticated administrator. For ordinary administrators it is empty while a
+matching proposal is pending; otherwise it contains the applicable
+`ROLE_DEFAULT_ENABLE` or `ROLE_DEFAULT_DISABLE` operation. An admitted
+superuser receives the applicable direct operation even when an ordinary
+proposal is pending, and the CRM sends it to `/superuser-actions/`. Clients
+must not infer authorization from the current state or reproduce governance
+rules locally.
+
+Proposal payloads likewise include backend-calculated `permitted_actions`:
+the proposer receives only `cancel`, while a distinct ordinary authorized
+administrator receives `approve` and `reject`. Admitted superusers can inspect
+proposal history but do not receive actions that would convert an ordinary
+proposal into a superuser operation. Terminal proposals expose no actions.
 
 ## OpenAPI Documentation
 Current documentation endpoints:

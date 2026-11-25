@@ -91,6 +91,23 @@ class SuperuserGovernancePermission(IsAuthenticated):
         )
 
 
+class GovernanceReadPermission(IsAuthenticated):
+    """Allow governed reads to ordinary privacy admins or CRM superusers."""
+
+    message = "An authorized privacy administrator is required."
+
+    def has_permission(self, request, view):
+        if not super().has_permission(request, view) or not request.user.is_active:
+            return False
+        if request.user.is_superuser:
+            return user_has_any_active_staff_role(request.user, StaffRole.canonical_codes())
+        return user_has_capability(
+            request.user,
+            CapabilityDefinition.STAFF_CAPABILITY_ADMIN,
+            request=request,
+        )
+
+
 def _governance_error(error):
     if isinstance(error, DjangoValidationError):
         return serializers.ValidationError(
@@ -118,8 +135,12 @@ def _pending_proposal_conflict(*, target_user=None, role=None, capability=None):
     return Response(payload, status=status.HTTP_409_CONFLICT)
 
 
-def _proposal_payload(proposal):
+def _proposal_payload(proposal, *, actor=None):
     decision = getattr(proposal, "decision", None)
+    permitted_actions = []
+    if proposal.status == CapabilityProposal.Status.PENDING and actor is not None:
+        if not actor.is_superuser:
+            permitted_actions = ["cancel"] if proposal.proposed_by_id == actor.pk else ["approve", "reject"]
     return {
         "public_id": str(proposal.public_id),
         "operation": proposal.operation,
@@ -143,6 +164,7 @@ def _proposal_payload(proposal):
             "policy_version": decision.policy_version,
             "created_at": decision.created_at,
         },
+        "permitted_actions": permitted_actions,
     }
 
 
@@ -198,7 +220,7 @@ class StaffEffectiveAccessView(APIView):
 
 class GovernanceTargetDetailView(APIView):
     authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
-    permission_classes = [OrdinaryGovernancePermission]
+    permission_classes = [GovernanceReadPermission]
 
     def get(self, request, user_id):
         try:
@@ -215,7 +237,7 @@ class GovernanceTargetDetailView(APIView):
         restrictions = StaffCapabilityRestriction.objects.active().filter(user=target).select_related("capability")
         role_assignments = target.staff_role_assignments.select_related("role").order_by("role__code")
         target_is_eligible = (
-            target.pk != request.user.pk
+            (request.user.is_superuser or target.pk != request.user.pk)
             and target.is_active
             and target.person.record_type == Person.RecordType.STAFF
             and any(item.is_active and item.role.is_active and item.role.code in StaffRole.canonical_codes() for item in role_assignments)
@@ -265,7 +287,7 @@ class GovernanceTargetDetailView(APIView):
 
 class GovernanceStaffDirectoryView(APIView):
     authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
-    permission_classes = [OrdinaryGovernancePermission]
+    permission_classes = [GovernanceReadPermission]
 
     def get(self, request):
         query = str(request.query_params.get("q", "")).strip()
@@ -297,31 +319,53 @@ class GovernanceStaffDirectoryView(APIView):
                 "is_active": target.is_active,
                 "role_codes": active_roles,
                 "eligible": bool(target.is_active and active_roles),
-                "can_manage_privacy_permissions": target.pk != request.user.pk and bool(target.is_active and active_roles),
+                "can_manage_privacy_permissions": (request.user.is_superuser or target.pk != request.user.pk) and bool(target.is_active and active_roles),
             })
         return Response({"count": total, "page": page, "page_size": page_size, "results": rows})
 
 
 class GovernanceRoleDefaultsView(APIView):
     authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
-    permission_classes = [OrdinaryGovernancePermission]
+    permission_classes = [GovernanceReadPermission]
 
     def get(self, request):
-        rows = RoleCapabilityDefault.objects.select_related("role", "capability").order_by("role__code", "capability__code")
+        defaults = {
+            (row.role_id, row.capability_id): row
+            for row in RoleCapabilityDefault.objects.select_related("role", "capability")
+        }
+        pending_keys = set(
+            CapabilityProposal.objects.filter(
+                status=CapabilityProposal.Status.PENDING,
+                role__isnull=False,
+            ).values_list("role_id", "capability_id")
+        )
+        roles = StaffRole.objects.filter(
+            code__in=StaffRole.canonical_codes(),
+            is_active=True,
+        ).order_by("code")
+        capabilities = CapabilityDefinition.objects.filter(is_active=True).order_by("code")
+        rows = []
+        for role in roles:
+            for capability in capabilities:
+                row = defaults.get((role.pk, capability.pk))
+                is_enabled = False if row is None else row.is_enabled
+                rows.append({
+                    "id": None if row is None else row.pk,
+                    "role_id": role.pk,
+                    "role_code": role.code,
+                    "capability": capability.code,
+                    "is_enabled": is_enabled,
+                    "permitted_actions": [] if (role.pk, capability.pk) in pending_keys and not request.user.is_superuser else [
+                        CapabilityProposal.Operation.ROLE_DEFAULT_DISABLE
+                        if is_enabled
+                        else CapabilityProposal.Operation.ROLE_DEFAULT_ENABLE
+                    ],
+                })
         return Response({
             "policy_version": CapabilityPolicyState.objects.get(
                 singleton_key=1, key=CAPABILITY_POLICY_STATE_KEY
             ).version,
-            "role_defaults": [
-                {
-                    "id": row.pk,
-                    "role_id": row.role_id,
-                    "role_code": row.role.code,
-                    "capability": row.capability.code,
-                    "is_enabled": row.is_enabled,
-                }
-                for row in rows
-            ],
+            "role_defaults": rows,
         })
 
 
@@ -347,7 +391,7 @@ class GovernanceProposalCreateView(APIView):
             return _pending_proposal_conflict(target_user=target, role=role, capability=capability)
         except (DjangoValidationError, PermissionError, CapabilityDefinition.DoesNotExist, StaffRole.DoesNotExist, User.DoesNotExist) as error:
             raise _governance_error(error)
-        return Response(_proposal_payload(proposal), status=status.HTTP_201_CREATED)
+        return Response(_proposal_payload(proposal, actor=request.user), status=status.HTTP_201_CREATED)
 
 
 class GovernanceIndividualChangeView(APIView):
@@ -374,7 +418,7 @@ class GovernanceIndividualChangeView(APIView):
             return _pending_proposal_conflict(target_user=target, capability=capability)
         except (DjangoValidationError, PermissionError, CapabilityDefinition.DoesNotExist, User.DoesNotExist) as error:
             raise _governance_error(error)
-        return Response(_proposal_payload(proposal))
+        return Response(_proposal_payload(proposal, actor=request.user))
 
 
 class GovernanceProposalActionView(APIView):
@@ -403,12 +447,12 @@ class GovernanceProposalActionView(APIView):
                 return Response({"detail": "Unknown proposal action."}, status=status.HTTP_404_NOT_FOUND)
         except (DjangoValidationError, PermissionError) as error:
             raise _governance_error(error)
-        return Response(_proposal_payload(result))
+        return Response(_proposal_payload(result, actor=request.user))
 
 
 class GovernanceHistoryView(APIView):
     authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
-    permission_classes = [OrdinaryGovernancePermission]
+    permission_classes = [GovernanceReadPermission]
 
     def get(self, request, history_type):
         proposals = CapabilityProposal.objects.select_related("role", "target_user", "capability", "proposed_by").prefetch_related("decision")
@@ -420,7 +464,7 @@ class GovernanceHistoryView(APIView):
             proposals = proposals.filter(decision__isnull=False)
         else:
             return Response({"detail": "Unknown history type."}, status=status.HTTP_404_NOT_FOUND)
-        return Response({"results": [_proposal_payload(item) for item in proposals[:200]]})
+        return Response({"results": [_proposal_payload(item, actor=request.user) for item in proposals[:200]]})
 
 
 class GovernanceSuperuserActionView(APIView):
