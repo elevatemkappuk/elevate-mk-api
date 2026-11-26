@@ -593,3 +593,31 @@ LinkedIn, and industry; skills, interests, tags, notes, membership and
 marketing preferences; Community account lifecycle/provider data; and audit
 history. Person export enforcement, comprehensive Person record-access
 auditing (`GDPR-FUTURE-001`), and later privacy workflows remain deferred.
+
+## Phase 1B.2 Marketing privacy
+
+Status: **Implemented / source-inspected; automated tests and runtime/provider
+verification deferred**.
+
+Marketing audience preview and Campaign V1 retain their existing CRM-role
+authorization and consent rules. Privacy capabilities do not grant campaign
+access. The backend applies `PERSON_CONTACT_READ` to audience selection:
+email/mobile search is omitted from the queryset for callers without that
+capability, and the protected query term is not echoed in the response. Names,
+non-contact filters, classifications, counts, and pagination remain subject to
+the existing People directory and record-scope rules.
+
+Audience preview Person emails and historical Campaign recipient email
+snapshots are projected according to effective contact capability. Stored
+snapshots remain available to authorized internal provider processing; API
+projections mask them when contact disclosure is not authorized. Provider error
+projections are bounded and redact URLs, email addresses, phone-like values,
+and credential-like diagnostics. No raw provider response or credential is
+returned, and no external provider was called in this stage.
+
+No new marketing capability, campaign permission, blanket campaign/recipient
+audit, export enforcement, or provider workflow was introduced. Deliberate
+protected Person disclosure auditing remains limited to the approved existing
+workflow; comprehensive Person access auditing remains `GDPR-FUTURE-001`.
+The added regression tests are **Implemented / Unexecuted** under the deferred
+test policy. No model changes or migration is required for this stage.

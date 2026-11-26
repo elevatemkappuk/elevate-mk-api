@@ -11,6 +11,24 @@ Last Updated: 2026-11-24
 This document describes the HTTP API currently implemented in the Django server repository.
 
 ## Current API Surface
+
+### Phase 1B.2 marketing privacy projections
+
+`POST /api/v1/marketing/audiences/preview/` retains its existing audience
+selection, consent classification, count, pagination, and CRM-role contract.
+The backend applies `PERSON_CONTACT_READ` to contact fields and contact-based
+search. Without that capability, email/mobile search is excluded from the
+queryset, counts and pages reflect the filtered queryset, and the response
+does not echo the protected search term. Preview Person email values are
+masked; effective contact access preserves the existing value.
+
+Campaign detail and recipient projections apply the same boundary to stored
+audience criteria and historical recipient email snapshots. Internal provider
+preparation remains server-side and continues to re-check current consent.
+Provider preparation error messages are bounded and sanitized; raw provider
+payloads and credentials are not part of the API contract. These controls are
+**Implemented / source-inspected**; added tests and runtime/provider
+verification are **Unexecuted / Unverified** under the deferred-test policy.
 Current base path and versioning convention:
 
 - Base prefix: `/api/v1/`

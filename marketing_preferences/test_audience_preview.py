@@ -226,6 +226,49 @@ class AudiencePreviewApiTests(TestCase):
             self.authenticate(user)
             self.assertEqual(self.client.post(self.url, {}, format="json").status_code, 200)
 
+    def test_viewer_receives_masked_preview_contacts(self):
+        self.authenticate(self.viewer)
+        response = self.client.post(self.url, {}, format="json")
+
+        self.assertEqual(response.status_code, 200)
+        rows = {row["id"]: row for row in response.data["results"]["results"]}
+        self.assertEqual(rows[self.eligible.id]["primary_email"], "e***@example.com")
+        self.assertNotIn("eligible@example.com", str(response.data))
+
+    def test_manager_receives_contact_preview_when_effective_capability_allows_it(self):
+        self.authenticate(self.manager)
+        response = self.client.post(self.url, {}, format="json")
+
+        self.assertEqual(response.status_code, 200)
+        rows = {row["id"]: row for row in response.data["results"]["results"]}
+        self.assertEqual(rows[self.eligible.id]["primary_email"], "eligible@example.com")
+
+    def test_viewer_cannot_use_contact_search_or_receive_the_search_term(self):
+        self.authenticate(self.viewer)
+        response = self.client.post(
+            self.url,
+            {"selection": {"q": "eligible@example.com"}},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["selection"]["q"], "")
+        self.assertEqual(response.data["results"]["count"], 0)
+        self.assertNotIn(self.eligible.id, {row["id"] for row in response.data["results"]["results"]})
+
+    def test_manager_can_use_contact_search_when_contact_read_is_effective(self):
+        self.authenticate(self.manager)
+        response = self.client.post(
+            self.url,
+            {"selection": {"q": "eligible@example.com"}},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["selection"]["q"], "eligible@example.com")
+        self.assertEqual(response.data["results"]["count"], 1)
+        self.assertEqual(response.data["results"]["results"][0]["id"], self.eligible.id)
+
     def test_validation_rejects_non_active_record_state_unsupported_filter_and_bad_result(self):
         self.authenticate(self.admin)
         for payload in (

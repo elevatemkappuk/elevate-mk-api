@@ -24,7 +24,8 @@ from marketing_preferences.services import (
     record_opt_out,
 )
 from people.models import Person
-from staff_access.models import StaffRole
+from people.privacy import person_privacy_capabilities
+from staff_access.models import CapabilityDefinition, StaffRole
 from staff_access.permissions import HasActiveStaffRoleCodes
 
 
@@ -58,7 +59,13 @@ class AudiencePreviewView(generics.GenericAPIView):
         input_serializer.is_valid(raise_exception=True)
         data = input_serializer.validated_data
 
-        selected = build_active_people_selection(data["selection"], data["ordering"])
+        privacy_capabilities = person_privacy_capabilities(request=request)
+        contact_search_allowed = CapabilityDefinition.PERSON_CONTACT_READ in privacy_capabilities
+        selected = build_active_people_selection(
+            data["selection"],
+            data["ordering"],
+            allow_contact_search=contact_search_allowed,
+        )
         classified = annotate_email_marketing_classification(selected)
         selected_count, eligible_count, excluded_count, exclusion_counts = get_audience_counts(classified)
 
@@ -76,8 +83,12 @@ class AudiencePreviewView(generics.GenericAPIView):
         has_next = start + page_size < result_count
         has_previous = page > 1 and start < result_count + page_size
 
+        response_selection = {**data["selection"], "record_state": "active"}
+        if not contact_search_allowed:
+            response_selection["q"] = ""
+
         return Response({
-            "selection": {**data["selection"], "record_state": "active"},
+            "selection": response_selection,
             "selected_count": selected_count,
             "eligible_count": eligible_count,
             "excluded_count": excluded_count,
@@ -90,7 +101,11 @@ class AudiencePreviewView(generics.GenericAPIView):
                 "previous_page": page - 1 if has_previous else None,
                 "next": page + 1 if has_next else None,
                 "previous": page - 1 if has_previous else None,
-                "results": AudiencePreviewPersonSerializer(page_rows, many=True).data,
+                "results": AudiencePreviewPersonSerializer(
+                    page_rows,
+                    many=True,
+                    context={"request": request},
+                ).data,
             },
         })
 

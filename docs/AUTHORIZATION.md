@@ -416,6 +416,23 @@ reuse the broader contact/demographic People directory projection.
 
 ## Phase 1B.1 People privacy enforcement
 
+## Phase 1B.2 marketing privacy enforcement
+
+Marketing audience and Campaign endpoints retain their existing CRM-role
+permission classes. `PERSON_CONTACT_READ` is an additional backend projection
+and search boundary, not a replacement for campaign authorization or consent.
+Audience selection omits contact clauses when the capability is ineffective;
+this applies before counts, pagination, and result serialization. Campaign
+recipient snapshots and stored audience criteria are projected through the
+same effective capability state, while internal provider preparation may still
+use the protected snapshot required for its authorized server-side operation.
+
+Unknown, inactive, restricted, or revoked capabilities fail closed through the
+existing evaluator. Angular may hide contact search and display masked values,
+but Django remains authoritative for direct requests, manipulated filters, and
+response projections. Marketing privacy changes add no new capability or
+parallel authorization path.
+
 `PERSON_CONTACT_READ` controls Person email/mobile disclosure, contact search,
 and contact-field submissions. `PERSON_DEMOGRAPHIC_READ` controls age-range and
 gender disclosure and submissions. The backend evaluates these capabilities
