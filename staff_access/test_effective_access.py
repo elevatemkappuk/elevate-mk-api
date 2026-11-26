@@ -81,6 +81,7 @@ class EffectiveAccessEndpointTests(TestCase):
                 CapabilityDefinition.LEGAL_HOLD_ADMIN,
                 CapabilityDefinition.PERSON_CONTACT_READ,
                 CapabilityDefinition.PERSON_DEMOGRAPHIC_READ,
+                CapabilityDefinition.PERSON_EXPORT,
             }),
         )
 
@@ -121,6 +122,7 @@ class EffectiveAccessEndpointTests(TestCase):
                 CapabilityDefinition.LEGAL_HOLD_ADMIN,
                 CapabilityDefinition.PERSON_CONTACT_READ,
                 CapabilityDefinition.PERSON_DEMOGRAPHIC_READ,
+                CapabilityDefinition.PERSON_EXPORT,
             }),
         )
         self.assertIsInstance(called_kwargs["request"], Request)

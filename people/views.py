@@ -1,3 +1,5 @@
+from copy import copy
+
 from interests.models import PersonInterest
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
@@ -7,6 +9,7 @@ from django.utils import timezone
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import generics, serializers, status
 from rest_framework.exceptions import APIException, NotFound, PermissionDenied
+from rest_framework.negotiation import DefaultContentNegotiation
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -156,9 +159,23 @@ class BusinessPersonQuerysetMixin:
         return person
 
 
+class PersonExportContentNegotiation(DefaultContentNegotiation):
+    """Keep the export format query parameter out of DRF renderer selection."""
+
+    def select_renderer(self, request, renderers, format_suffix=None):
+        export_format = request.query_params.get(self.settings.URL_FORMAT_OVERRIDE)
+        if export_format in {"csv", "xlsx"}:
+            request = copy(request)
+            request._request = copy(request._request)
+            request._request.GET = request._request.GET.copy()
+            request._request.GET.pop(self.settings.URL_FORMAT_OVERRIDE, None)
+        return super().select_renderer(request, renderers, format_suffix)
+
+
 class PersonExportView(BusinessPersonQuerysetMixin, generics.GenericAPIView):
     authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, HasPeopleAccess]
+    content_negotiation_class = PersonExportContentNegotiation
 
     def get(self, request, *args, **kwargs):
         query_serializer = PersonListQuerySerializer(data=request.query_params)

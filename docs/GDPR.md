@@ -543,6 +543,12 @@ precedence, audited Django superuser exception, and session/mobile JWT
 separation are preserved. Storage remains unchanged: masking and restricted
 indicators are response behavior, not database redaction.
 
+The session-authenticated CRM effective-access projection includes the approved
+`PERSON_EXPORT` capability alongside the other CRM-disclosed capabilities.
+This is disclosure of an existing backend-evaluated capability only; export
+authorization, field projection, record scope, mandatory audit persistence, and
+superuser audit behavior remain enforced by the API export endpoint.
+
 The verified implementation field inventory is: Person `first_name`,
 `last_name`, `primary_email`, `mobile`, `location`, `age_range`, `gender`,
 `archived_at`, timestamps, and `record_type`; nested overview contact fields
@@ -666,6 +672,12 @@ handling, restricted-column verification, and the existing Angular warnings.
 GDPR Phase 1C must carry these obligations together with Marketing capability
 revocation and privileged-disclosure verification; no item is risk-accepted by
 this development closure.
+
+The consolidated GDPR Phase 1 manual UAT is **Verified** for 15 scenarios.
+One historical-campaign scenario was explicitly waived for manual verification
+and remains subject to automated regression coverage. This result does not
+replace Phase 1C automated hardening, migration/runtime verification,
+independent specialist acceptance, or production-activation requirements.
 
 ## Phase 1B.4 API exposure protection
 
