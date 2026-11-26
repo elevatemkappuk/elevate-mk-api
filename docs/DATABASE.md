@@ -5,6 +5,20 @@ Last Updated: 2026-11-24
 ## Scope
 This document describes the Elevate-owned database/domain structures currently implemented in the Django API codebase.
 
+## Phase 1B.3 export persistence
+
+People exports use existing `Person`, role, capability, restriction, and audit
+tables. No export file, temporary storage, queue, or bulk-operation table was
+introduced. Audit action choices `PERSON_EXPORT_GENERATED` and
+`PERSON_EXPORT_DENIED` are recorded in unapplied migration
+`audit.0026_alter_auditevent_action`; the migration is application-level
+contract bookkeeping and does not alter existing table data or constraints.
+The preceding `audit.0024_alter_auditevent_action` migration added the prior
+privacy-disclosure action. No `audit.0025` migration exists in repository
+history; the numbering gap is preserved and `0026` depends directly on `0024`
+rather than renumbering historical migrations. Migration application and
+runtime export verification remain pending for GDPR Phase 1C hardening.
+
 ## Current Domain Model
 The current Elevate-owned models are:
 

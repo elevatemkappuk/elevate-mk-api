@@ -29,6 +29,23 @@ Provider preparation error messages are bounded and sanitized; raw provider
 payloads and credentials are not part of the API contract. These controls are
 **Implemented / source-inspected**; added tests and runtime/provider
 verification are **Unexecuted / Unverified** under the deferred-test policy.
+
+### Phase 1B.3 People export
+
+`GET /api/v1/people/export/?format=csv|xlsx` returns an authenticated direct
+download using the existing People directory filters and record scope. The
+request requires effective `PERSON_EXPORT`. Contact and demographic columns
+are included only when their separate effective capabilities are present;
+otherwise those columns are omitted. The response uses safe filenames and
+content types, and cell values are escaped against spreadsheet formula
+injection. Successful and denied operations are recorded through privacy audit
+events without raw data or search terms. Audit persistence failure prevents a
+successful export response. Downloads are marked private and no-store. The
+`format` query parameter is handled explicitly by the endpoint and does not
+alter DRF renderer negotiation. No public download URL or asynchronous export
+storage is used. CSV/XLSX runtime behavior, Excel compatibility, export audit
+visibility, and capability-revocation behavior remain unverified pending Phase
+1C hardening.
 Current base path and versioning convention:
 
 - Base prefix: `/api/v1/`

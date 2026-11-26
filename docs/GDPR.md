@@ -621,3 +621,46 @@ protected Person disclosure auditing remains limited to the approved existing
 workflow; comprehensive Person access auditing remains `GDPR-FUTURE-001`.
 The added regression tests are **Implemented / Unexecuted** under the deferred
 test policy. No model changes or migration is required for this stage.
+
+## Phase 1B.3 exports and bulk operations
+
+Status: **Implemented / source-inspected; automated tests, migration
+application, runtime downloads, and final security verification deferred**.
+
+People exports use `GET /api/v1/people/export/?format=csv|xlsx` and the existing
+People directory scope. The backend requires CRM session authentication,
+operational role access, `PERSON_EXPORT`, and the current record-level query
+scope. `PERSON_EXPORT` does not grant contact or demographic access. Export
+columns are built from effective privacy capabilities: contact and demographic
+columns are omitted unless separately authorized; explicit restrictions and
+the existing evaluator remain authoritative. Django superusers retain the
+approved audited exception.
+
+CSV and XLSX are generated directly in the authenticated response without
+public URLs or temporary storage. All exported cell values are protected from
+spreadsheet formula injection. The export query reuses server-side People
+filtering, contact-search restrictions, ordering, and record scope. No existing
+bulk Person operation was found, so no new bulk mutation path was introduced.
+
+Successful and denied export attempts use centralized privacy audit
+infrastructure with safe format, field-category, scope, count, outcome, and
+superuser metadata. Raw records, search terms, file contents, credentials, and
+request payloads are excluded. Audit persistence occurs before a successful
+download is released; failure prevents the response. The new audit choices are
+recorded in unapplied migration `audit.0026_alter_auditevent_action`. It follows
+the existing `audit.0024` privacy-disclosure migration; no `audit.0025`
+migration exists in repository history, so the historical numbering gap is
+intentionally retained.
+
+Backend and CRM regression tests are **Implemented / Unexecuted**. Migration
+application and drift validation remain pending. CSV/XLSX runtime downloads,
+Microsoft Excel compatibility, formula-injection behavior, export
+authorization and capability-revocation behavior, export-audit visibility,
+mandatory audit-failure behavior, and manual export UAT remain **Unverified**.
+Independent specialist acceptance for this closure stage was unavailable under
+the active agent-thread limit. The UI polishing and final UAT backlog includes
+People export format selection, denied/revoked export feedback, safe download
+handling, restricted-column verification, and the existing Angular warnings.
+GDPR Phase 1C must carry these obligations together with Marketing capability
+revocation and privileged-disclosure verification; no item is risk-accepted by
+this development closure.

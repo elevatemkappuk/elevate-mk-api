@@ -433,6 +433,23 @@ but Django remains authoritative for direct requests, manipulated filters, and
 response projections. Marketing privacy changes add no new capability or
 parallel authorization path.
 
+## Phase 1B.3 export authorization
+
+`GET /api/v1/people/export/` requires the existing CRM session, active People
+record scope, and effective `PERSON_EXPORT`. Contact and demographic output is
+independently controlled by `PERSON_CONTACT_READ` and
+`PERSON_DEMOGRAPHIC_READ`; export capability never implies either permission.
+The queryset applies the same role and record-type restrictions as the People
+directory, and contact search remains capability-gated before filtering and
+counting. The backend rejects direct unauthorized requests regardless of CRM
+button visibility. No bulk mutation or alternate export path was added.
+
+Export authorization, revocation after capability loss, mandatory audit
+persistence, and safe denied-operation auditing are implemented in source but
+remain unexecuted/unverified until final hardening. Superuser exports retain
+the approved audited exception; export capability does not grant contact or
+demographic access.
+
 `PERSON_CONTACT_READ` controls Person email/mobile disclosure, contact search,
 and contact-field submissions. `PERSON_DEMOGRAPHIC_READ` controls age-range and
 gender disclosure and submissions. The backend evaluates these capabilities

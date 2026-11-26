@@ -2,10 +2,11 @@ from interests.models import PersonInterest
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.db.models import Prefetch, Q
+from django.http import HttpResponse
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import generics, serializers, status
-from rest_framework.exceptions import APIException, NotFound
+from rest_framework.exceptions import APIException, NotFound, PermissionDenied
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -44,9 +45,10 @@ from people.privacy import person_privacy_capabilities, record_person_privacy_di
 from memberships.models import Membership
 from community.models import CommunityAccountInvitation
 from staff_access.models import CapabilityDefinition, StaffRole
-from staff_access.permissions import HasActiveStaffRoleCodes, user_has_any_active_staff_role
+from staff_access.permissions import HasActiveStaffRoleCodes, get_effective_capability_codes_for_user, user_has_any_active_staff_role
 from skills.models import PersonSkill
 from tags.models import PersonTag
+from people.export import build_people_export, export_columns, record_export_audit
 
 
 class PeoplePagination(PageNumberPagination):
@@ -152,6 +154,61 @@ class BusinessPersonQuerysetMixin:
         if person is None:
             raise NotFound("Not found.")
         return person
+
+
+class PersonExportView(BusinessPersonQuerysetMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [IsAuthenticated, HasPeopleAccess]
+
+    def get(self, request, *args, **kwargs):
+        query_serializer = PersonListQuerySerializer(data=request.query_params)
+        query_serializer.is_valid(raise_exception=True)
+        export_format = request.query_params.get("format", "csv").lower()
+        if export_format not in {"csv", "xlsx"}:
+            raise serializers.ValidationError({"format": "format must be csv or xlsx."})
+
+        capabilities = person_privacy_capabilities(request=request)
+        export_capability = get_effective_capability_codes_for_user(
+            request.user,
+            requested_codes={CapabilityDefinition.PERSON_EXPORT},
+            request=request,
+        )
+        if CapabilityDefinition.PERSON_EXPORT not in export_capability:
+            record_export_audit(
+                request=request,
+                export_format=export_format,
+                fields=export_columns(capabilities),
+                record_count=0,
+                outcome="DENIED",
+                reason_code="PERSON_EXPORT_REQUIRED",
+            )
+            raise PermissionDenied("PERSON_EXPORT is required for People exports.")
+
+        params = dict(query_serializer.validated_data)
+        if not user_has_any_active_staff_role(request.user, (StaffRole.CRM_ADMIN,)):
+            params["record_type"] = [Person.RecordType.COMMUNITY.value]
+        queryset = PeopleDirectoryQuery(
+            self.get_business_people_queryset(),
+            params,
+            allow_contact_search=CapabilityDefinition.PERSON_CONTACT_READ in capabilities,
+        ).apply().select_related("professional_profile", "membership")
+        rows = list(queryset.order_by("last_name", "first_name", "pk"))
+        columns = export_columns(capabilities)
+        payload = build_people_export(rows, capabilities=capabilities, export_format=export_format)
+        record_export_audit(
+            request=request,
+            export_format=export_format,
+            fields=columns,
+            record_count=len(rows),
+            outcome="SUCCESS",
+            reason_code=None,
+        )
+        response = HttpResponse(payload["content"], content_type=payload["content_type"])
+        response["Content-Disposition"] = f'attachment; filename="{payload["filename"]}"'
+        response["Cache-Control"] = "private, no-store"
+        response["Pragma"] = "no-cache"
+        response["Expires"] = "0"
+        return response
 
 
 class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
