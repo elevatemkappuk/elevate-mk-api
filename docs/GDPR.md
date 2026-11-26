@@ -664,3 +664,43 @@ handling, restricted-column verification, and the existing Angular warnings.
 GDPR Phase 1C must carry these obligations together with Marketing capability
 revocation and privileged-disclosure verification; no item is risk-accepted by
 this development closure.
+
+## Phase 1B.4 API exposure protection
+
+Status: **Implemented / source-inspected; automated tests and environment
+runtime verification deferred**.
+
+The OpenAPI schema, Swagger UI, and ReDoc routes now share an explicit
+environment-aware backend boundary. Local development uses
+`ELEVATE_ENVIRONMENT=local` and remains convenient. Staging requires an active
+Django session plus the dedicated `accounts.access_api_documentation`
+permission or the approved active Django superuser exception. Production is
+disabled by default and requires explicit `API_DOCUMENTATION_PRODUCTION_ENABLED`
+configuration before the same technical authorization is evaluated. The raw
+schema route is protected independently; mobile JWTs, Community sessions,
+anonymous callers, inactive accounts, `is_staff`, and ordinary CRM roles do
+not grant technical documentation access.
+
+The dedicated technical permission is introduced by unapplied migration
+`accounts.0003_api_documentation_permission`; migration application and
+post-migration permission verification remain pending. CI smoke expectations
+now assert protected staging routes and disabled-by-default production routes.
+
+The added access-control regression tests are **Implemented / Unexecuted**.
+Django system checks and migration drift checks are **Verified** locally.
+Runtime environment checks, direct schema and alternate route verification,
+and deployment smoke checks remain pending final hardening. OpenAPI generation
+was inspected but still reports existing unrelated serializer/authenticator
+warnings and errors; no broad schema cleanup was included. No new privacy
+capability, application API contract, migration execution, personal-data
+workflow, or comprehensive Person access auditing was introduced. Existing
+Phase 1C obligations remain open, including pending
+migrations, accumulated tests, authentication and governance findings,
+authorization concurrency and revocation, People and Marketing disclosure
+auditing, provider verification, CSV/XLSX and Excel verification, export audit
+verification, manual UAT, independent specialist acceptance, and legal/privacy
+and production activation approvals.
+
+All planned GDPR Phase 1 functional development stages are marked complete for
+development purposes only. This does not constitute final security acceptance,
+runtime verification, legal/privacy approval, or production readiness.

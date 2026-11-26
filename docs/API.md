@@ -12,6 +12,20 @@ This document describes the HTTP API currently implemented in the Django server 
 
 ## Current API Surface
 
+### API documentation access
+
+The OpenAPI schema (`/api/schema/`), Swagger UI (`/api/docs/`), ReDoc
+(`/api/redoc/`), and supported format/query representations share one backend
+access policy. Local development is explicitly selected with
+`ELEVATE_ENVIRONMENT=local` and keeps these routes convenient. Staging requires
+an active Django session plus the dedicated `accounts.access_api_documentation`
+permission or active Django superuser authority; CRM roles, `is_staff`, mobile
+JWTs, and Community authentication do not grant access. Production returns no
+documentation response unless `API_DOCUMENTATION_PRODUCTION_ENABLED=True` is
+explicitly configured, after which the same technical authorization applies.
+Invalid or missing environment configuration fails closed at startup. The
+schema route is protected independently of the HTML documentation interfaces.
+
 ### Phase 1B.2 marketing privacy projections
 
 `POST /api/v1/marketing/audiences/preview/` retains its existing audience

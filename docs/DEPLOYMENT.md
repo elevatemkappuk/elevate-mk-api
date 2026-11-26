@@ -65,6 +65,19 @@ runtime dependencies from `requirements.txt` before running the command. Railway
 provides `PORT` dynamically for each deployment, so Gunicorn binds to
 `0.0.0.0:$PORT`; do not replace it with a hardcoded port.
 
+## API documentation exposure
+
+Set `ELEVATE_ENVIRONMENT` explicitly to `local`, `staging`, or `production` in
+every environment. Missing or invalid values fail closed at application
+startup. Local keeps Swagger, ReDoc, and raw schema access convenient. Staging
+protects all three routes with the Django `accounts.access_api_documentation`
+permission or active superuser authority; `is_staff` and CRM roles are
+insufficient. Production disables all three routes unless
+`API_DOCUMENTATION_PRODUCTION_ENABLED=True` is explicitly configured and the
+caller satisfies the same technical authorization. The raw schema route is
+protected independently of the HTML interfaces. Do not put credentials,
+provider secrets, or real personal information in schema examples.
+
 Each deployment runs `collectstatic --noinput` before migrations and Gunicorn.
 WhiteNoise serves the collected files from `STATIC_ROOT`, including Django
 Admin CSS, JavaScript, and theme icons.

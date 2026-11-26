@@ -2,6 +2,17 @@
 Status: Living Documentation
 Last Updated: 2026-08-31
 
+## API documentation authentication boundary
+
+Swagger, ReDoc, and raw OpenAPI schema requests accept Django session
+authentication only when protected. Mobile JWT credentials and Community
+authentication are intentionally rejected for technical documentation access.
+Local development is explicitly configured as open; staging requires the
+dedicated technical documentation permission or active Django superuser
+authority; production is disabled by default and requires an explicit secure
+configuration exception. This boundary does not change CRM session, mobile
+JWT, or Community authentication contracts.
+
 ## Current Authentication Architecture
 Elevate currently separates human identity from authentication account data:
 

@@ -5,6 +5,16 @@ Last Updated: 2026-11-24
 ## Scope
 This document describes the currently implemented staff authorization foundation for the Elevate MK Django API.
 
+## Technical API documentation authorization
+
+API documentation routes are not CRM resources and do not use operational CRM
+roles or privacy capabilities. Their shared backend permission requires an
+active Django session and the dedicated `accounts.access_api_documentation`
+permission, with the approved active Django superuser exception. Mobile JWTs,
+Community sessions, anonymous callers, inactive users, `is_staff`, and ordinary
+CRM roles do not grant access. The raw schema endpoint and both rendered
+documentation interfaces use the same permission boundary.
+
 ## Current Authorization Architecture
 Authentication and staff authorization are separate concerns:
 

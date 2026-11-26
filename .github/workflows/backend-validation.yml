@@ -36,6 +36,7 @@ jobs:
     env:
       DJANGO_SECRET_KEY: ci-only-placeholder
       DJANGO_DEBUG: "False"
+      ELEVATE_ENVIRONMENT: local
       ALLOWED_HOSTS: localhost,127.0.0.1
       DB_NAME: elevate_test
       DB_USER: postgres
