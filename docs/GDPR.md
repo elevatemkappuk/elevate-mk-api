@@ -554,7 +554,9 @@ capability-gated; counts and pagination follow the filtered queryset. Duplicate
 responses remain minimal and do not expose contact or demographic values.
 
 Malformed or short contact values are safely represented as `Restricted`,
-while absent values remain not provided. Superuser evaluation continues through
+while absent values remain not provided. Valid restricted emails use a
+deterministic partial projection such as `u***@e***.invalid`; mobile values
+retain only the permitted final two digits. Superuser evaluation continues through
 the existing audited capability evaluator. No blanket ordinary Person-view
 audit was introduced. Approved protected disclosures through the existing
 Django-superuser bypass path use the dedicated `PRIVACY_PERSON_DISCLOSED`

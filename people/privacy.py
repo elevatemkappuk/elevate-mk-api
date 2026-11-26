@@ -65,9 +65,17 @@ def mask_email(value):
         return None
     value = str(value).strip()
     local, separator, domain = value.rpartition("@")
-    if not separator or not local or not domain or any(char.isspace() for char in value):
+    domain_parts = domain.split(".")
+    if (
+        not separator
+        or not local
+        or not domain
+        or len(domain_parts) < 2
+        or any(not part for part in domain_parts)
+        or any(char.isspace() for char in value)
+    ):
         return "Restricted"
-    return f"{local[0]}***@{domain}"
+    return f"{local[0]}***@{domain_parts[0][0]}***.{'.'.join(domain_parts[1:])}"
 
 
 def mask_mobile(value):

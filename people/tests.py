@@ -1824,12 +1824,12 @@ class PersonPrivacyApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         person = response.data["person"]
-        self.assertEqual(person["primary_email"], "a***@example.com")
+        self.assertEqual(person["primary_email"], "a***@e***.com")
         self.assertEqual(person["mobile"], "******23")
         self.assertEqual(person["age_range"], "Restricted")
         self.assertEqual(person["gender"], "Restricted")
         self.assertEqual(person["privacy"], {"contact_restricted": True, "demographic_restricted": True})
-        self.assertEqual(response.data["community_account"]["account_email"], "a***@example.com")
+        self.assertEqual(response.data["community_account"]["account_email"], "a***@e***.com")
 
     def test_manager_can_read_contact_but_not_demographics_and_cannot_search_by_contact(self):
         self.client.force_authenticate(self.manager)
