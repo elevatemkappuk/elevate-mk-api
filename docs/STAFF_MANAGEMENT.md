@@ -1,6 +1,6 @@
 # Staff Management V1
 
-Status: **Approved architecture / Phase 2B role integrity implemented; later implementation planned**
+Status: **Approved architecture / Phase 2C administrator approval foundation implemented; later implementation planned**
 
 This document is the API repository's authoritative living guide for Staff
 Management V1. It records approved requirements and architecture, existing
@@ -85,10 +85,47 @@ supported writer identified in this phase is intended to bypass the service
 or Admin safeguards.
 
 Remaining limitations: direct trusted database administration remains outside
-application controls; CRM_ADMIN appointment approval remains Phase 2C; account
+application controls; invitation-backed Administrator effecting remains in
+later phases; account
 disablement, deactivation privacy suspension and complete lifecycle audit
 coverage remain later stages. `STAFF-001` is materially reduced for supported
 role mutation paths but is not globally resolved.
+
+## Phase 2C administrator approval foundation
+
+`StaffAdministratorProposal` and `StaffAdministratorProposalDecision` provide
+a dedicated operational governance boundary separate from GDPR capability
+proposals. Supported operations are `PROMOTE_EXISTING`, `ONBOARD` and
+`REACTIVATE`. Submission fields are immutable and append-only; the records
+retain durable User/role relationships, proposer and approver identities, a
+mandatory reason, policy-version and expected-state snapshot, bounded expiry,
+lifecycle timestamps and resulting references. Raw tokens, credentials and
+identity snapshots are not stored.
+
+Proposals expire after 30 days, matching the existing privacy-governance
+proposal convention. Expiry is enforced at approval time. Only an active
+operational CRM Administrator or eligible active Django Superuser may propose
+or approve; proposer and approver must be different Users, and the approver
+cannot be the target. Existing active Manager/Viewer promotion is approved and
+effected atomically, preserving the prior assignment, invalidating the target
+CRM session generation and recording mandatory audit events. New onboarding
+and former-staff reactivation can be approved but are not effected until their
+Phase 4/5 invitation workflows consume the approval.
+
+Target state and policy-version checks invalidate stale proposals. Approval,
+effecting, rejection, cancellation and invalidation are transactionally
+audited; audit persistence failure rolls back the associated transition.
+Migration `staff_access.0010_staff_administrator_proposals` is additive,
+validated in isolated test databases and not applied to the persistent
+database.
+
+Phase 2C focused verification passed **169/169** tests in **10.281 seconds**
+with no skips. This included the six dedicated administrator-governance tests,
+Phase 2A/2B authorization and role-integrity coverage, invitation/lifecycle
+coverage, session-revocation coverage and affected privacy/audit groups. A
+dedicated rerun passed **6/6** in **0.449 seconds**. Django system checks,
+migration-drift checks and `git diff --check` passed. Full API, CRM, Community
+and Mobile regression remains reserved for Phase 8 final hardening.
 
 ## Scope and boundaries
 
@@ -187,10 +224,11 @@ Existing authoritative models:
 - `staff_access.StaffCapabilityRestriction` — explicit restrictions.
 - `audit.AuditEvent` — immutable audit evidence.
 
-Planned durable addition: `StaffAdministratorProposal`, separate from privacy
-capability proposals. It should preserve proposer/approver identity, target,
-requested operation, expected state, reason, expiry, terminal status,
-invalidation reason and resulting operation reference.
+Implemented durable addition: `StaffAdministratorProposal` and
+`StaffAdministratorProposalDecision`, separate from privacy capability
+proposals. Submission fields are authoritative and immutable; status,
+approver, decision/effect timestamps and resulting references are lifecycle
+fields managed only by the administrator-governance service.
 
 The existing invitation should be extended rather than replaced. Planned
 extensions include explicit Person/User linkage, one requested CRM role, and

@@ -88,6 +88,22 @@ Currently implemented reusable backend helpers:
 
 These are intended to support future Staff CRM endpoints without introducing a large authorization framework.
 
+### Administrator approval foundation
+
+Operational CRM Administrator appointments use the dedicated
+`StaffAdministratorProposal` service boundary. Active CRM Administrators and
+eligible active Django Superusers may propose and approve, but approval must
+come from a different authorized User and never from the target. Existing
+Manager/Viewer promotion is effected atomically only after approval. New
+onboarding and reactivation approvals remain pending authority until their
+future invitation workflows consume them.
+
+Proposal expiry, proposer authorization, target eligibility, expected-state
+and policy-version checks are enforced on the server at approval time. Proposal
+submission fields are immutable, terminal rows are append-only, and each
+transition is transactionally audited. The workflow does not modify Django
+privilege flags, Membership, Community access or privacy grants.
+
 Example future usage shape:
 
 - any active staff role

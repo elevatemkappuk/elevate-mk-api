@@ -623,6 +623,161 @@ class CapabilityProposalDecision(models.Model):
         raise ValidationError("Capability proposal decisions are immutable.")
 
 
+class StaffAdministratorProposalQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError("Administrator proposal history is managed by governance services.")
+
+    def delete(self):
+        raise ValidationError("Administrator proposal history is append-only.")
+
+
+class StaffAdministratorProposalManager(models.Manager.from_queryset(StaffAdministratorProposalQuerySet)):
+    pass
+
+
+class StaffAdministratorProposal(models.Model):
+    class Operation(models.TextChoices):
+        PROMOTE_EXISTING = "PROMOTE_EXISTING", "Promote existing staff"
+        ONBOARD = "ONBOARD", "Onboard new staff"
+        REACTIVATE = "REACTIVATE", "Reactivate former staff"
+
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        APPROVED = "APPROVED", "Approved"
+        EFFECTED = "EFFECTED", "Effected"
+        REJECTED = "REJECTED", "Rejected"
+        CANCELLED = "CANCELLED", "Cancelled"
+        EXPIRED = "EXPIRED", "Expired"
+        INVALIDATED = "INVALIDATED", "Invalidated"
+
+    TERMINAL_STATUSES = (
+        Status.EFFECTED,
+        Status.REJECTED,
+        Status.CANCELLED,
+        Status.EXPIRED,
+        Status.INVALIDATED,
+    )
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    operation = models.CharField(max_length=32, choices=Operation.choices)
+    target_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="staff_administrator_proposals_targeted",
+    )
+    requested_role = models.ForeignKey(
+        StaffRole,
+        on_delete=models.PROTECT,
+        related_name="staff_administrator_proposals",
+    )
+    proposed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="staff_administrator_proposals_created",
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="staff_administrator_proposals_approved",
+        null=True,
+        blank=True,
+    )
+    reason = models.TextField()
+    policy_version = models.PositiveBigIntegerField()
+    expected_target_state = models.JSONField(default=dict)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    expires_at = models.DateTimeField()
+    invalidation_reason = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    effected_at = models.DateTimeField(null=True, blank=True)
+    resulting_assignment = models.ForeignKey(
+        StaffRoleAssignment,
+        on_delete=models.PROTECT,
+        related_name="administrator_proposals_effected",
+        null=True,
+        blank=True,
+    )
+    resulting_invitation = models.ForeignKey(
+        "StaffInvitation",
+        on_delete=models.PROTECT,
+        related_name="administrator_proposals_effected",
+        null=True,
+        blank=True,
+    )
+
+    objects = StaffAdministratorProposalManager()
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=~models.Q(proposed_by=models.F("target_user")),
+                name="staff_admin_proposal_no_self_target",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(expires_at__gt=models.F("created_at")),
+                name="staff_admin_proposal_expiry_after_creation",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(status="PENDING", decided_at__isnull=True, effected_at__isnull=True)
+                    | models.Q(status="APPROVED", decided_at__isnull=False, effected_at__isnull=True)
+                    | models.Q(status="EFFECTED", decided_at__isnull=False, effected_at__isnull=False)
+                    | models.Q(status__in=("REJECTED", "CANCELLED", "EXPIRED", "INVALIDATED"), decided_at__isnull=False, effected_at__isnull=True)
+                ),
+                name="staff_admin_proposal_lifecycle_state",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["status", "expires_at"], name="staff_adm_prop_stat_exp"),
+            models.Index(fields=["target_user", "status"], name="staff_adm_prop_target"),
+        ]
+
+    IMMUTABLE_SUBMISSION_FIELDS = (
+        "public_id", "operation", "target_user_id", "requested_role_id", "proposed_by_id",
+        "reason", "policy_version", "expected_target_state", "expires_at", "created_at",
+    )
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            previous = type(self).objects.get(pk=self.pk)
+            changed = [field for field in self.IMMUTABLE_SUBMISSION_FIELDS if getattr(previous, field) != getattr(self, field)]
+            if changed:
+                raise ValidationError("Administrator proposal submission fields are immutable: " + ", ".join(changed))
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Administrator proposal history is append-only.")
+
+
+class StaffAdministratorProposalDecision(models.Model):
+    proposal = models.OneToOneField(
+        StaffAdministratorProposal,
+        on_delete=models.PROTECT,
+        related_name="decision",
+    )
+    outcome = models.CharField(max_length=20, choices=StaffAdministratorProposal.Status.choices)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="staff_administrator_proposal_decisions",
+    )
+    reason = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise ValidationError("Administrator proposal decisions are immutable.")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Administrator proposal decisions are immutable.")
+
+
 class StaffInvitation(models.Model):
     """Durable, single-use staff account invitation state.
 

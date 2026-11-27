@@ -44,6 +44,8 @@ The current Elevate-owned models are:
 - `staff_access.CapabilityPolicyState`
 - `staff_access.CapabilityProposal`
 - `staff_access.CapabilityProposalDecision`
+- `staff_access.StaffAdministratorProposal`
+- `staff_access.StaffAdministratorProposalDecision`
 - `data_imports.ImportBatch`
 - `data_imports.ImportRecord`
 - `events.Event`
@@ -52,6 +54,20 @@ The current Elevate-owned models are:
 - `community.JoinSubmissionReceipt`
 - `community.CommunityAccountInvitation`
 - `community.CommunityProfile`
+
+## Administrator approval persistence
+
+Migration `staff_access.0010_staff_administrator_proposals` adds the dedicated
+`StaffAdministratorProposal` and immutable `StaffAdministratorProposalDecision`
+tables. The proposal stores durable foreign keys to the target User, requested
+CRM role, proposer, optional approver, resulting assignment and future
+invitation reference; it also stores operation, mandatory reason, policy
+version, minimal expected target state, expiry and lifecycle timestamps.
+Submission fields are immutable and proposal rows are append-only. Lifecycle
+constraints prevent terminal proposals from returning to an actionable state,
+and indexes support status/expiry and target/status lookups. The migration is
+additive, has been validated through isolated test-database migration
+execution, and remains unapplied to the persistent database.
 
 ## Capability Foundation
 
@@ -1661,15 +1677,17 @@ metadata introduced by future roles must be reviewed before rollback. No
 destructive reconciliation or persistent data preparation was performed.
 
 The approved architecture is documented in
-[STAFF_MANAGEMENT.md](STAFF_MANAGEMENT.md). No Staff Management migration has
-been created or applied.
+[STAFF_MANAGEMENT.md](STAFF_MANAGEMENT.md). Staff Management migrations
+`0009_role_family_integrity` and `0010_staff_administrator_proposals` have
+been created and validated in isolated test databases, but have not been
+applied to the persistent database.
 
-The planned schema work may extend `StaffInvitation` with explicit Person/User
-linkage and one requested CRM role, add a dedicated
-`StaffAdministratorProposal`, and add indexes/constraints needed for pending
-invitation and proposal lookup. One active role within the CRM family must be
-enforced transactionally and, where the schema can express it safely, with a
-database-backed invariant without blocking future complementary role families.
+The remaining planned schema work may extend `StaffInvitation` with explicit
+Person/User linkage and approval dependency fields, and add indexes needed for
+invitation-backed effecting. One active role within the CRM family is enforced
+transactionally and with a database-backed invariant without blocking future
+complementary role families.
 
-These are **Approved / Planned** changes. The current database model and
-production/test data have not been reconciled in this documentation stage.
+These are **Implemented / Unverified for persistent deployment** changes. The
+current production/test data has not been reconciled in this documentation
+stage.
