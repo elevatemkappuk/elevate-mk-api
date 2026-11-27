@@ -505,8 +505,11 @@ protected from retention disposal.
 
 The release-request model supports pending, approved, rejected, and cancelled
 states. Rejection is recorded by `audit.0023_legalhold_release_rejection`;
-request cancellation is recorded by the additive `audit.0027` fields and
-`audit.0028` audit-action choice update. Cancellation is restricted to the
+request cancellation is recorded by the additive `audit.0027` fields,
+`audit.0028` audit-action choice update, and `audit.0029` terminal status
+update. The cancellation endpoint is
+`POST /api/v1/privacy/legal-hold-release-requests/{public_id}/cancel/`.
+Cancellation is restricted to the
 original requester while the hold remains active, preserves retention, and
 permits a subsequent request. Legal-hold list/detail
 projections include safe release-request summaries and backend-calculated
@@ -515,7 +518,9 @@ to discover pending requests after login or refresh without manual request-ID
 entry. No retention
 automation, deletion, anonymisation, or GDPR-FUTURE-001 implementation is part
 of this stage. The isolated Phase 1A.4D manual UAT was accepted for the
-API/CRM workflow. Operational/staging deployment, cross-repository
+API/CRM workflow, including direct superuser release and cancellation
+retention behavior. The focused backend cancellation/concurrency validation
+passed 26/26; operational/staging deployment, cross-repository
 compatibility, and final-hardening security evidence remain unverified.
 Minor UX polish is deferred as non-blocking backlog work.
 

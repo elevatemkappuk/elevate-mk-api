@@ -3151,6 +3151,7 @@ Legal-hold routes are:
 - `POST /api/v1/privacy/legal-holds/{public_id}/release-requests/`
 - `POST /api/v1/privacy/legal-hold-release-requests/{public_id}/approve/`
 - `POST /api/v1/privacy/legal-hold-release-requests/{public_id}/reject/`
+- `POST /api/v1/privacy/legal-hold-release-requests/{public_id}/cancel/` for the original requester of a pending release request.
 - `POST /api/v1/privacy/legal-holds/{public_id}/direct-release/` for the audited Django-superuser exception.
 
 They use the existing service layer, CRM session authentication, opaque public
@@ -3162,7 +3163,7 @@ List responses use bounded page-number pagination (`page`, optional
 `page_size`, maximum 100); the detail response contains one hold projection.
 An independent authorized administrator can discover pending requests after a
 fresh login or refresh without receiving an internal database ID. Release
-requests are `PENDING`, `APPROVED`, or `REJECTED`;
+requests are `PENDING`, `APPROVED`, `REJECTED`, or `CANCELLED`;
 rejection preserves the active hold and permits a subsequent request. Pending
 requests remove the ordinary `request_release` action, and duplicate pending
 requests are rejected by the service before state changes. Authorized

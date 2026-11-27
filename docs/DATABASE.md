@@ -1625,10 +1625,13 @@ The generated `audit.0027_legalhold_release_cancellation` migration adds
 nullable cancellation actor, timestamp, and reason fields to preserve terminal
 cancellation history without altering existing records. The generated
 `audit.0028_alter_auditevent_action` migration adds the
-`LEGAL_HOLD_RELEASE_CANCELLED` audit action choice. Neither migration has been
-applied to an operational database. Cancellation is available only to the
-original requester of a pending request while its hold remains active; it does
-not end retention protection and permits a later request.
+`LEGAL_HOLD_RELEASE_CANCELLED` audit action choice. The dependent
+`audit.0029_alter_legalholdreleaserequest_status` migration adds the terminal
+`CANCELLED` status. Migrations 0027, 0028, and 0029 were applied and verified
+in the isolated `elevate_gdpr_phase1a4c_manual` UAT database; they have not
+been applied to an operational database. Cancellation is available only to
+the original requester of a pending request while its hold remains active; it
+does not end retention protection and permits a later request.
 
 ### Phase 1B.1 People privacy schema impact
 
