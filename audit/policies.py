@@ -1,11 +1,14 @@
 from django.db.models import Q
 import hashlib
+import logging
 
 from audit.models import AuditEvent
 from staff_access.models import StaffRole
 from staff_access.permissions import get_active_staff_role_codes_for_user, user_has_any_active_staff_role
 from staff_access.models import CapabilityDefinition
 from staff_access.permissions import user_has_capability
+
+logger = logging.getLogger(__name__)
 
 PERSON_AUDIT_RESTRICTED_ENTITY_TYPES = frozenset({"InternalNote"})
 PERSON_AUDIT_RESTRICTED_ACTIONS = frozenset(
@@ -185,5 +188,9 @@ def record_privacy_authorization_failure(*, request, denial_code, person_id=None
             audit_domain=AuditEvent.Domain.PRIVACY,
         )
     except Exception:
+        logger.exception(
+            "Unable to persist privacy authorization-denial audit event.",
+            extra={"denial_code": str(denial_code), "operation": str(operation)},
+        )
         return False
     return True

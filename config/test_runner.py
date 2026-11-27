@@ -4,7 +4,30 @@ from django.test.runner import DiscoverRunner
 
 
 class ElevateTestRunner(DiscoverRunner):
-    """Restore required reference rows when a preserved test DB lost seed data."""
+    """Discover all project test-module naming conventions and restore seed data."""
+
+    def build_suite(self, test_labels=None, extra_tests=None, **kwargs):
+        # Keep Django's normal tag filtering, ordering, sharding, and parallel
+        # execution. The default discovery label is marked so the loader can
+        # add the legacy suffix convention before those steps are applied.
+        self._include_legacy_suffix_tests = not test_labels
+        try:
+            return super().build_suite(test_labels=test_labels, extra_tests=extra_tests, **kwargs)
+        finally:
+            self._include_legacy_suffix_tests = False
+
+    def load_tests_for_label(self, label, discover_kwargs):
+        tests = super().load_tests_for_label(label, discover_kwargs)
+        if not getattr(self, "_include_legacy_suffix_tests", False) or label != ".":
+            return tests
+
+        suffix_kwargs = discover_kwargs.copy()
+        suffix_kwargs["pattern"] = "*_tests.py"
+        with self.load_with_patterns():
+            suffix_tests = self.test_loader.discover(start_dir=label, **suffix_kwargs)
+        self.test_loader._top_level_dir = None
+        tests.addTests(suffix_tests)
+        return tests
 
     def setup_databases(self, **kwargs):
         config = super().setup_databases(**kwargs)

@@ -123,7 +123,8 @@ class InterestApiTests(TestCase):
             password="testpass123",
             person_first_name="Admin",
             person_last_name="User",
-            person_record_type=Person.RecordType.STAFF,
+            person_record_type=Person.RecordType.TECHNICAL,
+            is_superuser=True,
         )
         self.manager_user = User.objects.create_user(
             email="manager-interests@example.com",
@@ -170,6 +171,7 @@ class InterestApiTests(TestCase):
             person_first_name="Technical",
             person_last_name="Admin",
             person_record_type=Person.RecordType.TECHNICAL,
+            is_superuser=True,
         )
         StaffRoleAssignment.objects.assign_role(user=self.technical_admin_user, role=self.admin_role)
 

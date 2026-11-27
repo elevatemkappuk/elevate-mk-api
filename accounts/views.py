@@ -35,7 +35,7 @@ from accounts.serializers import (
 )
 from audit.models import AuditEvent
 from audit.services import record_audit_event
-from accounts.authentication import CrmSessionAuthentication, MobileJWTAuthentication, SessionAuthentication
+from accounts.authentication import AuthenticatedSessionAuthentication, CrmSessionAuthentication, MobileJWTAuthentication, SessionAuthentication
 from accounts.authentication import CRM_SESSION_CREATED_AT, CRM_SESSION_LAST_ACTIVITY
 from accounts.revocation import issue_mobile_token_pair, revoke_mobile_session, revoke_user_credentials
 from notifications.exceptions import TransactionalEmailError
@@ -327,7 +327,7 @@ class TokenLogoutView(APIView):
 @method_decorator(csrf_protect, name="dispatch")
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
-    authentication_classes = [CrmSessionAuthentication]
+    authentication_classes = [AuthenticatedSessionAuthentication]
 
     @extend_schema(
         operation_id="auth_logout",
@@ -346,6 +346,7 @@ class LogoutView(APIView):
     )
     def post(self, request):
         user = request.user
+        logout(request)
         try:
             record_auth_audit_or_raise(
                 request=request,
@@ -357,7 +358,6 @@ class LogoutView(APIView):
         except AuditPersistenceError:
             raise
 
-        logout(request)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

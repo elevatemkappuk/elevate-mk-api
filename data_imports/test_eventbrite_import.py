@@ -1,3 +1,5 @@
+from unittest import mock
+
 from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -5,6 +7,7 @@ from rest_framework.test import APITestCase
 from accounts.models import User
 from audit.models import AuditEvent
 from data_imports.models import ImportBatch, ImportRecord
+from data_imports.services import eventbrite_import
 from data_imports.services.eventbrite_import import import_eventbrite_batch
 from data_imports.services.membership_form_import import ImportBatchNotImportable, ImportBatchPreflightError
 from events.models import Event, EventParticipation, ExternalEventReference
@@ -139,6 +142,53 @@ class EventbriteImportServiceTests(TestCase):
         self.assertFalse(Person.objects.exists())
         self.assertFalse(Event.objects.exists())
         self.assertFalse(EventParticipation.objects.exists())
+
+    def test_late_mutation_failure_rolls_back_all_eventbrite_records_and_audit_writes(self):
+        self.record()
+        second_source = self.source(
+            first_name="Brian",
+            last_name="Archive",
+            email="brian@example.com",
+            mobile="0799999999",
+        )
+        second_source["event"] = {
+            **second_source["event"],
+            "external_event_id": "event-2",
+            "name": "Second Event",
+        }
+        self.record(source=second_source)
+
+        before = {
+            "people": Person.objects.count(),
+            "events": Event.objects.count(),
+            "participations": EventParticipation.objects.count(),
+            "references": ExternalEventReference.objects.count(),
+            "audits": AuditEvent.objects.count(),
+        }
+        original_audit_person_created = eventbrite_import._audit_person_created
+        audit_calls = {"count": 0}
+
+        def fail_on_second_person_audit(*args, **kwargs):
+            audit_calls["count"] += 1
+            if audit_calls["count"] == 2:
+                raise RuntimeError("late Eventbrite mutation failure")
+            return original_audit_person_created(*args, **kwargs)
+
+        with mock.patch(
+            "data_imports.services.eventbrite_import._audit_person_created",
+            side_effect=fail_on_second_person_audit,
+        ):
+            with self.assertRaises(RuntimeError):
+                import_eventbrite_batch(batch_id=self.batch.id)
+
+        self.batch.refresh_from_db()
+        self.assertEqual(self.batch.status, ImportBatch.Status.READY_FOR_IMPORT)
+        self.assertEqual(Person.objects.count(), before["people"])
+        self.assertEqual(Event.objects.count(), before["events"])
+        self.assertEqual(EventParticipation.objects.count(), before["participations"])
+        self.assertEqual(ExternalEventReference.objects.count(), before["references"])
+        self.assertEqual(AuditEvent.objects.count(), before["audits"])
+        self.assertFalse(self.batch.records.exclude(status=ImportRecord.Status.RESOLVED).exists())
 
     def test_reimport_is_rejected_without_duplicate_records_or_audit_events(self):
         self.record()

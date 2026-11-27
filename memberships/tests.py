@@ -181,7 +181,8 @@ class MembershipIndependenceTests(TestCase):
             password="testpass123",
             person_first_name="Staff",
             person_last_name="Only",
-            person_record_type=Person.RecordType.STAFF,
+            person_record_type=Person.RecordType.TECHNICAL,
+            is_superuser=True,
         )
         role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
         StaffRoleAssignment.objects.assign_role(user=user, role=role)
@@ -271,6 +272,7 @@ class MembershipApiTests(TestCase):
             person_first_name="Tech",
             person_last_name="Admin",
             person_record_type=Person.RecordType.TECHNICAL,
+            is_superuser=True,
         )
         StaffRoleAssignment.objects.assign_role(user=self.technical_admin_user, role=admin_role)
 

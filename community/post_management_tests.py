@@ -40,6 +40,13 @@ class CommunityPostManagementApiTests(TestCase):
         CommunityProfile.objects.create(person=person)
         return user
 
+    def staff_user(self, first_name, last_name, email):
+        person = Person.objects.create(
+            first_name=first_name, last_name=last_name, primary_email=email,
+            record_type=Person.RecordType.STAFF,
+        )
+        return User.objects.create_user(email=email, password="Strong-password-123!", person=person)
+
     def create_post(self, *, status=CommunityPost.Status.ACTIVE):
         return CommunityPost.objects.create(
             author=self.author.person,
@@ -162,7 +169,7 @@ class CommunityPostManagementApiTests(TestCase):
         self.assertEqual(self.client.get(self.post_url()).status_code, 404)
         self.assertEqual(self.client.get(f"{self.post_url()}replies/").status_code, 404)
         self.assertEqual(self.client.post(f"{self.post_url()}replies/", {"body": "Unavailable"}, format="json").status_code, 404)
-        manager = self.member("Mara", "Manager", "deleted-manager@example.com")
+        manager = self.staff_user("Mara", "Manager", "deleted-manager@example.com")
         role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_MANAGER, defaults={"name": "CRM Manager"})
         StaffRoleAssignment.objects.create(user=manager, role=role)
         self.client.force_authenticate(manager)
@@ -172,7 +179,7 @@ class CommunityPostManagementApiTests(TestCase):
     def test_removed_post_cannot_be_author_managed_and_moderator_restoration_still_works(self):
         self.client.force_authenticate(self.viewer)
         report = self.client.post(f"{self.post_url()}report/", {"reason": "OFF_TOPIC"}, format="json")
-        manager = self.member("Mara", "Manager", "manager@example.com")
+        manager = self.staff_user("Mara", "Manager", "manager@example.com")
         role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_MANAGER, defaults={"name": "CRM Manager"})
         StaffRoleAssignment.objects.create(user=manager, role=role)
         self.client.force_authenticate(manager)
@@ -189,8 +196,6 @@ class CommunityPostManagementApiTests(TestCase):
 
 
 class CommunityPostManagementConcurrencyTests(TransactionTestCase):
-    reset_sequences = True
-
     def setUp(self):
         if connection.vendor != "postgresql":
             self.skipTest("PostgreSQL row-lock concurrency is not equivalent on this database.")

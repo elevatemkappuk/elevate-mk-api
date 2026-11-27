@@ -15,6 +15,7 @@ from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.models import User
+from accounts.views import AuditPersistenceError
 from audit.models import AuditEvent
 from memberships.models import Membership
 from people.models import Person
@@ -735,9 +736,9 @@ class AuthenticationApiTests(TestCase):
         self.assertEqual(response.data["staff_roles"], [])
 
     def test_inactive_staff_roles_are_excluded_from_me(self):
+        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.viewer_role)
         self.viewer_role.is_active = False
         self.viewer_role.save(update_fields=["is_active"])
-        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.viewer_role)
         self.client.post(
             self.login_url,
             {"email": "staff@example.com", "password": self.password},
@@ -764,6 +765,23 @@ class AuthenticationApiTests(TestCase):
 
         self.assertEqual(response.status_code, 204)
         self.assertNotIn("_auth_user_id", self.client.session)
+
+    def test_logout_invalidates_session_when_audit_persistence_fails(self):
+        self.client.force_login(self.user)
+        session = self.client.session
+        session["elevate_auth_context"] = "community"
+        session["elevate_auth_version"] = self.user.auth_version
+        session.save()
+
+        with mock.patch(
+            "accounts.views.record_auth_audit_or_raise",
+            side_effect=AuditPersistenceError,
+        ):
+            with self.assertRaises(AuditPersistenceError):
+                self.client.post(self.logout_url, {}, format="json")
+
+        self.assertNotIn("_auth_user_id", self.client.session)
+        self.assertEqual(self.client.get(self.me_url).status_code, 401)
 
     def test_mobile_jwt_cannot_use_crm_session_logout(self):
         token_response = self.client.post(

@@ -1,9 +1,11 @@
 # Elevate MK GDPR — Backend Technical Architecture and Implementation Guide
 
 Status: Living Documentation. Capability foundation, governance models,
-privacy-audit models, migrations, services and focused tests are implemented
-and locally verified. Public activation, production/staging behavior and
-deployment remain unverified.
+privacy-audit models, migrations, services and earlier focused tests are
+implemented, with evidence scoped to their named validation batches. Current
+Phase 1C evidence and limitations are recorded at the end of this guide.
+Public activation, production/staging behavior and deployment remain
+unverified.
 
 ## Scope and authority
 
@@ -492,8 +494,9 @@ no migration is required.
 
 ## Phase 1A.4E and 1A.6 consolidated status
 
-Status: **Implemented / source-inspected; automated tests and final hardening
-execution deferred.** API/CRM contracts continue to use Django session
+Status: **Implemented / source-inspected for the earlier Phase 1A.4E/1.6
+closure batch; automated tests and final hardening execution were deferred.**
+API/CRM contracts continue to use Django session
 authentication for Staff CRM routes; mobile JWT authentication remains limited
 to its documented mobile and Community surfaces. Capability evaluation,
 revocation, privacy governance, and safe projections remain backend-authoritative
@@ -510,9 +513,11 @@ cannot self-assign Staff roles or directly edit existing StaffRoleAssignment
 rows; new inactive or non-STAFF role assignments are rejected; and untrusted
 system audit callers cannot persist caller-supplied request identifiers or IP
 addresses. The CRM session logout route now explicitly rejects mobile JWT
-authentication; the approved superuser exception remains available. Added regression
-tests are **Implemented / Unverified** because test execution is deferred to
-final GDPR hardening.
+authentication; the approved superuser exception remains available. Added
+regression tests were **Implemented / Unverified for this earlier Phase
+1A.4E/1.6 closure batch** because execution was deferred to final GDPR
+hardening. The later Phase 1C targeted results are recorded below and do not
+retroactively make the broader closure batch or full repository suite verified.
 
 AUTH-002 remains resolved within its reviewed raw AuditEvent Admin scope.
 GOV-003, GOV-005, uncovered GOV-006 privileged-writer paths, AUTH-001 residual
@@ -526,14 +531,17 @@ These obligations are carried into the consolidated GDPR Phase 1C final
 hardening stage. The implementation-stage specialist acceptance gate was not
 completed for every specialist because the active agent-thread limit prevented
 delegation; no independent acceptance is claimed. All regression tests added
-in this stage remain **Implemented / Unexecuted** until Phase 1C hardening.
+in this stage were **Implemented / Unexecuted at the pre-Phase 1C cutoff**.
+Later Phase 1C reruns cover only the named focused subsets and do not establish
+a green full suite.
 Production activation requires final security, QA, architecture and
 documentation acceptance, runtime/deployment verification, and any required
 legal or privacy approvals.
 
 ## Phase 1B.1 People privacy
 
-Status: **Implemented / source-inspected; verification unexecuted**.
+Status: **Implemented / source-inspected; verification was unexecuted at the
+Phase 1B.1 cutoff**.
 
 The API now enforces the approved `PERSON_CONTACT_READ` and
 `PERSON_DEMOGRAPHIC_READ` boundaries on People response projections, nested
@@ -576,9 +584,10 @@ failure contract; and comprehensive Person access auditing remains
 `GDPR-FUTURE-001`.
 
 The choice migration `audit.0024_alter_auditevent_action.py` is generated but
-not applied. The new regression tests are **Implemented / Unexecuted**, and
-runtime migration, disclosure, failure-rollback and Privacy Audit verification
-remain deferred to GDPR Phase 1C hardening.
+not applied. The new regression tests were **Implemented / Unexecuted at the
+Phase 1B.1 cutoff**. Current Phase 1C evidence covers named focused subsets
+only; runtime migration, disclosure, failure-rollback and Privacy Audit
+verification remain limited or deferred as described below.
 
 The final UAT and UI-polishing backlog includes manual verification of the
 People privacy projections, superuser disclosure-audit behavior, Privacy Audit
@@ -588,8 +597,8 @@ privacy scope.
 
 Tests covering masked projections, restricted demographics, contact-search
 suppression, protected writes, safe malformed values, and the superuser
-exception were added but are **Implemented / Unexecuted** under the approved
-deferred-test policy. Independent specialist acceptance was unavailable because
+exception were **Implemented / Unexecuted at the Phase 1B.1 cutoff** under the
+approved deferred-test policy. Independent specialist acceptance was unavailable because
 the active agent-thread limit prevented delegation; no independent acceptance
 is claimed. Final hardening still requires the approved lightweight checks and
 runtime verification.
@@ -605,7 +614,7 @@ auditing (`GDPR-FUTURE-001`), and later privacy workflows remain deferred.
 ## Phase 1B.2 Marketing privacy
 
 Status: **Implemented / source-inspected; automated tests and runtime/provider
-verification deferred**.
+verification were deferred at the Phase 1B.2 cutoff**.
 
 Marketing audience preview and Campaign V1 retain their existing CRM-role
 authorization and consent rules. Privacy capabilities do not grant campaign
@@ -627,13 +636,15 @@ No new marketing capability, campaign permission, blanket campaign/recipient
 audit, export enforcement, or provider workflow was introduced. Deliberate
 protected Person disclosure auditing remains limited to the approved existing
 workflow; comprehensive Person access auditing remains `GDPR-FUTURE-001`.
-The added regression tests are **Implemented / Unexecuted** under the deferred
-test policy. No model changes or migration is required for this stage.
+The added regression tests were **Implemented / Unexecuted at the Phase 1B.2
+cutoff** under the deferred test policy. No model changes or migration is
+required for this stage; current Phase 1C evidence remains subset-specific.
 
 ## Phase 1B.3 exports and bulk operations
 
 Status: **Implemented / source-inspected; automated tests, migration
-application, runtime downloads, and final security verification deferred**.
+application, runtime downloads, and final security verification were deferred
+for the Phase 1B.3 closure batch**.
 
 People exports use `GET /api/v1/people/export/?format=csv|xlsx` and the existing
 People directory scope. The backend requires CRM session authentication,
@@ -660,8 +671,9 @@ the existing `audit.0024` privacy-disclosure migration; no `audit.0025`
 migration exists in repository history, so the historical numbering gap is
 intentionally retained.
 
-Backend and CRM regression tests are **Implemented / Unexecuted**. Migration
-application and drift validation remain pending. CSV/XLSX runtime downloads,
+Backend and CRM regression tests were **Implemented / Unexecuted for the
+Phase 1B.3 closure batch**. Migration application and drift validation remain
+pending. CSV/XLSX runtime downloads,
 Microsoft Excel compatibility, formula-injection behavior, export
 authorization and capability-revocation behavior, export-audit visibility,
 mandatory audit-failure behavior, and manual export UAT remain **Unverified**.
@@ -682,7 +694,7 @@ independent specialist acceptance, or production-activation requirements.
 ## Phase 1B.4 API exposure protection
 
 Status: **Implemented / source-inspected; automated tests and environment
-runtime verification deferred**.
+runtime verification were deferred for the Phase 1B.4 closure batch**.
 
 The OpenAPI schema, Swagger UI, and ReDoc routes now share an explicit
 environment-aware backend boundary. Local development uses
@@ -700,8 +712,10 @@ The dedicated technical permission is introduced by unapplied migration
 post-migration permission verification remain pending. CI smoke expectations
 now assert protected staging routes and disabled-by-default production routes.
 
-The added access-control regression tests are **Implemented / Unexecuted**.
-Django system checks and migration drift checks are **Verified** locally.
+The added access-control regression tests were **Implemented / Unexecuted for
+the Phase 1B.4 closure batch**. Django system checks and migration drift checks
+are **Verified** locally in the current targeted evidence, but this does not
+establish full-suite or deployment verification.
 Runtime environment checks, direct schema and alternate route verification,
 and deployment smoke checks remain pending final hardening. OpenAPI generation
 was inspected but still reports existing unrelated serializer/authenticator
@@ -718,3 +732,50 @@ and production activation approvals.
 All planned GDPR Phase 1 functional development stages are marked complete for
 development purposes only. This does not constitute final security acceptance,
 runtime verification, legal/privacy approval, or production readiness.
+
+## Phase 1C final hardening status
+
+Status: **In progress / not accepted**. Source-level architecture review notes
+found no material drift; this is not independent final acceptance. A narrow
+cross-repository correction now allows
+the shared logout endpoint to accept only valid CRM or Community sessions;
+mobile JWT authentication remains separate. The corresponding API checks and
+focused privacy/export/Community tests passed: **49/49** after correcting
+stale test fixtures and masking expectations. The expanded API suite passed
+**1458/1458** on a fresh isolated PostgreSQL test database. Django `check` and
+`makemigrations --check --dry-run` passed; `migrate --plan` still reports
+`accounts.0003`, `audit.0024`, and `audit.0026` as pending and no migrations
+were applied.
+
+The authentication fixture baseline now explicitly distinguishes membership
+states: the authenticated member test asserts an `ACTIVE` Membership in the
+`/auth/me/` projection, while the technical-Person case asserts no membership.
+This is source/test evidence for the baseline contract, not a claim that the
+full authentication suite has passed.
+
+The shared session logout contract accepts only authenticated Django sessions
+tagged for CRM or Community use. `POST /api/v1/auth/logout/` calls Django
+session logout before persisting the logout audit event, invalidating the
+current server-side session even when audit persistence raises an error.
+Community activation evidence verifies that a subsequent Community `/me/`
+request is unauthorized, and authentication regression coverage rejects mobile
+JWT use of this session endpoint. Mobile JWT logout remains a separate
+device-session revocation flow.
+
+The custom `ElevateTestRunner` now supplements Django's default `test*.py`
+discovery with suffix-named modules matching `*_tests.py`, including the
+authentication, Community, and People/export modules. The corrected expanded
+runner executed **1458/1458** tests successfully on a fresh isolated
+PostgreSQL test database. This does not verify operational migration
+application, deployment, production/staging behavior, or cross-repository
+runtime compatibility.
+OpenAPI generation was inspected and emitted existing serializer/authenticator
+diagnostics. Those diagnostics are classified as **nonblocking for this Phase
+1C documentation update only** because they are unrelated to the privacy/logout
+corrections under review; schema generation is not claimed clean, and no broad
+schema cleanup was performed. Remaining final-hardening obligations include
+migration application in an authorized non-production environment, accumulated
+API/CRM suites, export and audit-failure runtime checks, cross-repository
+compatibility, and independent final security/QA acceptance. AUTH-001,
+AUTH-002, GOV-003, GOV-005, uncovered GOV-006 paths, and trusted-provenance
+hardening remain open or activation dependencies; no risk is accepted here.

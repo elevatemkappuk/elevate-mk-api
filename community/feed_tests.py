@@ -24,12 +24,13 @@ class CommunityPostModelTests(TestCase):
             person_last_name=last_name,
             person_record_type=record_type,
         )
-        Membership.objects.create(
-            person=user.person,
-            status=Membership.Status.ACTIVE,
-            joined_at=date(2026, 1, 1),
-            membership_source=Membership.Source.COMMUNITY_PLATFORM,
-        )
+        if record_type == Person.RecordType.BUSINESS:
+            Membership.objects.create(
+                person=user.person,
+                status=Membership.Status.ACTIVE,
+                joined_at=date(2026, 1, 1),
+                membership_source=Membership.Source.COMMUNITY_PLATFORM,
+            )
         return user
 
     def test_defaults_uuid_timestamps_and_locked_choices(self):

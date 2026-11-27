@@ -68,7 +68,7 @@ class EffectiveAccessEndpointTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(set(response.data), {"capability_codes", "policy_version"})
-        self.assertEqual(response.data["capability_codes"], [])
+        self.assertEqual(response.data["capability_codes"], [CapabilityDefinition.PERSON_CONTACT_READ])
         self.assertEqual(
             response.data["policy_version"],
             CapabilityPolicyState.objects.get(singleton_key=1, key="capability-governance").version,

@@ -420,6 +420,12 @@ def redeem_staff_invitation(*, public_id, raw_token, password):
         else:
             user = existing_user
             person = user.person
+            user = User.objects.select_for_update().get(pk=existing_user.pk)
+            user.set_password(password)
+            user.is_active = True
+            user.auth_version += 1
+            user.crm_session_version += 1
+            user.save(update_fields=["password", "is_active", "auth_version", "crm_session_version"])
         for role_code in invitation.pending_role_codes:
             role = StaffRole.objects.get(code=role_code, is_active=True)
             StaffRoleAssignment.objects.assign_role(
@@ -428,13 +434,6 @@ def redeem_staff_invitation(*, public_id, raw_token, password):
                 assigned_by=invitation.created_by,
                 audit=True,
             )
-        if existing_user is not None:
-            user = User.objects.select_for_update().get(pk=existing_user.pk)
-            user.set_password(password)
-            user.is_active = True
-            user.auth_version += 1
-            user.crm_session_version += 1
-            user.save(update_fields=["password", "is_active", "auth_version", "crm_session_version"])
         invitation.accepted_at = timezone.now()
         invitation.token_hash = None
         invitation.save(update_fields=["accepted_at", "token_hash", "updated_at"])

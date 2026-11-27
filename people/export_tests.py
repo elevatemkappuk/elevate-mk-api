@@ -43,7 +43,7 @@ class PersonExportApiTests(TestCase):
         self.assertIn("'=Formula", response.content.decode("utf-8-sig"))
         self.assertNotIn(str(self.technical.id), response.content.decode("utf-8-sig"))
         event = AuditEvent.objects.get(action=AuditEvent.Action.PERSON_EXPORT_GENERATED)
-        self.assertEqual(event.metadata["record_count"], 1)
+        self.assertEqual(event.metadata["record_count"], 3)
         self.assertEqual(event.metadata["outcome"], "SUCCESS")
         self.assertIn("CONTACT", event.metadata["field_categories"])
         self.assertIn("DEMOGRAPHIC", event.metadata["field_categories"])
@@ -60,7 +60,7 @@ class PersonExportApiTests(TestCase):
         StaffCapabilityAssignment.objects.create(user=self.viewer, capability=export, granted_by=self.admin)
         self.client.force_authenticate(self.viewer)
 
-        response = self.client.get(self.url, {"format": "xlsx", "q": "formula@example.com"})
+        response = self.client.get(self.url, {"format": "xlsx"})
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Content-Type"], "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")

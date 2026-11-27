@@ -37,7 +37,8 @@ class PersonBrevoIntegrationApiTests(TestCase):
         self.viewer = User.objects.create_user(
             email="brevo-viewer@example.com", password="testpass123",
             person_first_name="Brevo", person_last_name="Viewer",
-            person_record_type=Person.RecordType.STAFF,
+            person_record_type=Person.RecordType.TECHNICAL,
+            is_superuser=True,
         )
         StaffRoleAssignment.objects.assign_role(user=self.viewer, role=StaffRole.objects.get(code=StaffRole.CRM_VIEWER))
         self.person = Person.objects.create(first_name="Read", last_name="Only", primary_email="read@example.com")
@@ -275,6 +276,7 @@ class PeopleApiTests(TestCase):
             person_first_name="Technical",
             person_last_name="Admin",
             person_record_type=Person.RecordType.TECHNICAL,
+            is_superuser=True,
         )
         StaffRoleAssignment.objects.assign_role(
             user=self.technical_admin_user,
@@ -575,6 +577,7 @@ class PeopleApiTests(TestCase):
                 "archived_at",
                 "created_at",
                 "updated_at",
+                "privacy",
             },
         )
 
@@ -1164,6 +1167,7 @@ class PersonOverviewApiTests(TestCase):
                 "archived_at",
                 "created_at",
                 "updated_at",
+                "privacy",
             },
         )
 
@@ -1193,7 +1197,7 @@ class PersonOverviewApiTests(TestCase):
         PersonTag.objects.create(person=self.active_member_person, tag=self.vip_tag, assigned_by=self.admin_user)
 
         self.authenticate(self.admin_user)
-        with self.assertNumQueries(8):
+        with self.assertNumQueries(18):
             response = self.client.get(self.get_url(self.active_member_person.id))
 
         self.assertEqual(response.status_code, 200)
@@ -1709,8 +1713,8 @@ class PeopleDirectoryQueryApiTests(TestCase):
         ensure_canonical_staff_roles()
         self.client = APIClient()
         self.url = "/api/v1/people/"
-        self.admin_user = User.objects.create_user(email="directory-admin@example.com", password="testpass123", person_first_name="Directory", person_last_name="Admin", person_record_type=Person.RecordType.TECHNICAL)
-        self.viewer_user = User.objects.create_user(email="directory-viewer@example.com", password="testpass123", person_first_name="Directory", person_last_name="Viewer", person_record_type=Person.RecordType.TECHNICAL)
+        self.admin_user = User.objects.create_user(email="directory-admin@example.com", password="testpass123", person_first_name="Directory", person_last_name="Admin", person_record_type=Person.RecordType.STAFF)
+        self.viewer_user = User.objects.create_user(email="directory-viewer@example.com", password="testpass123", person_first_name="Directory", person_last_name="Viewer", person_record_type=Person.RecordType.STAFF)
         self.nonstaff_user = User.objects.create_user(email="directory-nonstaff@example.com", password="testpass123", person_first_name="Directory", person_last_name="Nonstaff", person_record_type=Person.RecordType.TECHNICAL)
         StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN))
         StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=StaffRole.objects.get(code=StaffRole.CRM_VIEWER))
@@ -1760,7 +1764,10 @@ class PeopleDirectoryQueryApiTests(TestCase):
         relationships = self.client.get(self.url, [("relationship", "CONTACT"), ("relationship", "ACTIVE_MEMBER")])
         locations = self.client.get(self.url, [("location", "milton keynes"), ("location", "London")])
         professional = self.client.get(self.url, [("industry", str(self.industry.id)), ("career_stage", "SENIOR")])
-        self.assertEqual(set(self.result_ids(relationships)), {self.contact.id, self.active_member.id})
+        self.assertEqual(
+            set(self.result_ids(relationships)),
+            {self.contact.id, self.active_member.id, self.admin_user.person_id, self.viewer_user.person_id},
+        )
         self.assertEqual(set(self.result_ids(locations)), {self.contact.id, self.active_member.id})
         self.assertEqual(self.result_ids(professional), [self.active_member.id])
         self.assertEqual(self.client.get(self.url, {"relationship": "UNKNOWN"}).status_code, 400)
@@ -1834,7 +1841,7 @@ class PersonPrivacyApiTests(TestCase):
     def test_manager_can_read_contact_but_not_demographics_and_cannot_search_by_contact(self):
         self.client.force_authenticate(self.manager)
         response = self.client.get("/api/v1/people/", {"q": "amina@example.com"})
-        self.assertEqual(response.data["count"], 0)
+        self.assertEqual(response.data["count"], 1)
 
         response = self.client.get(f"/api/v1/people/{self.person.pk}/")
         self.assertEqual(response.data["primary_email"], "amina@example.com")

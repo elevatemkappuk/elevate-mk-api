@@ -41,8 +41,6 @@ class StaffRoleModelTests(TestCase):
 
     def test_role_activation_state_is_respected_by_active_query(self):
         role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
-        role.is_active = False
-        role.save(update_fields=["is_active"])
         user = User.objects.create_user(
             email="viewer@example.com",
             password="testpass123",
@@ -51,6 +49,8 @@ class StaffRoleModelTests(TestCase):
             person_record_type=Person.RecordType.STAFF,
         )
         StaffRoleAssignment.objects.assign_role(user=user, role=role)
+        role.is_active = False
+        role.save(update_fields=["is_active"])
 
         self.assertFalse(StaffRoleAssignment.objects.active().exists())
 
@@ -593,9 +593,9 @@ class StaffPermissionTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_inactive_role_receives_403(self):
+        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.viewer_role)
         self.viewer_role.is_active = False
         self.viewer_role.save(update_fields=["is_active"])
-        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.viewer_role)
         self.client.force_authenticate(user=self.staff_user)
         response = self.client.get("/test-permissions/any-staff/")
         self.assertEqual(response.status_code, 403)

@@ -293,6 +293,7 @@ class MembershipFormImportServiceTests(TestCase):
             ),
         )
 
+        before_audits = AuditEvent.objects.count()
         with mock.patch(
             "data_imports.services.membership_form_import._create_or_fill_profile",
             side_effect=[(False, []), RuntimeError("profile write failed")],
@@ -303,7 +304,7 @@ class MembershipFormImportServiceTests(TestCase):
         self.batch.refresh_from_db()
         self.assertFalse(Person.objects.filter(primary_email__in=["amina@example.com", "brian@example.com"]).exists())
         self.assertEqual(Membership.objects.count(), 0)
-        self.assertEqual(AuditEvent.objects.count(), 0)
+        self.assertEqual(AuditEvent.objects.count(), before_audits)
         self.assertEqual(self.batch.status, ImportBatch.Status.READY_FOR_IMPORT)
 
     def test_invalid_rows_are_skipped_without_authoritative_mutation(self):

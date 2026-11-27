@@ -30,6 +30,13 @@ class CommunityContentModerationApiTests(TestCase):
         CommunityProfile.objects.create(person=person)
         return user
 
+    def staff_user(self, first_name, last_name, email):
+        person = Person.objects.create(
+            first_name=first_name, last_name=last_name, primary_email=email,
+            record_type=Person.RecordType.STAFF,
+        )
+        return User.objects.create_user(email=email, password="Strong-password-123!", person=person)
+
     def report_url(self):
         return f"/api/v1/community/posts/{self.post.public_id}/report/"
 
@@ -57,8 +64,8 @@ class CommunityContentModerationApiTests(TestCase):
         self.assertEqual(unavailable.status_code, 404)
 
     def test_viewer_cannot_access_moderation_but_manager_can_remove_and_restore(self):
-        viewer = self.member("Viewer", "Staff", "viewer@example.com")
-        manager = self.member("Manager", "Staff", "manager@example.com")
+        viewer = self.staff_user("Viewer", "Staff", "viewer@example.com")
+        manager = self.staff_user("Manager", "Staff", "manager@example.com")
         viewer_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_VIEWER, defaults={"name": "CRM Viewer"})
         manager_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_MANAGER, defaults={"name": "CRM Manager"})
         StaffRoleAssignment.objects.create(user=viewer, role=viewer_role)
@@ -90,7 +97,7 @@ class CommunityContentModerationApiTests(TestCase):
             {"reason": "INAPPROPRIATE_OR_ABUSIVE"}, format="json",
         )
         self.assertEqual(response.status_code, 201)
-        manager = self.member("Manager", "Staff", "reply-manager@example.com")
+        manager = self.staff_user("Manager", "Staff", "reply-manager@example.com")
         role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_MANAGER, defaults={"name": "CRM Manager"})
         StaffRoleAssignment.objects.create(user=manager, role=role)
         self.client.force_authenticate(manager)

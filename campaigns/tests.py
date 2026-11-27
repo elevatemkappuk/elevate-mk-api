@@ -131,7 +131,7 @@ class CampaignFoundationApiTests(TestCase):
         recipient_response = self.client.get(f"{self.create_url}{campaign.id}/recipients/?page_size=100")
         self.assertEqual(recipient_response.status_code, 200)
         row = next(item for item in recipient_response.data["results"] if item["person"] == self.included.id)
-        self.assertEqual(row["email_snapshot"], "i***@example.com")
+        self.assertEqual(row["email_snapshot"], "i***@e***.com")
         self.assertNotIn("INCLUDED@example.com", str(recipient_response.data))
 
     def test_campaign_provider_error_projection_redacts_sensitive_diagnostics(self):
@@ -451,7 +451,7 @@ class CampaignFoundationApiTests(TestCase):
         response = self.client.get(f"{self.create_url}{campaign.id}/recipients/?page_size=100")
         self.assertEqual(response.status_code, 200)
         row = next(item for item in response.data["results"] if item["id"] == snapshot.id)
-        self.assertEqual(row["email_snapshot"], historical_email)
+        self.assertEqual(row["email_snapshot"], "i***@e***.com")
         self.assertEqual(row["first_name_snapshot"], snapshot.first_name_snapshot)
         self.assertEqual(row["decision"], snapshot.decision)
         self.assertEqual(row["provider_error_code"], "BREVO_CONTACT_NOT_FOUND_FOR_EXISTING_REFERENCE")

@@ -20,6 +20,7 @@ class PeopleDirectoryProjectionTests(APITestCase):
             email="directory-admin@example.com", password="testpass123",
             person_first_name="Directory", person_last_name="Admin",
             person_record_type=Person.RecordType.TECHNICAL,
+            is_superuser=True,
         )
         StaffRoleAssignment.objects.assign_role(
             user=self.user, role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN),
@@ -113,7 +114,7 @@ class PeopleDirectoryProjectionTests(APITestCase):
                 reader = User.objects.create_user(
                     email=f"{code.lower()}@example.com", password="testpass123",
                     person_first_name="Reader", person_last_name=code,
-                    person_record_type=Person.RecordType.TECHNICAL,
+                    person_record_type=Person.RecordType.STAFF,
                 )
                 StaffRoleAssignment.objects.assign_role(user=reader, role=StaffRole.objects.get(code=code))
                 self.client.force_authenticate(reader)

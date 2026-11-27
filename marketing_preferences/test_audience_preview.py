@@ -24,21 +24,21 @@ class AudiencePreviewApiTests(TestCase):
             password="password123",
             person_first_name="Audience",
             person_last_name="Admin",
-            person_record_type=Person.RecordType.TECHNICAL,
+            person_record_type=Person.RecordType.STAFF,
         )
         self.manager = User.objects.create_user(
             email="audience-manager@example.com",
             password="password123",
             person_first_name="Audience",
             person_last_name="Manager",
-            person_record_type=Person.RecordType.TECHNICAL,
+            person_record_type=Person.RecordType.STAFF,
         )
         self.viewer = User.objects.create_user(
             email="audience-viewer@example.com",
             password="password123",
             person_first_name="Audience",
             person_last_name="Viewer",
-            person_record_type=Person.RecordType.TECHNICAL,
+            person_record_type=Person.RecordType.STAFF,
         )
         self.nonstaff = User.objects.create_user(
             email="audience-nonstaff@example.com",
@@ -232,7 +232,7 @@ class AudiencePreviewApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         rows = {row["id"]: row for row in response.data["results"]["results"]}
-        self.assertEqual(rows[self.eligible.id]["primary_email"], "e***@example.com")
+        self.assertEqual(rows[self.eligible.id]["primary_email"], "e***@e***.com")
         self.assertNotIn("eligible@example.com", str(response.data))
 
     def test_manager_receives_contact_preview_when_effective_capability_allows_it(self):
