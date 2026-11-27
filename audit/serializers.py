@@ -2,6 +2,8 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from audit.policies import get_person_audit_description, project_person_audit_changes
+from staff_access.models import CapabilityDefinition
+from staff_access.permissions import user_has_capability
 
 
 class PersonAuditHistoryQuerySerializer(serializers.Serializer):
@@ -16,7 +18,8 @@ class PersonAuditHistoryQuerySerializer(serializers.Serializer):
 
 class AuditActorSerializer(serializers.Serializer):
     id = serializers.IntegerField()
-    email = serializers.EmailField()
+    email = serializers.EmailField(allow_null=True)
+    contact_restricted = serializers.BooleanField()
 
 
 class PersonAuditHistoryEventSerializer(serializers.Serializer):
@@ -38,10 +41,15 @@ class PersonAuditHistoryEventSerializer(serializers.Serializer):
         if actor_user is None:
             return None
 
-        return {
-            "id": actor_user.id,
-            "email": actor_user.email,
-        }
+        request = self.context.get("request")
+        viewer = getattr(request, "user", None)
+        can_view_contact = bool(viewer and user_has_capability(
+            viewer,
+            CapabilityDefinition.PERSON_CONTACT_READ,
+        ))
+        if not can_view_contact:
+            return {"id": actor_user.id, "email": None, "contact_restricted": True}
+        return {"id": actor_user.id, "email": actor_user.email, "contact_restricted": False}
 
     @extend_schema_field(serializers.JSONField())
     def get_changes(self, instance):

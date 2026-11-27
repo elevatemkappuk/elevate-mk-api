@@ -14,6 +14,7 @@ from people.models import Person
 from professional_profiles.models import Industry, ProfessionalProfile
 from rest_framework.test import APIClient
 from staff_access.models import StaffRole, StaffRoleAssignment
+from config.test_utils import test_actor
 from skills.models import PersonSkill, Skill
 
 
@@ -123,7 +124,8 @@ class InterestApiTests(TestCase):
             password="testpass123",
             person_first_name="Admin",
             person_last_name="User",
-            person_record_type=Person.RecordType.STAFF,
+            person_record_type=Person.RecordType.TECHNICAL,
+            is_superuser=True,
         )
         self.manager_user = User.objects.create_user(
             email="manager-interests@example.com",
@@ -144,9 +146,9 @@ class InterestApiTests(TestCase):
         self.manager_role = StaffRole.objects.get(code=StaffRole.CRM_MANAGER)
         self.viewer_role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
 
-        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=self.admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=self.manager_role)
-        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=self.viewer_role)
+        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=self.admin_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=self.manager_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=self.viewer_role, assigned_by=test_actor())
 
         self.active_business_person = Person.objects.create(
             first_name="Amina",
@@ -170,8 +172,9 @@ class InterestApiTests(TestCase):
             person_first_name="Technical",
             person_last_name="Admin",
             person_record_type=Person.RecordType.TECHNICAL,
+            is_superuser=True,
         )
-        StaffRoleAssignment.objects.assign_role(user=self.technical_admin_user, role=self.admin_role)
+        StaffRoleAssignment.objects.assign_role(user=self.technical_admin_user, role=self.admin_role, assigned_by=test_actor())
 
         self.networking = Interest.objects.get(slug="networking")
         self.technology = Interest.objects.get(slug="technology")

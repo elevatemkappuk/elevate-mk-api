@@ -24,9 +24,10 @@ class PeopleDirectoryQuery:
         "-updated_at": ("-updated_at", "-id"),
     }
 
-    def __init__(self, queryset, params):
+    def __init__(self, queryset, params, *, allow_contact_search=True):
         self.queryset = queryset
         self.params = params
+        self.allow_contact_search = allow_contact_search
 
     def apply(self):
         queryset = self.apply_record_state(self.queryset)
@@ -54,15 +55,16 @@ class PeopleDirectoryQuery:
         query = self.params.get("q", "").strip()
         if not query:
             return queryset
-        return queryset.annotate(full_name=Concat("first_name", Value(" "), "last_name")).filter(
+        condition = (
             Q(first_name__icontains=query)
             | Q(last_name__icontains=query)
-            | Q(primary_email__icontains=query)
-            | Q(mobile__icontains=query)
             | Q(full_name__icontains=query)
             | Q(professional_profile__job_title__icontains=query)
             | Q(professional_profile__company__icontains=query)
         )
+        if self.allow_contact_search:
+            condition |= Q(primary_email__icontains=query) | Q(mobile__icontains=query)
+        return queryset.annotate(full_name=Concat("first_name", Value(" "), "last_name")).filter(condition)
 
     def apply_relationship(self, queryset):
         relationships = self.params.get("relationship", [])

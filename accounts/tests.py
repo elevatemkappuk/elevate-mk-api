@@ -15,6 +15,7 @@ from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.models import User
+from accounts.views import AuditPersistenceError
 from audit.models import AuditEvent
 from memberships.models import Membership
 from people.models import Person
@@ -128,6 +129,12 @@ class AuthenticationApiTests(TestCase):
         self.client = APIClient()
         self.csrf_client = APIClient(enforce_csrf_checks=True)
         self.password = "testpass123"
+        self.bootstrap = User.objects.create_superuser(
+            email="authentication-bootstrap@example.com",
+            password=self.password,
+            person_first_name="Authentication",
+            person_last_name="Bootstrap",
+        )
         self.user = User.objects.create_user(
             email="Member@Example.com",
             password=self.password,
@@ -217,7 +224,7 @@ class AuthenticationApiTests(TestCase):
         self.assertIn("_auth_user_id", self.client.session)
 
     def test_staff_user_receives_active_role_codes_in_login_response(self):
-        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.admin_role)
+        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.admin_role, assigned_by=self.bootstrap)
 
         response = self.client.post(
             self.login_url,
@@ -687,7 +694,7 @@ class AuthenticationApiTests(TestCase):
         self.assertNotIn("password", response.data)
 
     def test_staff_user_receives_active_role_codes_in_me(self):
-        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.admin_role)
+        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.admin_role, assigned_by=self.bootstrap)
         self.client.post(
             self.login_url,
             {"email": "staff@example.com", "password": self.password},
@@ -700,8 +707,8 @@ class AuthenticationApiTests(TestCase):
         self.assertEqual(response.data["staff_roles"], [StaffRole.CRM_ADMIN])
 
     def test_multiple_active_roles_are_returned_deterministically(self):
-        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.manager_role)
-        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.admin_role)
+        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.manager_role, assigned_by=self.bootstrap)
+        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.admin_role, assigned_by=self.bootstrap)
         self.client.post(
             self.login_url,
             {"email": "staff@example.com", "password": self.password},
@@ -716,14 +723,14 @@ class AuthenticationApiTests(TestCase):
         )
 
     def test_revoked_roles_are_excluded_from_me(self):
-        assignment = StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.admin_role)
+        assignment = StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.admin_role, assigned_by=self.bootstrap)
         other_admin = User.objects.create_user(
             email="other-admin@example.com",
             password="testpass123",
             person=Person.objects.create(first_name="Other", last_name="Admin", record_type=Person.RecordType.STAFF),
         )
-        StaffRoleAssignment.objects.assign_role(user=other_admin, role=self.admin_role)
-        assignment.revoke()
+        StaffRoleAssignment.objects.assign_role(user=other_admin, role=self.admin_role, assigned_by=self.bootstrap)
+        assignment.revoke(revoked_by=self.bootstrap)
         self.client.post(
             self.login_url,
             {"email": "staff@example.com", "password": self.password},
@@ -735,9 +742,9 @@ class AuthenticationApiTests(TestCase):
         self.assertEqual(response.data["staff_roles"], [])
 
     def test_inactive_staff_roles_are_excluded_from_me(self):
+        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.viewer_role, assigned_by=self.bootstrap)
         self.viewer_role.is_active = False
         self.viewer_role.save(update_fields=["is_active"])
-        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.viewer_role)
         self.client.post(
             self.login_url,
             {"email": "staff@example.com", "password": self.password},
@@ -764,6 +771,39 @@ class AuthenticationApiTests(TestCase):
 
         self.assertEqual(response.status_code, 204)
         self.assertNotIn("_auth_user_id", self.client.session)
+
+    def test_logout_invalidates_session_when_audit_persistence_fails(self):
+        self.client.force_login(self.user)
+        session = self.client.session
+        session["elevate_auth_context"] = "community"
+        session["elevate_auth_version"] = self.user.auth_version
+        session.save()
+
+        with mock.patch(
+            "accounts.views.record_auth_audit_or_raise",
+            side_effect=AuditPersistenceError,
+        ):
+            with self.assertRaises(AuditPersistenceError):
+                self.client.post(self.logout_url, {}, format="json")
+
+        self.assertNotIn("_auth_user_id", self.client.session)
+        self.assertEqual(self.client.get(self.me_url).status_code, 401)
+
+    def test_mobile_jwt_cannot_use_crm_session_logout(self):
+        token_response = self.client.post(
+            self.token_url,
+            {"email": "member@example.com", "password": self.password},
+            format="json",
+        )
+
+        response = self.client.post(
+            self.logout_url,
+            {},
+            format="json",
+            HTTP_AUTHORIZATION=f"Bearer {token_response.data['access']}",
+        )
+
+        self.assertEqual(response.status_code, 401)
 
     def test_authenticated_access_fails_after_logout(self):
         self.client.post(

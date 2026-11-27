@@ -8,6 +8,7 @@ from data_imports.models import ImportBatch, ImportRecord
 from memberships.models import Membership
 from people.models import Person
 from staff_access.models import StaffRole, StaffRoleAssignment
+from config.test_utils import test_actor
 
 
 class MembershipFormImportApiTests(APITestCase):
@@ -20,9 +21,9 @@ class MembershipFormImportApiTests(APITestCase):
         admin_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_ADMIN, defaults={"name": "CRM Administrator"})
         manager_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_MANAGER, defaults={"name": "CRM Manager"})
         viewer_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_VIEWER, defaults={"name": "CRM Viewer"})
-        StaffRoleAssignment.objects.assign_role(user=self.admin, role=admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.manager, role=manager_role)
-        StaffRoleAssignment.objects.assign_role(user=self.viewer, role=viewer_role)
+        StaffRoleAssignment.objects.assign_role(user=self.admin, role=admin_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.manager, role=manager_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.viewer, role=viewer_role, assigned_by=test_actor())
 
     @staticmethod
     def create_user(email, **extra_fields):

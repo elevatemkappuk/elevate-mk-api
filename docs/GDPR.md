@@ -1,0 +1,938 @@
+# Elevate MK GDPR — Backend Technical Architecture and Implementation Guide
+
+Status: Living Documentation. Capability foundation, governance models,
+privacy-audit models, migrations, services and earlier focused tests are
+implemented, with evidence scoped to their named validation batches. Current
+Phase 1C evidence and limitations are recorded at the end of this guide.
+Public activation, production/staging behavior and deployment remain
+unverified.
+
+## Scope and authority
+
+The Django API remains authoritative for privacy authorization and data
+protection. `people.Person` remains separate from `accounts.User`; existing
+CRM roles, authentication flows, mobile contracts, and Community contracts are
+preserved. Detailed database and authorization contracts remain in
+[DATABASE.md](DATABASE.md) and [AUTHORIZATION.md](AUTHORIZATION.md).
+
+This document records the approved architecture and the current
+implementation status. It does not claim GDPR compliance through code alone.
+
+For the staff-facing explanation of these rules, see the CRM's
+[Privacy and Permissions Business Guide](../../elevate-mk-crm/docs/privacy-and-permissions-business-guide.md).
+
+## Current functional and technical map
+
+Use this subject-based map for current behavior. The historical evidence archive
+at the end preserves named validation results and superseded decisions without
+making development chronology the primary structure.
+
+| Subject | Status | Authoritative detail |
+| --- | --- | --- |
+| Staff roles, capabilities and authorization | Implemented; focused evidence recorded | [AUTHORIZATION.md](AUTHORIZATION.md) |
+| Authentication and session boundaries | Implemented; deployment compatibility unverified | [AUTHENTICATION.md](AUTHENTICATION.md) |
+| Privacy governance, audit and legal holds | Implemented; operational activation unverified | This guide and [AUTHORIZATION.md](AUTHORIZATION.md) |
+| People privacy and protected disclosure | Implemented/source-inspected; final hardening remains | [People privacy](#people-privacy-and-protected-disclosure) |
+| Marketing privacy and provider boundaries | Implemented/source-inspected; provider verification remains | [Marketing privacy](#marketing-consent-and-provider-privacy) |
+| Exports and bulk operations | Implemented/source-inspected; runtime export verification remains | [Exports](#exports-and-bulk-operations) |
+| API documentation exposure | Implemented/source-inspected; deployment verification remains | [API documentation exposure](#api-documentation-exposure) |
+| Cross-repository compatibility and production behavior | Unverified | [Final hardening](#final-hardening-and-production-readiness) |
+| Comprehensive Person access auditing | Deferred | `GDPR-FUTURE-001` |
+| Automatic disposal and anonymisation | Deferred | Formal legal/privacy approval required |
+
+## Capability foundation
+
+Status: API foundation and capability governance implementation are
+source-inspected and focused PostgreSQL validation is verified. Public
+API/Admin activation, endpoint enforcement, and field enforcement remain
+unverified or deferred.
+
+The API repository remains authoritative for the capability catalog, role-default
+matrix, evaluator precedence, and reusable `HasCapability` permission contract;
+see [AUTHORIZATION.md](AUTHORIZATION.md). The authoritative capability schema,
+integrity constraints, indexes, and migration details are maintained in
+[DATABASE.md](DATABASE.md). This guide records the privacy governance boundary
+and implementation status without duplicating those contracts.
+
+### Governance boundary
+
+The current public integration boundary does not expose capability mutation
+endpoints or Django Admin mutation surfaces. The three governance persistence models are not
+registered with Django Admin. The governance service is the application-level
+writer for privacy capability mutations; role lifecycle services remain
+separate writers for operational role state and are coordinated through the
+documented lock contract. Direct ORM writes from trusted maintenance,
+migration, or database-administrator paths remain outside this application
+boundary and are not treated as an operational governance interface. The
+governance service implements
+proposal, approval, rejection, cancellation, expiry, reconciliation, and
+capability mutation paths with transactional audit handling. **Historical
+intermediate status (superseded below):** these paths and baseline capture were
+source-updated while the new baseline shape remained unverified until the
+focused suite was rerun. Caller
+coverage, public activation and operational deployment remain unverified.
+Automatic retention disposal and sensitive-data access paths remain deferred.
+
+## Database and migration references
+
+The additive schema is documented in [DATABASE.md](DATABASE.md). Migrations
+are `audit.0020_alter_auditevent_action` and
+`staff_access.0006_capability_foundation`. They preserve existing audit action
+choices, role rows, and role assignments during forward migration. The
+capability migration's seed reverse is a no-op, but reversing its schema would
+drop capability tables and rows; production rollback therefore requires an
+approved backup/export and recovery plan. Production migration execution was
+not performed.
+
+The governance migration is
+`staff_access.0007_capability_governance`. It depends on
+`staff_access.0006_capability_foundation` and
+`audit.0021_alter_auditevent_action`. The audit migration
+`audit.0021_alter_auditevent_action` depends on
+`audit.0020_alter_auditevent_action`. Their application and baseline capture
+are verified in the isolated PostgreSQL test
+database used by focused validation; production rollback behavior remains
+unverified. Migration `0007` source-defines
+`baseline_captured_at`, `baseline_snapshot`, and the
+`CAPABILITY_POLICY_BASELINED` audit event when the role-default and individual
+assignment/restriction baseline is captured. The baseline stores internal
+identifiers and capability/state metadata only; it does not store person names
+or email addresses. Schema details belong in [DATABASE.md](DATABASE.md); evaluator and
+approval semantics belong in [AUTHORIZATION.md](AUTHORIZATION.md).
+
+## Compatibility boundaries
+
+Status: **Unverified** for cross-repository runtime compatibility in this
+documentation update.
+
+Existing endpoint permission classes remain role-based. CRM and Mobile retain
+their existing authentication contracts, while Community uses its
+Community-specific session and projection contracts. Phase 1A.4A adds the
+session-only `GET /api/v1/staff/access/me/` projection, but does not add a
+capability projection to `/auth/me/`, a frontend guard, Person field masking,
+search protection, campaign protection, or export enforcement. Runtime
+compatibility across the API, CRM, Mobile, and Community applications was not
+validated in this stage.
+
+## Current implementation evidence
+
+- **Approved:** catalog, default matrix, evaluator precedence,
+  audited superuser exception, and deferred enforcement boundaries.
+- **Implemented / Source-inspected:** foundation API models, evaluator,
+  reusable `HasCapability` permission, capability governance models, service,
+  audit actions, lock-order coordination, no-Admin-registration boundary, and
+  migration definitions. **Historical intermediate status (superseded below):**
+  the baseline correction was newly changed and initially remained
+  runtime-unverified; final isolated validation is recorded below.
+- **Verified — local migration and schema validation for the foundation:** a backup was created
+  and verified locally before validation; the local PostgreSQL target was
+  `localhost:5432/elevate`; migration state reported no pending operations;
+  the historical six-capability Phase 1A.2 baseline and approved defaults were
+  present; the current Phase 1A.3 catalogue contains seven capabilities; four
+  capability tables, four explicit indexes, and three named constraints were
+  present; `manage.py check --fail-level ERROR` passed; and
+  `manage.py makemigrations --check --dry-run` reported no changes.
+- **Test-executed / Verified locally for the foundation:**
+  `CapabilityFoundationTests` ran 13 tests in 34.658 seconds and returned
+  `OK` against the local PostgreSQL test database; the local test database was
+  preserved.
+- **Planned / Deferred:** public API/Admin exposure, projections, masking,
+  search/export enforcement, CRM UI behavior, and capability-governance
+  enforcement.
+- **Implemented / Source-inspected for Phase 1A.4A:** the exact
+  `GET /api/v1/staff/access/me/` route and two-field response contract
+  (`capability_codes`, `policy_version`), CRM-session and active-role admission,
+  the then-empty CRM disclosure allowlist (superseded by the approved single
+  `STAFF_CAPABILITY_ADMIN` allowlist in the later Phase 1A.4C contract), superuser boundary, transactionally consistent
+  policy-version read, and `Cache-Control: private, no-store` behavior were
+  inspected in the Staff Access route, view, serializer, and permission source.
+- **Verified — focused API evidence for Phase 1A.4A:** 34/34 focused tests
+  passed against isolated PostgreSQL database
+  `test_elevate_gdpr_phase1a4a_20261124`; `manage.py check` passed;
+  `makemigrations --check --dry-run` reported `No changes detected`;
+  `migrate --plan` reported no planned migration operations; and `git diff --check`
+  was clean. No schema or migration files changed, and no migrations were
+  applied for Phase 1A.4A. Broader runtime, deployment, CRM tests/build/runtime,
+  and cross-repository consumption remain unverified.
+- **Implemented / source-inspected:** Phase 1A.4B CRM Staff Access lifecycle
+  integration and fail-closed projection handling. Capability-consuming CRM
+  administration remains deferred, as does capability disclosure expansion.
+- **Historical runtime evidence (superseded):** governance migrations applied
+  cleanly in newly named isolated test databases; the final governance rerun
+  passed 21 tests in 166.170 seconds; the combined focused run of governance,
+  capability-foundation, and final CRM-admin concurrency tests passed 35 tests;
+  audit rollback, proposal
+  lifecycle, immutability, expiry, stale-state handling, authorization,
+  restriction precedence, uniqueness and covered lock-order concurrency all
+  passed. The initial stale `test_elevate` database attempt was discarded from
+  acceptance evidence.
+- **Unverified:** production and staging migration safety, deployment behavior,
+  live deployment state, cross-repository compatibility, all privileged
+  operational writers, and independent specialist review completion where noted
+  in the Main Codex handoff.
+
+### Staff lifecycle remediation evidence
+
+Status: **Implemented / focused validation verified in an isolated PostgreSQL
+test environment; governance API exposure remains deferred.**
+
+Staff-role assignment and reactivation now use a shared lifecycle service
+boundary. The service acquires the capability policy row, canonical role rows,
+assignment rows, and User rows in the documented order, revalidates the Staff
+Person boundary, updates policy version when effective role state changes, and
+preserves audit and transaction rollback behavior. Invitation redemption no
+longer locks an existing User before invoking role assignment. Staff-role
+deactivation, revocation and Admin reactivation use the same policy/role-first
+ordering and update policy state consistently.
+
+The remediation did not expose governance HTTP endpoints, expand capability
+disclosure, modify CRM code, reconcile legacy TECHNICAL records, or change
+GOV-005. GOV-003 and GOV-006 are reduced for the reviewed lifecycle paths but
+remain open for uncovered privileged writers until independent security review
+and broader activation evidence are complete.
+
+Historical Phase 1A.4C planning validation recorded 21/21 Admin, role-model, assignment and
+concurrency tests and 34/34 governance and invitation tests passing, alongside
+a clean Django system check, no schema-affecting model changes, no planned
+migrations and a clean migration graph against the isolated database. The full
+broader focused
+run remains limited by two pre-existing Admin audit assertions that do not
+exclude the migration-generated `CAPABILITY_CATALOG_EXTENDED` event; those
+assertions are not treated as remediation failures.
+
+### Governance API evidence
+
+Status: **Implemented / focused API and CRM consumption validation verified in
+the isolated local scope; deployment remains unverified.**
+
+The API exposes safe governance administration routes for searchable Staff
+target selection, target access detail, role-default state, proposal creation
+and resolution, individual mutations, governance history, and the dedicated
+audited Django-superuser operation path.
+Ordinary routes require an effective `STAFF_CAPABILITY_ADMIN` capability and
+remain subject to the existing eligibility, restriction, separation-of-duty,
+policy-version and transactional-audit rules. The superuser route requires an
+authenticated active Django superuser with CRM admission and invokes the
+existing direct-operation service; it does not accept client authority flags.
+
+The shared governance read projections admit either an ordinary effective
+`STAFF_CAPABILITY_ADMIN` administrator or an active Django superuser with an
+active CRM role. Ordinary mutation routes remain unchanged. An admitted
+superuser receives direct role-default and individual actions through the
+dedicated audited route; ordinary administrators retain proposal and
+separation-of-duty rules. The directory and target projections contain identifiers, safe Staff display
+metadata, staff-role state, capability state and backend-permitted actions only.
+Person contact and demographic fields, general Person search, exports and
+exceptional restricted-access workflows remain outside this stage. Ordinary
+individual changes are immediate where authorized; grant/restore/unrestrict of
+`STAFF_CAPABILITY_ADMIN` remains proposal-based. Duplicate pending proposals
+are returned as sanitized HTTP 409 conflicts. Focused governance API validation
+The historical Phase 1A.4C manual API validation passed 21/21 tests; the current
+governance remediation run passed 17/17 tests against isolated PostgreSQL. The
+isolated Phase 1A.4C manual
+API runtime is verified, while deployment and operational activation remain
+unverified.
+
+The role-default projection includes every active canonical CRM role and active
+capability, including disabled defaults. Each row includes backend-calculated
+`permitted_actions` and an `execution_mode`; a matching pending proposal
+suppresses ordinary further actions, while an admitted superuser receives a
+`DIRECT_SUPERUSER` mode. Target capability rows similarly expose
+`permitted_action_modes`. The CRM consumes these backend descriptors rather
+than reproducing authorization rules.
+Proposal payloads similarly expose only the actions available to the current
+administrator: proposers may cancel, while distinct authorized administrators
+may approve or reject. Clients do not reproduce these governance decisions.
+The earlier 12/12 additive-contract result is historical. The current
+governance API suite passed 17/17, including action-mode, superuser, non-STAFF
+admission and invalid-proposal-operation coverage.
+
+## Security and privacy limitations
+
+The constrained Django Admin path remains subject to the separately tracked
+raw-audit exposure review, while existing superusers can administer operational
+staff roles through the approved Staff Admin path. The reviewed application-level
+GOV-003 writers are corrected; trusted maintenance/DBA boundaries and broader
+operational verification remain separate dependencies. GOV-004, the former
+controlled-recovery finding, is superseded by the approved direct Django
+superuser authority decision. The replacement path is source-verified and
+targeted-tested; broader runtime validation remains separate. Mandatory transactional audit, before/after
+recording, and rollback-on-audit-failure integrity remain required. GOV-006 lock ordering is verified for governance,
+role revocation, offboarding and reconciliation paths covered by focused tests,
+but all privileged operational writers are not yet covered. GOV-005's actorless
+invocation condition is rejected by the service, while caller coverage and
+operational scheduling remain unverified. These remain activation gates, not
+resolved security findings.
+AUTH-001 and AUTH-002 remain open and are not resolved by this local validation
+or documentation update. The Phase 1A.2 foundation verification gate is
+complete for the isolated local scope; operational governance activation
+remains blocked by the documented activation gates.
+
+The previous controlled-recovery requirement is superseded by the approved
+full Django superuser authority model. Active authenticated Django superusers
+using the authorized Django Admin boundary may directly assign, deactivate,
+revoke, grant, restrict, and restore staff roles and privacy permissions,
+including their own, without ordinary CRM justification or two-person
+approval. The absence of justification is recorded accurately. Mandatory
+automatic auditing, authenticated actor attribution, before/after state,
+outcome, privileged-bypass metadata, and fail-closed audit persistence remain
+required. Ordinary `is_staff` users and ordinary CRM administrators do not
+receive this exception. The API now provides one explicit,
+audited direct-operation service path for active superusers. It does not expose
+new public endpoints. The constrained Django Admin governance surface is
+active-superuser-only, routes supported mutations through audited services, and
+disables raw deletion. Ordinary administrators
+remain subject to eligibility, restrictions, self-administration limits,
+proposal lifecycle, and two-person approval. The replacement path is
+implemented and targeted-tested in the final remediation; production,
+operational activation, and cross-repository behavior remain unverified.
+
+### Final validation supersession (authoritative current status)
+
+This final status supersedes the earlier intermediate 21-test, 35-test, and
+failed 42-discovery validation entries above. Synthetic pre-`0007` migration
+verification passed. Current targeted evidence includes 12/12 legal-hold API
+tests and 4/4 PostgreSQL concurrency tests; broader repository suites remain
+outside the targeted rerun scope.
+The baseline captured role defaults, active/suspended/revoked assignments,
+active/historical restrictions, identifiers, timestamps, and its matching audit
+event. QA accepted the scoped evidence. Production/staging, deployment,
+cross-repository runtime behavior, and operational activation remain
+unverified.
+
+## Superuser validation evidence
+
+This subsection preserves historical intermediate runtime evidence and is
+superseded by the authoritative final validation status recorded above.
+
+**Runtime validation — Partial / Not accepted:** the configured target was
+confirmed as PostgreSQL at `localhost:5432`, database `elevate`; no migrations
+were applied there. The isolated database `elevate_gdpr_phase1a2_superuser`
+was created and destroyed by the test runner. System checks passed, migration
+drift reported no changes, and the migration plan showed the expected
+`audit.0021` and `staff_access.0007` operations pending on the configured
+database.
+
+The combined run discovered 42 tests, ran 41, and failed with one new baseline
+assertion failure plus one `FinalCrmAdminConcurrencyTests` setup error caused
+by a duplicate serialized `auth_permission` fixture row. Separate runs passed
+`CapabilityFoundationTests` 13/13 and
+`FinalCrmAdminConcurrencyTests` 1/1. The governance suite ran 28 tests, with
+27 passing and one failure because the fixture retained a legacy empty policy
+baseline snapshot. Superuser runtime acceptance, the expanded baseline, and
+the documentation quality gate therefore remain unverified.
+
+**Historical source-status note (superseded):** the latest source correction also locks role-assignment creation/reactivation
+in the shared role-to-assignment-to-user order and invalidates pending
+role-default proposals when their role becomes inactive. These changes were
+implemented but runtime-unverified until the final focused rerun.
+
+## Privacy-audit foundation and retention
+
+Status: **Implemented and locally verified.** This stage adds
+the versioned audit contract, trusted request provenance, separate operational
+and privacy audit domains, normalized `AuditEventSubject` Person associations,
+the `LEGAL_HOLD_ADMIN` capability, versioned retention-policy records, and
+event- and Person-scoped legal holds. It does not expose new public governance
+endpoints, enable writable Django Admin governance, or dispose of records.
+
+`PRIVACY_AUDIT_READ` gates privacy-audit projections. Raw `AuditEvent` Admin
+visibility is active-superuser-only. Privacy payloads reject sensitive values,
+and audit writes remain transactional with the protected operation. The
+retention evaluator requires an authorized `LEGAL_HOLD_ADMIN`, is
+non-destructive, and uses an explicit evaluation
+timestamp; it reports eligible, held, unclassified, unresolved-subject, and
+excluded events without deleting data.
+
+The initial 24-month retention period remains provisional and requires formal
+legal/privacy approval. Retention policy versions are immutable and use audit
+event creation time as the retention reference. Ordinary hold release requires
+a distinct approver through the dedicated `LegalHoldReleaseRequest` workflow;
+the approved active-superuser authority remains available. This dedicated
+model keeps hold-release invariants separate from capability proposals.
+
+**Historical evidence status:** isolated PostgreSQL upgrade from the Phase 1A.2 state
+preserved synthetic assignments, restrictions, audit events, the seeded
+baseline, normalized Person associations, and governance records. The
+earlier Phase 1A.3 focused suite passed 19/19 and the affected broader suite passed
+102/102. Operational database migration, disposal, production/staging
+behavior, CRM integration, and cross-repository runtime compatibility remain
+deferred or unverified.
+
+## Effective Staff Access projection
+
+Status: **Implemented / isolated local runtime verified; deployment and
+operational runtime remain unverified.**
+
+The API now exposes exactly `GET /api/v1/staff/access/me/` for an authenticated
+Staff CRM session. The successful response contains exactly:
+
+```json
+{
+  "capability_codes": ["STAFF_CAPABILITY_ADMIN"],
+  "policy_version": 2
+}
+```
+
+The historical `capability_codes` value was projected from the then-current
+single CRM disclosure allowlist entry, `STAFF_CAPABILITY_ADMIN`; the later
+Phase 1A.4D rollout expands the coordinated allowlist as documented below.
+The endpoint admits only authenticated
+sessions with an active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` role;
+anonymous callers receive `401`, non-CRM authenticated users receive `403`, and
+mobile JWTs are not accepted. Django `is_staff` or `is_superuser` alone does not
+admit access.
+
+`policy_version` is an informational snapshot of the capability-policy version,
+not a grant, token, client precondition, or authorization result. The view locks
+the singleton policy state and evaluates the allowlisted disclosure set in one
+transaction, without mutating policy state. Responses set
+`Cache-Control: private, no-store`.
+
+An admitted Django superuser retains the existing audited superuser evaluator
+boundary, including transactional `PRIVACY_SUPERUSER_BYPASS` recording, without
+expanding the public response beyond the single allowlisted capability. Phase
+1A.4B is implemented. This contract is source-inspected from `staff_access/urls.py`,
+`views.py`, `serializers.py`, and `permissions.py`. The focused API suite passed
+34/34 against isolated PostgreSQL database
+`test_elevate_gdpr_phase1a4a_20261124`; the Django check, migration-drift check,
+migration plan, and `git diff --check` were clean as recorded above. No schema
+or migration files changed or were applied. CRM tests/build/runtime, deployment,
+and cross-repository CRM consumption were unverified in the earlier 1A.4A
+evidence; the later isolated Phase 1A.4C manual environment verified the live
+projection contract without using the operational database.
+
+## Targeted remediation status
+
+**Implemented and locally verified:** the catalogue extension now
+uses explicit `SYSTEM_MIGRATION` metadata and `MIGRATION` provenance, advances
+the existing policy version atomically, preserves the original baseline, and
+does not seed a `LEGAL_HOLD_ADMIN` role default. The normalized-subject
+backfill validates Person existence in batches and preserves unresolved audit
+events without inventing subjects; unresolved privacy events remain excluded
+from retention eligibility.
+
+The existing Person audit-history endpoint remains an operational CRM history
+projection: it uses the operational audit domain and existing CRM record and
+field visibility rules, so privacy events are excluded before count and
+pagination. The dedicated privacy projection service requires an active user,
+`PRIVACY_AUDIT_READ`, and an authorized business-domain Person scope before
+returning privacy-domain events; STAFF subjects remain available only through
+the existing CRM-admin record boundary. No public privacy-audit endpoint is
+introduced by the API; the CRM consumes the protected projection through its
+separate repository-owned integration.
+
+The focused validation command set was: `manage.py check --fail-level ERROR`,
+`manage.py makemigrations --check --dry-run`, isolated PostgreSQL migration
+verification from Phase 1A.2 through Phase 1A.3, the synthetic normalized
+subject migration test, focused privacy-audit projection tests, and the
+existing Phase 1A.3 regression suites. The remediation subset passed 9/9 and
+the broader authorized focused set passed 69/69 against isolated PostgreSQL
+test database `test_elevate`; no operational database was migrated. AUTH-002
+remains preserved with its scoped raw-admin resolution;
+trusted provenance forgery rejection is implemented and targeted-tested; broader
+runtime/deployment verification remains outstanding. GOV-003, GOV-005, uncovered GOV-006 writers, AUTH-001, legacy TECHNICAL
+reconciliation, legal approval for disposal, and cross-repository runtime
+compatibility remain open or unverified.
+
+### Governance remediation notes
+
+The proposal endpoint rejects direct individual operations instead of creating
+pending proposals that cannot be approved. Governance reasons reject obvious
+credential-like content with a validation error; this is input minimization,
+not a substitute for secrets handling.
+
+### Mandatory access-control acceptance checklist
+
+- Least privilege: **Implemented; runtime verified in the 17/17 isolated API run.**
+- Deny by default: **Implemented; runtime verified in protected API tests.**
+- Backend-authoritative authorization: **Implemented; runtime verified.**
+- Resource scope and safe projections: **Implemented; runtime verified in API
+  projections.**
+- Horizontal escalation prevention: **Implemented; partially runtime verified.**
+- Vertical escalation prevention: **Implemented; partially runtime verified.**
+- Authorization revocation: **Implemented; runtime verified in focused paths.**
+- Security-sensitive authorization-failure logging: **Implemented; verified in
+  the focused 17/17 governance API run.** Denials use the canonical
+  `CAPABILITY_PERMISSION_MUTATED` audit action with
+  `event_type=GOVERNANCE_AUTHORIZATION_DENIED`, safe reason codes, an
+  opaque target reference, and no request payload or credentials.
+- Privileged-operation auditing: **Implemented; runtime verified in focused tests.**
+- Functional access-control regression testing: **Verified for the 17/17 API
+  governance suite; broader cross-repository coverage remains separate.**
+- OWASP review: **Implemented scoped review; independent runtime security
+  evidence remains unverified.**
+
+The governance API records applicable denials for missing capability,
+ineligible staff, CRM admission, prohibited execution paths and superuser
+admission failures. Domain denials raised after a governance transaction
+rolls back are recorded after rollback. Audit-write failures are logged
+server-side without changing the original authorization response.
+
+Target detail responses include backend-calculated `effective` and
+`effective_explanation` values. The explanation identifies role-default,
+individual-grant, explicit-restriction, suspended/revoked, superuser-bypass,
+or no-effective-grant sources and keeps pending proposals separate from the
+effective result. History combines safe proposal and direct-superuser AFTER
+projections with actor, timestamp, target, operation, outcome, reason, and
+before/resulting state; raw AuditEvent metadata is not exposed.
+
+The API denial and projection behavior is implemented. The focused validation
+evidence for this remediation is 12/12 `audit.test_api` tests, 4/4 focused
+PostgreSQL concurrency tests, a successful Django system check, and a clean
+migration-drift check. Broader repository suites, browser, operational
+migration, and deployment evidence remains unverified for this batch.
+The API denial audit now records route-specific operation labels for privacy
+audit and legal-hold authorization failures. The persistent UAT database is
+`elevate_gdpr_phase1a4c_manual`; operational, staging, deployment, and browser
+verification remain separate evidence.
+## Privacy history and legal holds
+
+Implemented / isolated validation verified. The backend exposes a dedicated privacy audit
+history projection separate from operational Person History and CRM-session
+legal-hold routes backed by the existing privacy services. `PRIVACY_AUDIT_READ`
+and `LEGAL_HOLD_ADMIN` remain independent capabilities. Person scope,
+authorization, filters, counts, and pagination are evaluated server-side.
+
+Privacy-audit projections use safe actor and event fields; raw metadata,
+credentials, unrestricted identifiers, and full legal-hold justifications are
+excluded. Authorized legal-hold administration projections separately include
+the bounded justifications required to review holds and release requests.
+Future legal-hold lifecycle events preserve normalized Person associations when
+an authoritative relationship exists. Historical reconciliation and backfill
+remain deferred and require separate approval; unresolved records remain
+protected from retention disposal.
+
+The release-request model supports pending, approved, rejected, and cancelled
+states. Rejection is recorded by `audit.0023_legalhold_release_rejection`;
+request cancellation is recorded by the additive `audit.0027` fields,
+`audit.0028` audit-action choice update, and `audit.0029` terminal status
+update. The cancellation endpoint is
+`POST /api/v1/privacy/legal-hold-release-requests/{public_id}/cancel/`.
+Cancellation is restricted to the
+original requester while the hold remains active, preserves retention, and
+permits a subsequent request. Legal-hold list/detail
+projections include safe release-request summaries and backend-calculated
+approval/rejection actions, allowing an independent authorized administrator
+to discover pending requests after login or refresh without manual request-ID
+entry. No retention
+automation, deletion, anonymisation, or GDPR-FUTURE-001 implementation is part
+of this stage. The isolated Phase 1A.4D manual UAT was accepted for the
+API/CRM workflow, including direct superuser release and cancellation
+retention behavior. The focused backend cancellation/concurrency validation
+passed 26/26; operational/staging deployment, cross-repository
+compatibility, and final-hardening security evidence remain unverified.
+Minor UX polish is deferred as non-blocking backlog work.
+
+Phase 1A.4D.4 remediation was exercised and accepted in the isolated UAT database with an
+audited restoration of the Synthetic Manager `LEGAL_HOLD_ADMIN` capability. It
+also adds safe actor and Person projections and a duplicate pending-release
+guard. Pending requests remove the ordinary `request_release`
+action until rejected or otherwise resolved. Person-wide and event-specific
+targets continue through the existing services and signed opaque references;
+no migration is required.
+
+## Security implementation and activation readiness
+
+Status: **Implemented / source-inspected for the earlier Phase 1A.4E/1.6
+closure batch; automated tests and final hardening execution were deferred.**
+API/CRM contracts continue to use Django session
+authentication for Staff CRM routes; mobile JWT authentication remains limited
+to its documented mobile and Community surfaces. Capability evaluation,
+revocation, privacy governance, and safe projections remain backend-authoritative
+and compatible with the accepted CRM consumers.
+
+Phase 1A.5 legacy reconciliation is explicitly skipped because the current
+dataset is test data. No reconciliation tooling, management command, dashboard,
+record reclassification, deletion, or operational data remediation was added.
+New role assignments now require an active STAFF user, or the approved active
+Django superuser exception, and an active canonical Staff role.
+
+The following source-level corrections are implemented: ordinary Django Admin
+cannot self-assign Staff roles or directly edit existing StaffRoleAssignment
+rows; new inactive or non-STAFF role assignments are rejected; and untrusted
+system audit callers cannot persist caller-supplied request identifiers or IP
+addresses. The CRM session logout route now explicitly rejects mobile JWT
+authentication; the approved superuser exception remains available. Added
+regression tests were **Implemented / Unverified for this earlier Phase
+1A.4E/1.6 closure batch** because execution was deferred to final GDPR
+hardening. The later Phase 1C targeted results are recorded below and do not
+retroactively make the broader closure batch or full repository suite verified.
+
+AUTH-002 remains resolved within its reviewed raw AuditEvent Admin scope.
+GOV-003, GOV-005, uncovered GOV-006 privileged-writer paths, AUTH-001 residual
+operational surfaces, trusted-provenance hardening beyond the implemented
+source correction, operational migrations/deployment, and formal legal/privacy
+approval remain final-hardening or activation dependencies. They are not
+silently risk-accepted. Automatic disposal, anonymisation, Person masking,
+export enforcement, and GDPR-FUTURE-001 remain deferred.
+
+These obligations are carried into the consolidated GDPR Phase 1C final
+hardening stage. The implementation-stage specialist acceptance gate was not
+completed for every specialist because the active agent-thread limit prevented
+delegation; no independent acceptance is claimed. All regression tests added
+in this stage were **Implemented / Unexecuted at the pre-Phase 1C cutoff**.
+Later Phase 1C reruns cover only the named focused subsets and do not establish
+a green full suite.
+Production activation requires final security, QA, architecture and
+documentation acceptance, runtime/deployment verification, and any required
+legal or privacy approvals.
+
+## People privacy and protected disclosure
+
+Status: **Implemented / source-inspected; verification was unexecuted at the
+Phase 1B.1 cutoff**.
+
+The API now enforces the approved `PERSON_CONTACT_READ` and
+`PERSON_DEMOGRAPHIC_READ` boundaries on People response projections, nested
+account contact projections, contact search, and protected writes. The
+existing Person/User separation, record-level authorization, capability
+precedence, audited Django superuser exception, and session/mobile JWT
+separation are preserved. Storage remains unchanged: masking and restricted
+indicators are response behavior, not database redaction.
+
+The session-authenticated CRM effective-access projection includes the approved
+`PERSON_EXPORT` capability alongside the other CRM-disclosed capabilities.
+This is disclosure of an existing backend-evaluated capability only; export
+authorization, field projection, record scope, mandatory audit persistence, and
+superuser audit behavior remain enforced by the API export endpoint.
+
+The verified implementation field inventory is: Person `first_name`,
+`last_name`, `primary_email`, `mobile`, `location`, `age_range`, `gender`,
+`archived_at`, timestamps, and `record_type`; nested overview contact fields
+`account_email` and `setup_email`; and existing professional-profile fields
+used by directory search. Contact protection currently covers
+`primary_email`, `mobile`, `account_email`, and `setup_email`. Demographic
+protection currently covers `age_range` and `gender`. Email/mobile search is
+capability-gated; counts and pagination follow the filtered queryset. Duplicate
+responses remain minimal and do not expose contact or demographic values.
+
+Malformed or short contact values are safely represented as `Restricted`,
+while absent values remain not provided. Valid restricted emails use a
+deterministic partial projection such as `u***@e***.invalid`; mobile values
+retain only the permitted final two digits. Superuser evaluation continues through
+the existing audited capability evaluator. No blanket ordinary Person-view
+audit was introduced. Approved protected disclosures through the existing
+Django-superuser bypass path use the dedicated `PRIVACY_PERSON_DISCLOSED`
+action. The event is persisted before the protected response, uses trusted
+provenance and a normalized Person subject, and records only safe operation,
+disclosure category, capability, outcome and superuser-authority metadata.
+Audit failure fails closed. Ordinary authorized detail, overview and directory
+reads, masked responses and list reads do not generate raw disclosure events;
+no new reveal workflow was introduced; denial auditing remains on the existing
+failure contract; and comprehensive Person access auditing remains
+`GDPR-FUTURE-001`.
+
+The choice migration `audit.0024_alter_auditevent_action.py` is generated but
+not applied. The new regression tests were **Implemented / Unexecuted at the
+Phase 1B.1 cutoff**. Current Phase 1C evidence covers named focused subsets
+only; runtime migration, disclosure, failure-rollback and Privacy Audit
+verification remain limited or deferred as described below.
+
+The final UAT and UI-polishing backlog includes manual verification of the
+People privacy projections, superuser disclosure-audit behavior, Privacy Audit
+activity filtering, masked/restricted indicators, protected search and form
+feedback. These are verification and presentation follow-ups, not additional
+privacy scope.
+
+Tests covering masked projections, restricted demographics, contact-search
+suppression, protected writes, safe malformed values, and the superuser
+exception were **Implemented / Unexecuted at the Phase 1B.1 cutoff** under the
+approved deferred-test policy. Independent specialist acceptance was unavailable because
+the active agent-thread limit prevented delegation; no independent acceptance
+is claimed. Final hardening still requires the approved lightweight checks and
+runtime verification.
+
+The following classifications remain unresolved and require explicit legal,
+privacy, or product approval rather than silent technical classification:
+`location`; professional profile fields including job, company, career stage,
+LinkedIn, and industry; skills, interests, tags, notes, membership and
+marketing preferences; Community account lifecycle/provider data; and audit
+history. Person export enforcement, comprehensive Person record-access
+auditing (`GDPR-FUTURE-001`), and later privacy workflows remain deferred.
+
+## Marketing consent and provider privacy
+
+Status: **Implemented / source-inspected; automated tests and runtime/provider
+verification were deferred at the Phase 1B.2 cutoff**.
+
+Marketing audience preview and Campaign V1 retain their existing CRM-role
+authorization and consent rules. Privacy capabilities do not grant campaign
+access. The backend applies `PERSON_CONTACT_READ` to audience selection:
+email/mobile search is omitted from the queryset for callers without that
+capability, and the protected query term is not echoed in the response. Names,
+non-contact filters, classifications, counts, and pagination remain subject to
+the existing People directory and record-scope rules.
+
+Audience preview Person emails and historical Campaign recipient email
+snapshots are projected according to effective contact capability. Stored
+snapshots remain available to authorized internal provider processing; API
+projections mask them when contact disclosure is not authorized. Provider error
+projections are bounded and redact URLs, email addresses, phone-like values,
+and credential-like diagnostics. No raw provider response or credential is
+returned, and no external provider was called in this stage.
+
+No new marketing capability, campaign permission, blanket campaign/recipient
+audit, export enforcement, or provider workflow was introduced. Deliberate
+protected Person disclosure auditing remains limited to the approved existing
+workflow; comprehensive Person access auditing remains `GDPR-FUTURE-001`.
+The added regression tests were **Implemented / Unexecuted at the Phase 1B.2
+cutoff** under the deferred test policy. No model changes or migration is
+required for this stage; current Phase 1C evidence remains subset-specific.
+
+## Exports and bulk operations
+
+Status: **Implemented / source-inspected; automated tests, migration
+application, runtime downloads, and final security verification were deferred
+for the Phase 1B.3 closure batch**.
+
+People exports use `GET /api/v1/people/export/?format=csv|xlsx` and the existing
+People directory scope. The backend requires CRM session authentication,
+operational role access, `PERSON_EXPORT`, and the current record-level query
+scope. `PERSON_EXPORT` does not grant contact or demographic access. Export
+columns are built from effective privacy capabilities: contact and demographic
+columns are omitted unless separately authorized; explicit restrictions and
+the existing evaluator remain authoritative. Django superusers retain the
+approved audited exception.
+
+CSV and XLSX are generated directly in the authenticated response without
+public URLs or temporary storage. All exported cell values are protected from
+spreadsheet formula injection. The export query reuses server-side People
+filtering, contact-search restrictions, ordering, and record scope. No existing
+bulk Person operation was found, so no new bulk mutation path was introduced.
+
+Successful and denied export attempts use centralized privacy audit
+infrastructure with safe format, field-category, scope, count, outcome, and
+superuser metadata. Raw records, search terms, file contents, credentials, and
+request payloads are excluded. Audit persistence occurs before a successful
+download is released; failure prevents the response. The new audit choices are
+recorded in unapplied migration `audit.0026_alter_auditevent_action`. It follows
+the existing `audit.0024` privacy-disclosure migration; no `audit.0025`
+migration exists in repository history, so the historical numbering gap is
+intentionally retained.
+
+Backend and CRM regression tests were **Implemented / Unexecuted for the
+Phase 1B.3 closure batch**. Migration application and drift validation remain
+pending. CSV/XLSX runtime downloads,
+Microsoft Excel compatibility, formula-injection behavior, export
+authorization and capability-revocation behavior, export-audit visibility,
+mandatory audit-failure behavior, and manual export UAT remain **Unverified**.
+Independent specialist acceptance for this closure stage was unavailable under
+the active agent-thread limit. The UI polishing and final UAT backlog includes
+People export format selection, denied/revoked export feedback, safe download
+handling, restricted-column verification, and the existing Angular warnings.
+GDPR Phase 1C must carry these obligations together with Marketing capability
+revocation and privileged-disclosure verification; no item is risk-accepted by
+this development closure.
+
+The consolidated GDPR Phase 1 manual UAT is **Verified** for 15 scenarios.
+One historical-campaign scenario was explicitly waived for manual verification
+and remains subject to automated regression coverage. This result does not
+replace Phase 1C automated hardening, migration/runtime verification,
+independent specialist acceptance, or production-activation requirements.
+
+## API documentation exposure
+
+Status: **Implemented / source-inspected; automated tests and environment
+runtime verification were deferred for the Phase 1B.4 closure batch**.
+
+The OpenAPI schema, Swagger UI, and ReDoc routes now share an explicit
+environment-aware backend boundary. Local development uses
+`ELEVATE_ENVIRONMENT=local` and remains convenient. Staging requires an active
+Django session plus the dedicated `accounts.access_api_documentation`
+permission or the approved active Django superuser exception. Production is
+disabled by default and requires explicit `API_DOCUMENTATION_PRODUCTION_ENABLED`
+configuration before the same technical authorization is evaluated. The raw
+schema route is protected independently; mobile JWTs, Community sessions,
+anonymous callers, inactive accounts, `is_staff`, and ordinary CRM roles do
+not grant technical documentation access.
+
+The dedicated technical permission is introduced by unapplied migration
+`accounts.0003_api_documentation_permission`; migration application and
+post-migration permission verification remain pending. CI smoke expectations
+now assert protected staging routes and disabled-by-default production routes.
+
+The added access-control regression tests were **Implemented / Unexecuted for
+the Phase 1B.4 closure batch**. Django system checks and migration drift checks
+are **Verified** locally in the current targeted evidence, but this does not
+establish full-suite or deployment verification.
+Runtime environment checks, direct schema and alternate route verification,
+and deployment smoke checks remain pending final hardening. OpenAPI generation
+was inspected but still reports existing unrelated serializer/authenticator
+warnings and errors; no broad schema cleanup was included. No new privacy
+capability, application API contract, migration execution, personal-data
+workflow, or comprehensive Person access auditing was introduced. Existing
+Phase 1C obligations remain open, including pending
+migrations, targeted security remediation, authentication and governance findings,
+authorization concurrency and revocation, People and Marketing disclosure
+auditing, provider verification, CSV/XLSX and Excel verification, export audit
+verification, the waived historical-campaign UAT scenario, independent specialist acceptance, and legal/privacy
+and production activation approvals.
+
+All planned GDPR Phase 1 functional development stages are marked complete for
+development purposes only. This does not constitute final security acceptance,
+runtime verification, legal/privacy approval, or production readiness.
+
+## Final hardening and production readiness
+
+Status: **In progress / not accepted**. Source-level architecture review notes
+found no material drift; this is not independent final acceptance. A narrow
+cross-repository correction now allows
+the shared logout endpoint to accept only valid CRM or Community sessions;
+mobile JWT authentication remains separate. The corresponding API checks and
+focused privacy/export/Community tests passed: **49/49** after correcting
+stale test fixtures and masking expectations. The expanded API suite passed
+**1458/1458** on a fresh isolated PostgreSQL test database (historical
+pre-remediation baseline evidence, not a post-correction result). Django `check` and
+`makemigrations --check --dry-run` passed; `migrate --plan` still reports
+`accounts.0003`, `audit.0024`, and `audit.0026` as pending and no migrations
+were applied.
+
+The authentication fixture baseline now explicitly distinguishes membership
+states: the authenticated member test asserts an `ACTIVE` Membership in the
+`/auth/me/` projection, while the technical-Person case asserts no membership.
+This is source/test evidence for the baseline contract, not a claim that the
+full authentication suite has passed.
+
+The shared session logout contract accepts only authenticated Django sessions
+tagged for CRM or Community use. `POST /api/v1/auth/logout/` calls Django
+session logout before persisting the logout audit event, invalidating the
+current server-side session even when audit persistence raises an error.
+Community activation evidence verifies that a subsequent Community `/me/`
+request is unauthorized, and authentication regression coverage rejects mobile
+JWT use of this session endpoint. Mobile JWT logout remains a separate
+device-session revocation flow.
+
+### GDPR regression evidence
+
+The final fresh serial API regression run passed **1,474/1,474** tests in
+**160.381 seconds** total elapsed time, including **5.141 seconds** database
+setup and **3.453 seconds** teardown. This evidence is recorded in the
+authoritative [API testing and performance guide](TESTING.md). It does not
+verify operational migration application, deployment, production/staging
+behavior, or cross-repository runtime compatibility. The earlier 1,458/1,458
+result remains historical pre-remediation evidence.
+
+OpenAPI generation was inspected and emitted existing serializer/authenticator
+diagnostics. Those diagnostics are classified as **nonblocking for this Phase
+1C documentation update only** because they are unrelated to the privacy/logout
+corrections under review; schema generation is not claimed clean, and no broad
+schema cleanup was performed. Remaining final-hardening obligations include
+migration application in an authorized non-production environment, targeted
+security verification, export and audit-failure runtime checks, cross-repository
+compatibility, and independent final security/QA acceptance. AUTH-001,
+AUTH-002, GOV-003, GOV-005, uncovered GOV-006 paths, and trusted-provenance
+runtime/deployment verification remain open or activation dependencies; no risk is accepted here. The
+targeted remediation now requires attributable actors and mandatory audit
+persistence for application role mutations, and rejects caller-constructed
+trusted provenance. These corrections have focused test evidence but do not
+supersede the established complete-suite baseline.
+
+The approved Django superuser administrative-freedom decision is preserved:
+active authenticated superusers using Django Admin may directly administer
+roles and privacy permissions, including their own, without ordinary business
+justification or two-person approval. This is an authorized exception, not a
+GOV-003 vulnerability. Automatic auditing, authenticated actor attribution,
+before/after state, outcome, privileged-bypass metadata, and fail-closed audit
+persistence remain required. The reconciliation helper has no non-test
+application caller or scheduler in the current repository; its actorless
+rejection is implemented, and any future operational integration remains a
+production activation prerequisite rather than a new scheduling subsystem.
+
+## Future privacy enhancements and deferred scope
+
+This section is the authoritative forward-looking register for GDPR work that
+is not part of the completed Phase 1 engineering scope. It distinguishes
+approved deferred requirements from proposed enhancements that still require
+requirements elicitation and approval. None of the proposed items below is
+implemented by this roadmap update.
+
+### Privacy and access-control enhancements
+
+| Reference | Objective and status | Outstanding requirements and dependencies |
+| --- | --- | --- |
+| `GDPR-FUTURE-001` | Comprehensive Person record-access auditing — **approved deferred requirement** | Define the auditable access boundary, safe event volume, retention, authorized projections, operational reporting, and performance controls. This remains distinct from mandatory security-sensitive failure logging and privileged-operation auditing already required. |
+| `GDPR-FUTURE-002` | Controlled restricted personal-data reveal with authorization, justification, and audit evidence — **proposed; requirements not approved** | Define eligible fields, exceptional workflow, approval/role boundaries, reason requirements, fail-closed audit behavior, and UI/API exposure. No reveal interface or exceptional workflow is implied by this entry. |
+| `GDPR-FUTURE-003` | Extended personal-data classification and field-level protection — **proposed; requirements not approved** | Assess location, addresses, notes, professional profiles, skills, interests, tags, membership information, and other Person-related data; classify each field and review API, CRM, Community, Mobile, marketing, import, export, cache, and audit surfaces. |
+
+The current privacy capability governance, record-level authorization,
+permission-aware projections, deliberate disclosure auditing, masking,
+protected writes, legal holds, and export controls are existing foundations.
+They do not pre-approve the future capabilities in this table.
+
+### Data retention and lifecycle management
+
+| Reference | Objective and status | Outstanding requirements and dependencies |
+| --- | --- | --- |
+| `GDPR-FUTURE-004` | Configurable, formally approved retention policies and retention eligibility assessment — **proposed; requirements not approved** | Define lawful basis, retention categories, eligibility inputs, policy ownership, approval, versioning, dry-run and impact assessment, execution authority, and audit evidence. The current 24-month retention rule remains provisional and requires legal/organizational approval. |
+| `GDPR-FUTURE-005` | Historical and legacy data classification and reconciliation — **deferred; dataset-specific decision required** | Determine whether reconciliation is needed for a future operational dataset, then define classification, remediation, ownership, evidence, and safe migration controls. It was intentionally skipped for the existing test dataset. |
+| `GDPR-FUTURE-006` | Controlled disposal, anonymisation, selective/permanent deletion, and referential-integrity protection — **proposed; requirements not approved** | Define data-subject and business exceptions, legal holds, dependency handling, irreversible-operation approvals, dry runs, rollback limits, audit, and recovery. Any execution must be authorized and audited. |
+| `GDPR-FUTURE-007` | Legal-hold integration with retention and disposal operations — **partially founded; operational behavior deferred** | Existing legal-hold workflows protect covered records and preserve release governance. Future work must define how approved retention evaluation, disposal, anonymisation, and deletion honor active holds and historical decisions. |
+
+Existing legal-hold capability and retention-protection behavior is not a
+substitute for a formally approved disposal or anonymisation policy. No
+automatic disposal, deletion, anonymisation, or retention scheduler is
+authorized by this roadmap.
+
+### Data subject rights
+
+| Reference | Objective and status | Outstanding requirements and dependencies |
+| --- | --- | --- |
+| `GDPR-FUTURE-008` | DSAR and right-of-access handling — **proposed; requirements not approved** | Define intake, identity verification, scope, searches, exemptions, legal holds, review, approval, fulfilment, redaction, deadlines, delivery, and audit. |
+| `GDPR-FUTURE-009` | Rectification, erasure, restriction of processing, objection, and portability workflows — **proposed; requirements not approved** | Define request tracking, authorization, verification, legal/retention exceptions, dependent records, provider coordination, output formats, completion evidence, and escalation. |
+
+These entries are proposed business capabilities, not current API contracts or
+promises that a request can be fulfilled through existing screens.
+
+### External provider privacy integration
+
+| Reference | Objective and status | Outstanding requirements and dependencies |
+| --- | --- | --- |
+| `GDPR-FUTURE-010` | Brevo privacy lifecycle integration — **partially founded; lifecycle scope deferred** | Define correction, deletion, anonymisation, suppression, reconciliation, failure handling, provider retention, audit evidence, and protection against reintroduction of deleted data. Existing consent synchronization remains bounded and provider-aware. |
+| `GDPR-FUTURE-011` | Eventbrite and other external-provider privacy assessment — **proposed; requirements not approved** | Inventory personal data and processing, establish provider obligations, lawful-basis and retention decisions, correction/deletion paths, failure handling, and safe operational evidence. |
+
+External-provider changes require a separate provider, legal, privacy, and
+operational review. No live provider calls or lifecycle mutation is authorized
+by this register.
+
+### Cross-application privacy and compatibility
+
+| Reference | Objective and status | Outstanding requirements and dependencies |
+| --- | --- | --- |
+| `GDPR-FUTURE-012` | Consistent privacy terminology and permission enforcement across API, CRM, Community, and Mobile — **proposed continuing requirement** | Review application-specific personal-data exposure, state and cache invalidation, authentication-boundary compatibility, record-level scope, and cross-repository regression evidence whenever a future feature adds or changes personal data processing. |
+| `GDPR-FUTURE-013` | Cross-application privacy integration and compatibility verification — **proposed; requirements not approved** | Define contract ownership, supported client versions, migration/rollout sequencing, failure behavior, privacy projections, and staging/runtime verification. |
+
+Future features that introduce personal data or new processing activities must
+complete a proportionate privacy and access-control assessment and update the
+relevant subject-based documentation before implementation acceptance.
+
+### Development sequencing and readiness
+
+- GDPR Phase 1 engineering is complete for local development progression.
+- Events V1 is the next development priority.
+- The future enhancements in this section remain deferred until explicitly
+  authorized; they do not currently block Events V1 development.
+- Deferral is not security risk acceptance and does not exempt the project
+  from applicable legal or privacy obligations.
+- Production activation remains subject to the outstanding operational,
+  security, deployment, privacy, legal, and independent-acceptance
+  prerequisites recorded in [Final hardening and production readiness](#final-hardening-and-production-readiness).
+
+
+## Historical evidence archive
+
+The following records preserve the implementation chronology only for audit and
+traceability. They do not replace the subject-based sections above:
+
+| Historical subject | Preserved evidence |
+| --- | --- |
+| Capability foundation and governance | Approved catalog, role defaults, evaluator precedence, migrations, focused PostgreSQL evidence and audit behavior |
+| Staff lifecycle and governance API | Lock-order remediation, proposal lifecycle, direct superuser path, API projections and focused validation |
+| Privacy auditing, retention and legal holds | Audit actions, subject associations, retention classification, legal-hold workflows and isolated migration evidence |
+| People, marketing and exports | Privacy projections, masking, protected writes, consent boundaries, export controls and documented UAT/test evidence |
+| API documentation exposure | Environment-specific access rules, technical permission boundary, configuration defaults and schema diagnostic limitations |
+| Final hardening | Targeted findings, accepted test baselines, unexecuted or operational prerequisites, and legal/privacy dependencies |
+
+Historical evidence remains subject to the status labels in this document. A
+recorded test or isolated UAT result is not a claim of staging, production,
+deployment or legal approval.

@@ -8,6 +8,12 @@ from memberships.serializers import MembershipSerializer
 from people.models import Person
 from community.services import build_community_account_projection, get_community_account_status
 from people.services import is_plausible_crm_mobile
+from people.privacy import (
+    project_account_contact_fields,
+    project_person_privacy,
+    person_privacy_capabilities,
+    validate_person_write_privacy,
+)
 from professional_profiles.models import ProfessionalProfile
 from professional_profiles.serializers import ProfessionalProfileSerializer
 from skills.models import Skill
@@ -87,6 +93,8 @@ class PersonListQuerySerializer(serializers.Serializer):
 
 
 class PersonListSerializer(serializers.ModelSerializer):
+    privacy = serializers.SerializerMethodField()
+
     class Meta:
         model = Person
         fields = (
@@ -102,7 +110,25 @@ class PersonListSerializer(serializers.ModelSerializer):
             "archived_at",
             "created_at",
             "updated_at",
+            "privacy",
         )
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        projected = project_person_privacy(
+            person=instance,
+            capabilities=person_privacy_capabilities(request=self.context.get("request")),
+        )
+        for field in ("primary_email", "mobile", "age_range", "gender"):
+            data[field] = projected[field]
+        data["privacy"] = projected["privacy"]
+        return data
+
+    def get_privacy(self, instance):
+        return project_person_privacy(
+            person=instance,
+            capabilities=person_privacy_capabilities(request=self.context.get("request")),
+        )["privacy"]
 
 
 class PersonDirectoryListSerializer(PersonListSerializer):
@@ -167,6 +193,12 @@ class StrictPersonWriteSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 {field: ["This field is not allowed."] for field in sorted(unknown_fields)}
             )
+        privacy_errors = validate_person_write_privacy(
+            initial_data=self.initial_data,
+            capabilities=person_privacy_capabilities(request=self.context.get("request")),
+        )
+        if privacy_errors:
+            raise serializers.ValidationError(privacy_errors)
         return attrs
 
 
@@ -294,7 +326,11 @@ class PersonOverviewSerializer(serializers.Serializer):
 
     @extend_schema_field(CommunityAccountSerializer)
     def get_community_account(self, instance):
-        return CommunityAccountSerializer(build_community_account_projection(person=instance)).data
+        projection = project_account_contact_fields(
+            projection=build_community_account_projection(person=instance),
+            capabilities=person_privacy_capabilities(request=self.context.get("request")),
+        )
+        return CommunityAccountSerializer(projection).data
 
     @extend_schema_field(PersonRelationshipSerializer)
     def get_relationship(self, instance):

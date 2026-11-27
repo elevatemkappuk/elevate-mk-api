@@ -10,6 +10,7 @@ from audit.models import AuditEvent
 from data_imports.models import ImportBatch, ImportRecord
 from people.models import Person
 from staff_access.models import StaffRole, StaffRoleAssignment
+from config.test_utils import test_actor
 
 
 class ImportReconciliationApiTests(APITestCase):
@@ -21,9 +22,9 @@ class ImportReconciliationApiTests(APITestCase):
         self.crm_admin_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_ADMIN, defaults={"name": "CRM Administrator"})
         manager_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_MANAGER, defaults={"name": "CRM Manager"})
         viewer_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_VIEWER, defaults={"name": "CRM Viewer"})
-        StaffRoleAssignment.objects.assign_role(user=self.admin, role=self.crm_admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.manager, role=manager_role)
-        StaffRoleAssignment.objects.assign_role(user=self.viewer, role=viewer_role)
+        StaffRoleAssignment.objects.assign_role(user=self.admin, role=self.crm_admin_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.manager, role=manager_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.viewer, role=viewer_role, assigned_by=test_actor())
         self.batch = ImportBatch.objects.create(
             source_type=ImportBatch.SourceType.MEMBERSHIP_FORM,
             source_filename="membership.xlsx",

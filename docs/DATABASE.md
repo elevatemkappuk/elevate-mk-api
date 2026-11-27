@@ -1,9 +1,23 @@
 # Elevate MK Database
 Status: Living Documentation
-Last Updated: 2026-10-01
+Last Updated: 2026-11-24
 
 ## Scope
 This document describes the Elevate-owned database/domain structures currently implemented in the Django API codebase.
+
+## Phase 1B.3 export persistence
+
+People exports use existing `Person`, role, capability, restriction, and audit
+tables. No export file, temporary storage, queue, or bulk-operation table was
+introduced. Audit action choices `PERSON_EXPORT_GENERATED` and
+`PERSON_EXPORT_DENIED` are recorded in unapplied migration
+`audit.0026_alter_auditevent_action`; the migration is application-level
+contract bookkeeping and does not alter existing table data or constraints.
+The preceding `audit.0024_alter_auditevent_action` migration added the prior
+privacy-disclosure action. No `audit.0025` migration exists in repository
+history; the numbering gap is preserved and `0026` depends directly on `0024`
+rather than renumbering historical migrations. Migration application and
+runtime export verification remain pending for GDPR Phase 1C hardening.
 
 ## Current Domain Model
 The current Elevate-owned models are:
@@ -23,6 +37,13 @@ The current Elevate-owned models are:
 - `external_references.ExternalPersonReference`
 - `staff_access.StaffRole`
 - `staff_access.StaffRoleAssignment`
+- `staff_access.CapabilityDefinition`
+- `staff_access.RoleCapabilityDefault`
+- `staff_access.StaffCapabilityAssignment`
+- `staff_access.StaffCapabilityRestriction`
+- `staff_access.CapabilityPolicyState`
+- `staff_access.CapabilityProposal`
+- `staff_access.CapabilityProposalDecision`
 - `data_imports.ImportBatch`
 - `data_imports.ImportRecord`
 - `events.Event`
@@ -31,6 +52,239 @@ The current Elevate-owned models are:
 - `community.JoinSubmissionReceipt`
 - `community.CommunityAccountInvitation`
 - `community.CommunityProfile`
+
+## Capability Foundation
+
+Status: Implemented foundation and governance schema; governance migration
+execution, baseline capture and focused PostgreSQL tests are verified in an
+isolated test database. Production deployment remains unverified.
+
+The privacy capability foundation is additive to the existing operational role
+model. It does not replace `StaffRole` or `StaffRoleAssignment`, and it does
+not change existing API endpoint authorization.
+
+### Capability tables
+
+- `CapabilityDefinition` stores the seven current capability identifiers and
+  their descriptions. The original six-capability Phase 1A.2 catalogue remains
+  represented by its historical baseline event; the Phase 1A.3 extension is
+  separately audited. References to definitions use `PROTECT`, and definitions
+  may be deactivated without deleting historical references.
+- `RoleCapabilityDefault` maps a role to an enabled or disabled capability.
+  The `(role, capability)` pair is unique through
+  `staff_role_capability_default_unique`; the explicit role-evaluation index is
+  `(role, is_enabled)`.
+- `StaffCapabilityAssignment` stores individual capability grant history. Its
+  states are `ACTIVE`, `SUSPENDED`, and `REVOKED`. Only one active or suspended
+  current assignment is permitted for a `(user, capability)` pair; revoked
+  rows remain as history.
+- `StaffCapabilityRestriction` stores explicit restriction history. Only one
+  active restriction is permitted for a `(user, capability)` pair. Removing a
+  restriction does not alter the underlying assignment state.
+
+### Field and integrity reference
+
+`CapabilityDefinition` fields are `code` (unique, max 64), `name`,
+`description`, `is_active`, `created_at`, and `updated_at`.
+
+`RoleCapabilityDefault` contains `role` and `capability` foreign keys using
+`PROTECT`, `is_enabled`, and creation/update timestamps. The `(role,
+capability)` pair is unique through `staff_role_capability_default_unique`.
+
+`StaffCapabilityAssignment` contains `user` and `capability` foreign keys
+using `PROTECT`, `state`, grant timestamp/actor, suspension timestamp/actor,
+revocation timestamp/actor, and creation/update timestamps. Actor references
+use `SET_NULL`. Only one `ACTIVE` or `SUSPENDED` row may exist for a `(user,
+capability)` pair. Revoked rows remain historical records.
+
+`StaffCapabilityRestriction` contains `user` and `capability` foreign keys
+using `PROTECT`, active state, restriction/removal timestamps and actors, and
+creation/update timestamps. Actor references use `SET_NULL`. Only one active,
+non-removed restriction may exist for a `(user, capability)` pair.
+
+### Implemented capability indexes
+
+The capability migration implements these explicit capability indexes:
+
+| Model | Index name | Indexed fields | Purpose |
+| --- | --- | --- | --- |
+| `RoleCapabilityDefault` | `staff_role_cap_default_idx` | `(role, is_enabled)` | Role-default evaluation lookup |
+| `StaffCapabilityAssignment` | `staff_cap_assignment_idx` | `(user, capability, state)` | User/capability assignment-state lookup |
+| `StaffCapabilityAssignment` | `staff_cap_state_cap_idx` | `(state, capability)` | Assignment-state and capability lookup |
+| `StaffCapabilityRestriction` | `staff_cap_restriction_idx` | `(user, capability, is_active)` | User/capability restriction-state lookup |
+
+Capability integrity also includes the unique `CapabilityDefinition.code`
+field, `staff_role_capability_default_unique`, the conditional
+`staff_capability_one_current_assignment` constraint, and the conditional
+`staff_capability_one_active_restriction` constraint. These are documented as
+constraints rather than additional explicit `Meta.indexes`.
+
+The schema is introduced by `staff_access.0006_capability_foundation`, which
+depends on `staff_access.0005_staff_email_delivery`. Its seed reverse
+operation is intentionally a no-op, but reversing the schema operations would
+drop the four capability tables and their rows. The migration must therefore
+not be reversed in production as a routine rollback. Recovery requires an
+approved backup or export, explicit data-preservation review, and a
+forward-compatible recovery plan.
+Canonical capability seed data and the approved initial role defaults are
+created by that migration. No privacy governance mutation API or Django Admin
+surface is introduced in this foundation; such mutations remain deferred until the
+approved governance workflow and mandatory audit handling are implemented.
+
+The audit action `PRIVACY_SUPERUSER_BYPASS` is added by
+`audit.0020_alter_auditevent_action`. The audit migration preserves the
+existing action choices and appends the new action.
+
+The generated `audit.0024_alter_auditevent_action` migration appends
+`PRIVACY_PERSON_DISCLOSED` for deliberate protected Person detail and overview
+disclosures. It changes the action-choice metadata only; it creates no table,
+index or data rows and has not been applied. Disclosure events reuse the
+existing `AuditEventSubject` association and privacy audit service. Applying
+the migration and runtime verification remain deferred to GDPR Phase 1C.
+
+Phase 1A.3 extends the catalogue through
+`staff_access.0008_legal_hold_admin`, which depends on both
+`staff_access.0007_capability_governance` and
+`audit.0022_auditeventsubject_legalhold_legalholdreleaserequest_and_more`.
+The audit migration creates normalized subjects and legal-hold structures;
+its subject backfill verifies Person existence in batches, skips missing,
+malformed, dangling, or ambiguous references, and logs only aggregate
+unresolved counts. The staff migration atomically creates or confirms
+`LEGAL_HOLD_ADMIN`, advances `CapabilityPolicyState.version`, and records one
+`CAPABILITY_CATALOG_EXTENDED` event with `MIGRATION` provenance. It preserves
+the original six-capability baseline, existing defaults, assignments,
+restrictions, and history; it creates no role default for the new capability.
+
+`AuditEventSubject` is a normalized, protected Person association. Valid
+historical references are backfilled; unresolved references remain on the
+original event without an invented Person and are excluded from retention
+eligibility. The backfill is transactional with the migration and does not
+access external services or write personal data to logs.
+
+### Capability governance persistence
+
+Status: **Historical intermediate status; superseded by the authoritative final
+validation status below.** The corrected governance models and migrations were
+present in the working tree. The intermediate capability-foundation and
+CRM-admin concurrency subsets passed, while the intermediate governance suite
+had one baseline-fixture failure; the expanded individual-state baseline and
+revised superuser behavior were subsequently verified by the final isolated
+run.
+
+`CapabilityPolicyState` is a singleton policy baseline with a unique,
+non-editable `singleton_key` fixed to `1`, unique `key` fixed to
+`capability-governance`, `version`, `updated_at`, non-editable
+`baseline_captured_at`, non-editable `baseline_snapshot`, optional `updated_by`,
+and a free-form `reason`. The source defines
+`staff_cap_policy_singleton_key` and `staff_cap_policy_singleton_name` check
+constraints. `baseline_snapshot` is a JSON snapshot of the role-capability
+defaults and existing individual assignments and restrictions present when the
+baseline is captured.
+
+`CapabilityProposal` stores a unique public UUID, operation, status, optional
+role or target user, capability, proposer, reason, policy version, expected
+target-state JSON snapshot, expiry, resolution metadata, and a controlled
+recovery flag. Operations are `ROLE_DEFAULT_ENABLE`,
+`ROLE_DEFAULT_DISABLE`, `INDIVIDUAL_GRANT`, `INDIVIDUAL_RESTORE`,
+`INDIVIDUAL_SUSPEND`, `INDIVIDUAL_REVOKE`, `INDIVIDUAL_RESTRICT`, and
+`INDIVIDUAL_UNRESTRICT`. Statuses are `PENDING`, `APPROVED`, `REJECTED`,
+`CANCELLED`, `EXPIRED`, and `INVALIDATED`.
+
+The source defines these proposal constraints:
+
+- `staff_cap_proposal_target_shape` requires role-default operations to have a
+  role and no target user, and individual operations to have a target user and
+  no role;
+- `staff_cap_proposal_resolution_state` requires pending proposals to have no
+  resolution timestamp and terminal proposals to have one;
+- `staff_cap_proposal_expiry_after_creation` requires expiry after creation;
+- `staff_cap_one_pending_role_proposal` permits one pending role/capability
+  role-default proposal;
+- `staff_cap_one_pending_user_proposal` permits one pending user/capability
+  individual proposal.
+
+The explicit proposal indexes are `staff_cap_prop_status_exp_idx`
+(`status`, `expires_at`), `staff_cap_prop_user_idx` (`target_user`,
+`capability`, `status`), and `staff_cap_prop_role_idx` (`role`, `capability`,
+`status`).
+
+`CapabilityProposalDecision` is a protected one-to-one relation to a proposal.
+It stores outcome (`APPROVED`, `REJECTED`, `CANCELLED`, `EXPIRED`, or
+`INVALIDATED`), deciding actor, reason, policy version, and creation timestamp.
+The model rejects updates to an existing decision, preserving decision
+immutability in source.
+
+`staff_access.0007_capability_governance` depends on
+`staff_access.0006_capability_foundation` and `audit.0021_alter_auditevent_action`.
+It creates the three governance tables, applies the listed constraints and
+indexes, and seeds the singleton policy baseline at version `1`, including
+`baseline_captured_at` and `baseline_snapshot` from the existing
+`RoleCapabilityDefault`, `StaffCapabilityAssignment`, and
+`StaffCapabilityRestriction` rows. Individual snapshots preserve internal row
+and actor identifiers, states, timestamps, and capability codes without
+copying email addresses or other person attributes. The seed also records the
+`CAPABILITY_POLICY_BASELINED` audit event with source metadata and policy
+version; its reverse is a no-op. `audit.0021_alter_auditevent_action` depends on
+`audit.0020_alter_auditevent_action` and adds the governance audit action
+choices, including proposal lifecycle, permission mutation, assignment
+suspension/restoration, emergency suspend/revoke/restrict, and controlled
+recovery approval, and policy-baseline capture actions.
+
+**Historical intermediate note (superseded):** earlier migration and seed
+details were verified during isolated PostgreSQL test-database creation, while
+the expanded baseline correction then required a focused rerun. Production and
+staging execution remain unverified.
+
+### Local validation evidence
+
+Target: local PostgreSQL at `localhost:5432`, database `elevate`. No
+credentials or personal data are recorded here.
+
+The following recorded evidence includes the previously implemented capability
+foundation and the Phase 1A.2 governance verification. It does not verify
+production, staging, deployment or cross-repository runtime behavior.
+
+- **Source-inspected:** capability models and migration definitions were
+  inspected in `staff_access/models.py` and
+  `staff_access/migrations/0006_capability_foundation.py`.
+- **Source-inspected governance:** corrected governance models, service, and
+  migrations were inspected in `staff_access/models.py`,
+  `staff_access/governance.py`, `staff_access/migrations/0007_capability_governance.py`,
+  and `audit/migrations/0021_alter_auditevent_action.py`.
+- **Backup-verified:** a local database backup was created and verified
+  locally before validation. The backup artifact is not retained in this
+  documentation.
+- **Migration-validated:** isolated PostgreSQL test database creation applied
+  the complete migration graph, including `audit.0021` and
+  `staff_access.0007`, without unexpected operations or migration errors.
+- **Historical Phase 1A.2 data validation:** the isolated foundation database
+  contained exactly six baseline capability definitions and the approved
+  role-default matrix. The current Phase 1A.3 catalogue contains seven
+  definitions; its extension and policy-version audit evidence are verified by
+  the current focused migration tests.
+- **Verified:** `manage.py check --fail-level ERROR` passed, and
+  `manage.py makemigrations --check --dry-run` reported `No changes detected`.
+- **Test-executed / Verified locally:**
+  `staff_access.tests.CapabilityFoundationTests --keepdb` ran 13 tests in
+  34.658 seconds and returned `OK` against the local PostgreSQL test database;
+  the local test database was preserved.
+- **Deployment-unverified:** production, staging, deployment behavior, and
+  live migration safety remain unverified.
+- **Historical runtime evidence (superseded):** the final 21-test governance suite passed in
+  166.170 seconds; the combined focused run of governance, capability
+  foundation, and final CRM-admin concurrency tests passed 35 tests in
+  146.862 seconds. This covered baseline initialization, constraints,
+  transactional audit rollback, proposal lifecycle, concurrency and the
+  documented authorization boundaries.
+
+## Final Phase 1A.2 validation status (authoritative)
+
+This status supersedes earlier intermediate 21-test and 35-test evidence and
+the incomplete intermediate run.
+Synthetic pre-`0007` migration verification and the final isolated focused run
+passed. The final run passed 41/41 tests across governance, capability
+foundation, and CRM-admin concurrency coverage. Production deployment and
+operational database migrations remain unapplied and unverified.
 
 ## Historical Import Staging
 
@@ -1331,3 +1585,63 @@ Purpose:
 - the same external ID can coexist across providers; an Eventbrite ID and a Community ID are not treated as the same source identity
 - indexes support lookup by Event/reference type and Participation/reference type
 - future Eventbrite and Community adapters attach their source IDs here, leaving Event and EventParticipation provider-neutral
+
+## Phase 1A.3 audit, retention and legal-hold schema
+
+Implemented and locally verified for the Phase 1A.3 migration chain.
+`AuditEvent` carries immutable contract,
+provenance, audit-domain, retention-class, and retention-policy-version
+fields. `AuditEventSubject` normalizes zero-or-more Person associations per
+event with a unique `(event, subject_type, person)` constraint and indexed
+Person/event lookups. The migration performs only conservative legacy
+association backfill from unambiguous Person identifiers; unresolved events
+remain unassociated for later review.
+
+`RetentionPolicyState` provides monotonic policy versions and
+`RetentionPolicyVersion` is immutable and unique per domain, retention class,
+and version. The evaluator requires an authorized `LEGAL_HOLD_ADMIN` actor
+and treats unresolved privacy subjects as non-eligible.
+`LegalHold` supports event and Person targets, overlap, and retained release
+history. `LegalHoldReleaseRequest` permits one pending request per hold.
+Named constraints and indexes are defined in
+`audit/migrations/0022_auditeventsubject_legalhold_legalholdreleaserequest_and_more.py`.
+No disposal or operational-database migration is enabled by this stage.
+
+Current targeted evidence: isolated PostgreSQL migration and schema checks
+passed, the remediation subset passed 9/9, and the broader authorized focused
+set passed 69/69. The configured operational database was not migrated.
+### Phase 1A.4D release rejection migration
+
+Migration `audit.0023_legalhold_release_rejection` adds the `REJECTED` release
+request state and immutable rejection actor, timestamp, and reason fields.
+Existing pending and approved records are preserved. The existing conditional
+unique constraint continues to allow one pending request per hold while
+permitting a new request after rejection. Migration application remains
+unverified in this implementation stage.
+
+### Legal-hold release-request cancellation
+
+The generated `audit.0027_legalhold_release_cancellation` migration adds
+nullable cancellation actor, timestamp, and reason fields to preserve terminal
+cancellation history without altering existing records. The generated
+`audit.0028_alter_auditevent_action` migration adds the
+`LEGAL_HOLD_RELEASE_CANCELLED` audit action choice. The dependent
+`audit.0029_alter_legalholdreleaserequest_status` migration adds the terminal
+`CANCELLED` status. Migrations 0027, 0028, and 0029 were applied and verified
+in the isolated `elevate_gdpr_phase1a4c_manual` UAT database; they have not
+been applied to an operational database. Cancellation is available only to
+the original requester of a pending request while its hold remains active; it
+does not end retention protection and permits a later request.
+
+### Phase 1B.1 People privacy schema impact
+
+Phase 1B.1 adds no model, index, or data constraint. Privacy capability
+evaluation is applied at the API projection, search, and write-validation
+boundaries over existing Person and related account data. No database values
+are rewritten or masked in storage. The two capability definitions and their
+role defaults are existing capability-foundation data. The generated
+`audit.0024_alter_auditevent_action` migration adds only the
+`PRIVACY_PERSON_DISCLOSED` action choice; it is not applied. Runtime disclosure
+behavior is documented in `AUTHORIZATION.md`, `API.md`, and `GDPR.md`.
+
+Status: **Implemented / source-inspected; database checks and tests unexecuted**.

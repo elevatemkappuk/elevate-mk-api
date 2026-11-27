@@ -11,6 +11,7 @@ from external_references.models import ExternalPersonSyncJob
 from memberships.models import Membership
 from people.models import Person
 from staff_access.models import StaffRole, StaffRoleAssignment
+from config.test_utils import test_actor
 from accounts.models import User
 
 
@@ -80,8 +81,8 @@ class MarketingPreferenceApiTests(TestCase):
         self.person = Person.objects.create(first_name="Ava", last_name="Example")
         self.viewer = User.objects.create_user(email="viewer@example.com", password="password123", person_first_name="View", person_last_name="User", person_record_type=Person.RecordType.STAFF)
         self.manager = User.objects.create_user(email="manager@example.com", password="password123", person_first_name="Manage", person_last_name="User", person_record_type=Person.RecordType.STAFF)
-        StaffRoleAssignment.objects.assign_role(user=self.viewer, role=StaffRole.objects.get(code=StaffRole.CRM_VIEWER))
-        StaffRoleAssignment.objects.assign_role(user=self.manager, role=StaffRole.objects.get(code=StaffRole.CRM_MANAGER))
+        StaffRoleAssignment.objects.assign_role(user=self.viewer, role=StaffRole.objects.get(code=StaffRole.CRM_VIEWER), assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.manager, role=StaffRole.objects.get(code=StaffRole.CRM_MANAGER), assigned_by=test_actor())
         self.url = f"/api/v1/people/{self.person.id}/marketing-preference/"
 
     def test_viewer_can_read_unknown_but_cannot_mutate(self):

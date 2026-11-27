@@ -121,6 +121,18 @@ class CrmSessionAuthentication(SessionAuthentication):
         return result
 
 
+class AuthenticatedSessionAuthentication(SessionAuthentication):
+    """Allow shared logout for valid CRM and Community sessions only."""
+
+    def authenticate(self, request):
+        result = super().authenticate(request)
+        if result is None:
+            return None
+        if request.session.get("elevate_auth_context") not in {"crm", "community"}:
+            raise AuthenticationFailed("Authentication credentials were not provided.")
+        return result
+
+
 # CRM resources intentionally accept Django sessions only. Keep the global
 # DRF authentication defaults unchanged for mobile and community endpoints.
 CRM_SESSION_AUTHENTICATION_CLASSES = (CrmSessionAuthentication,)

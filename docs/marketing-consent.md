@@ -1,5 +1,16 @@
 # CRM marketing consent
 
+## Phase 1B.2 campaign privacy boundary
+
+Campaign V1 audience preview is privacy-aware without changing consent
+semantics. `PERSON_CONTACT_READ` controls email/mobile search and preview
+contact disclosure; unauthorized contact search is removed server-side rather
+than merely hidden in the CRM. Historical recipient email snapshots and
+audience criteria are masked or sanitized in API projections as appropriate.
+Stored snapshots remain available only to the authorized internal preparation
+flow. This is not blanket campaign or recipient access auditing, and does not
+implement export enforcement or `GDPR-FUTURE-001`.
+
 For the complete Brevo-specific implementation reference, see
 [Brevo CRM integration](brevo-crm-integration.md). This document remains
 focused on provider-neutral consent-domain rules.

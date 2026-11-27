@@ -5,12 +5,61 @@ checkpoint, see [Community Platform](community-platform.md). This includes the
 implemented Join, activation, sign-in, password recovery, frontend, and Staff
 CRM projections.
 Status: Living Documentation
-Last Updated: 2026-10-01
+Last Updated: 2026-11-24
 
 ## Scope
 This document describes the HTTP API currently implemented in the Django server repository.
 
 ## Current API Surface
+
+### API documentation access
+
+The OpenAPI schema (`/api/schema/`), Swagger UI (`/api/docs/`), ReDoc
+(`/api/redoc/`), and supported format/query representations share one backend
+access policy. Local development is explicitly selected with
+`ELEVATE_ENVIRONMENT=local` and keeps these routes convenient. Staging requires
+an active Django session plus the dedicated `accounts.access_api_documentation`
+permission or active Django superuser authority; CRM roles, `is_staff`, mobile
+JWTs, and Community authentication do not grant access. Production returns no
+documentation response unless `API_DOCUMENTATION_PRODUCTION_ENABLED=True` is
+explicitly configured, after which the same technical authorization applies.
+Invalid or missing environment configuration fails closed at startup. The
+schema route is protected independently of the HTML documentation interfaces.
+
+### Phase 1B.2 marketing privacy projections
+
+`POST /api/v1/marketing/audiences/preview/` retains its existing audience
+selection, consent classification, count, pagination, and CRM-role contract.
+The backend applies `PERSON_CONTACT_READ` to contact fields and contact-based
+search. Without that capability, email/mobile search is excluded from the
+queryset, counts and pages reflect the filtered queryset, and the response
+does not echo the protected search term. Preview Person email values are
+masked; effective contact access preserves the existing value.
+
+Campaign detail and recipient projections apply the same boundary to stored
+audience criteria and historical recipient email snapshots. Internal provider
+preparation remains server-side and continues to re-check current consent.
+Provider preparation error messages are bounded and sanitized; raw provider
+payloads and credentials are not part of the API contract. These controls are
+**Implemented / source-inspected**; added tests and runtime/provider
+verification are **Unexecuted / Unverified** under the deferred-test policy.
+
+### Phase 1B.3 People export
+
+`GET /api/v1/people/export/?format=csv|xlsx` returns an authenticated direct
+download using the existing People directory filters and record scope. The
+request requires effective `PERSON_EXPORT`. Contact and demographic columns
+are included only when their separate effective capabilities are present;
+otherwise those columns are omitted. The response uses safe filenames and
+content types, and cell values are escaped against spreadsheet formula
+injection. Successful and denied operations are recorded through privacy audit
+events without raw data or search terms. Audit persistence failure prevents a
+successful export response. Downloads are marked private and no-store. The
+`format` query parameter is handled explicitly by the endpoint and does not
+alter DRF renderer negotiation. No public download URL or asynchronous export
+storage is used. CSV/XLSX runtime behavior, Excel compatibility, export audit
+visibility, and capability-revocation behavior remain unverified pending Phase
+1C hardening.
 Current base path and versioning convention:
 
 - Base prefix: `/api/v1/`
@@ -127,7 +176,8 @@ The following is the current route inventory under `/api/v1/`. Authentication la
 | `GET` | `/api/v1/auth/csrf/` | Public |
 | `POST` | `/api/v1/auth/login/` | Public |
 | `POST` | `/api/v1/auth/logout/` | Authenticated session |
-| `GET` | `/api/v1/auth/me/` | Authenticated session |
+| `GET` | `/api/v1/auth/me/` | Authenticated Django session or valid mobile JWT |
+| `GET` | `/api/v1/staff/access/me/` | Authenticated CRM session with an active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` role |
 | `POST` | `/api/v1/auth/password-reset/` | Public; generic response |
 | `POST` | `/api/v1/auth/password-reset/confirm/` | Public; uid/token required |
 
@@ -394,6 +444,83 @@ complete new email address.
 | `GET` | `/api/schema/` | Machine-readable OpenAPI schema |
 | `GET` | `/api/docs/` | Swagger UI |
 | `GET` | `/api/redoc/` | ReDoc |
+
+### Staff governance API
+
+The Phase 1A.4C.2B governance routes are CRM-session-only. Governance reads
+require either an active effective `STAFF_CAPABILITY_ADMIN` capability or an
+active Django superuser with an operational CRM role. Ordinary mutation routes
+retain their existing eligibility and two-person rules; the dedicated audited
+superuser route is the only direct superuser mutation path. These routes return
+identifiers, role/capability state, proposal state and audit-safe metadata; they
+do not return Person contact or demographic fields.
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/staff/governance/targets/` | Privacy-safe searchable Staff directory for governance target selection |
+| `GET` | `/api/v1/staff/governance/targets/{user_id}/` | Safe target access detail and backend-permitted actions |
+| `GET` | `/api/v1/staff/governance/role-defaults/` | Role-default state, policy version and backend-permitted role-default actions |
+| `POST` | `/api/v1/staff/governance/proposals/` | Create a governed proposal |
+| `POST` | `/api/v1/staff/governance/individual-changes/` | Apply an ordinary single-admin individual mutation where permitted |
+| `POST` | `/api/v1/staff/governance/proposals/{proposal_id}/{approve\|reject\|cancel}/` | Resolve a proposal |
+| `GET` | `/api/v1/staff/governance/history/{individual\|role-defaults\|decisions}/` | Read governed history |
+| `POST` | `/api/v1/staff/governance/superuser-actions/` | Audited direct operation for an active Django superuser |
+
+Unsafe requests use the existing CRM Django session authentication and CSRF
+boundary. The superuser route derives authority from the authenticated server
+session; client-supplied flags cannot establish superuser authority.
+
+The directory returns only User/Person identifiers, display name, record type,
+active state, active canonical CRM role codes, eligibility, and whether the
+viewer may manage the target. It does not return email, phone, demographic,
+or other contact fields. `q` searches canonical Staff first and last names;
+results are capped by the paginated response contract. The direct target URL
+remains available as a secondary compatibility lookup.
+
+Ordinary individual changes are applied immediately when the backend permits
+them. `STAFF_CAPABILITY_ADMIN` grant, restore, and unrestrict operations use
+the proposal workflow. A duplicate pending proposal returns HTTP `409` with
+stable code `PENDING_PROPOSAL_EXISTS` and a public proposal identifier when
+available; raw database errors are not exposed.
+
+The role-default response includes every active canonical CRM role and active
+capability, including disabled defaults represented with `is_enabled: false`.
+Each row includes `permitted_actions`, calculated by the backend for the
+authenticated administrator. For ordinary administrators it is empty while a
+matching proposal is pending; otherwise it contains the applicable
+`ROLE_DEFAULT_ENABLE` or `ROLE_DEFAULT_DISABLE` operation. An admitted
+superuser receives the applicable direct operation even when an ordinary
+proposal is pending, with `execution_mode: DIRECT_SUPERUSER`; ordinary rows use
+`execution_mode: PROPOSAL`. The CRM sends direct rows to `/superuser-actions/`.
+Clients must not infer authorization from the current state or reproduce
+governance rules locally.
+
+Target capability projections include `permitted_action_modes`, mapping each
+backend-permitted operation to `DIRECT`, `PROPOSAL`, or `DIRECT_SUPERUSER`.
+
+Proposal payloads likewise include backend-calculated `permitted_actions`:
+the proposer receives only `cancel`, while a distinct ordinary authorized
+administrator receives `approve` and `reject`. Admitted superusers can inspect
+proposal history but do not receive actions that would convert an ordinary
+proposal into a superuser operation. Terminal proposals expose no actions.
+
+Governance history is a safe projection rather than raw `AuditEvent` access.
+Entries identify operation, capability, target, actor, timestamp, outcome,
+reason and available before/resulting state. Direct superuser AFTER events are
+marked `superuser_operation: true`; credentials, contact fields and
+unrestricted audit metadata are excluded.
+
+Target detail capability states additionally provide backend-calculated
+`effective` and `effective_explanation` values. The explanation identifies
+effective sources and reason, including explicit restriction precedence and
+suspended/revoked assignment state; `pending_change` never changes the
+effective result. Angular must render these values and must not reproduce the
+evaluator.
+
+Applicable governance authorization denials use the canonical
+`CAPABILITY_PERMISSION_MUTATED` audit action with metadata
+`event_type: GOVERNANCE_AUTHORIZATION_DENIED`, a safe denial code, an
+allowlisted operation, `outcome: DENIED`, and an opaque target reference.
 
 ## OpenAPI Documentation
 Current documentation endpoints:
@@ -700,6 +827,50 @@ Staff access lifecycle note:
 - revoking the final active `CRM_ADMIN` assignment, including through a Django Admin bulk action, is rejected atomically with no successful revocation audit event
 - the canonical `CRM_ADMIN` StaffRole cannot be deactivated
 - `/api/v1/auth/me/` response shape is unchanged
+
+## Endpoint: `GET /api/v1/staff/access/me/`
+
+Purpose:
+
+- Return the backend-evaluated effective-access projection for the authenticated Staff CRM session.
+- This is a separate Staff Access contract; it does not add capability fields to `/api/v1/auth/me/`.
+
+Authentication and admission:
+
+- A Django CRM session is required; mobile JWT authentication is not accepted.
+- The authenticated user must have an active operational `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` role.
+- Anonymous callers receive `401 Unauthorized`.
+- Authenticated users without one of those active CRM roles receive `403 Forbidden`.
+- Django `is_staff` or `is_superuser` alone does not admit a caller.
+
+Successful response:
+
+- Status: `200 OK`.
+- The response has exactly two fields:
+
+```json
+{
+  "capability_codes": ["LEGAL_HOLD_ADMIN", "PRIVACY_AUDIT_READ", "STAFF_CAPABILITY_ADMIN"],
+  "policy_version": 2
+}
+```
+
+- `capability_codes` is the effective capability-code projection after the backend evaluator is applied. The coordinated Phase 1A.4D allowlist contains `STAFF_CAPABILITY_ADMIN`, `PRIVACY_AUDIT_READ`, and `LEGAL_HOLD_ADMIN`; all other capability codes remain excluded.
+- `policy_version` is the current capability-policy version read for this evaluation; `2` is the verified current example value, not a fixed contract value. It is informational for the client; it is not a capability grant, authorization token, mutation precondition, or client-controlled version.
+- The view locks the singleton capability-policy state and evaluates the requested disclosure set in one database transaction, so the returned policy version and projection are from the same transactionally consistent evaluation. The endpoint does not mutate policy state.
+- The response sets `Cache-Control: private, no-store` and must not be retained as shared or stored client state.
+
+Superuser boundary:
+
+- A Django superuser still requires an active operational CRM role to pass endpoint admission.
+- After admission, the existing superuser evaluator path remains authoritative and records its transactional `PRIVACY_SUPERUSER_BYPASS` audit event. Superuser authority does not expand the public response contract beyond the allowlisted capabilities.
+
+Evidence status:
+
+- **Implemented / Source-inspected:** route, view, serializer, CRM-session authentication, active-role permission, three-capability disclosure allowlist, transactional policy-state read, superuser boundary, and `private, no-store` response header were inspected in `staff_access/urls.py`, `staff_access/views.py`, `staff_access/serializers.py`, and `staff_access/permissions.py`.
+- **Verified / isolated local runtime (historical Phase 1A.4A evidence):** `http://localhost:8000` served the API against `elevate_gdpr_phase1a4c_manual`; synthetic admin and delegated manager sessions received the then-current `STAFF_CAPABILITY_ADMIN` projection, while an explicitly restricted account received no capability projection. The later three-capability allowlist rollout remains source-inspected and requires current isolated validation. The operational `elevate` database was not used.
+- **Verified — focused API evidence:** 34/34 Phase 1A.4A focused tests passed against isolated PostgreSQL database `test_elevate_gdpr_phase1a4a_20261124`; `manage.py check` passed; `makemigrations --check --dry-run` reported `No changes detected`; `migrate --plan` reported no planned migration operations; and `git diff --check` was clean. No schema or migration files changed, and no migrations were applied for Phase 1A.4A.
+- **Unverified:** broader runtime behavior, deployment behavior, CRM tests/build/runtime, and cross-repository CRM consumption.
 
 ## Endpoint: `GET /api/v1/people/`
 Purpose:
@@ -2420,7 +2591,7 @@ Planned, not yet implemented:
 
 - broader people/domain APIs around the `Person` model beyond the current read-only list endpoint
 - additional first-party authenticated application endpoints under the `/api/v1/` convention
-- separate authorization-aware staff CRM capabilities once the authorization model exists
+- broader capability-aware Staff CRM consumers and enforcement beyond the Phase 1A.4A projection
 
 
 ## Staff CRM Dashboard
@@ -2959,3 +3130,90 @@ approval workflow. Anonymous Join remains generic; an existing-record member
 is prompted to review the composed canonical profile after authentication.
 Review Profile followed by explicit acknowledgement and the My Profile
 Looks Good action both use this acknowledgement behavior.
+## Phase 1A.4D backend privacy contracts
+
+Implemented / isolated UAT runtime verified: the API now defines separate CRM-session
+routes for privacy audit history and legal-hold administration. Privacy audit
+history is exposed at `GET /api/v1/people/{person_id}/privacy-audit-history/`
+with bounded `page`, `page_size`, `occurred_from`, `occurred_to`,
+`activity_type`, `outcome`, and `superuser_operation` filters. Authorization is
+evaluated before filtering and pagination. Responses omit raw metadata,
+credentials, and unrestricted identifiers. Authorized legal-hold responses
+may include the hold or release-request justification required for that
+workflow; these values are not part of the privacy-audit history projection.
+
+Legal-hold routes are:
+
+- `GET|POST /api/v1/privacy/legal-holds/`
+- `GET /api/v1/privacy/legal-holds/person-targets/` — capability-protected
+  active non-technical Person identifier/name search for legal-hold placement.
+- `GET /api/v1/privacy/legal-holds/{public_id}/`
+- `POST /api/v1/privacy/legal-holds/{public_id}/release-requests/`
+- `POST /api/v1/privacy/legal-hold-release-requests/{public_id}/approve/`
+- `POST /api/v1/privacy/legal-hold-release-requests/{public_id}/reject/`
+- `POST /api/v1/privacy/legal-hold-release-requests/{public_id}/cancel/` for the original requester of a pending release request.
+- `POST /api/v1/privacy/legal-holds/{public_id}/direct-release/` for the audited Django-superuser exception.
+
+They use the existing service layer, CRM session authentication, opaque public
+hold identifiers, `LEGAL_HOLD_ADMIN`, mandatory reasons, and audited release
+transitions. The list and detail projections include safe release-request
+summaries with public request IDs, status, safe actor IDs, timestamps,
+justification, rejection reason, and backend-calculated `permitted_actions`.
+List responses use bounded page-number pagination (`page`, optional
+`page_size`, maximum 100); the detail response contains one hold projection.
+An independent authorized administrator can discover pending requests after a
+fresh login or refresh without receiving an internal database ID. Release
+requests are `PENDING`, `APPROVED`, `REJECTED`, or `CANCELLED`;
+rejection preserves the active hold and permits a subsequent request. Pending
+requests remove the ordinary `request_release` action, and duplicate pending
+requests are rejected by the service before state changes. Authorized
+legal-hold projections add safe Person and actor display summaries, decision
+actors and justifications, while preserving contact and raw audit metadata
+boundaries. Privacy-audit events expose `place_event_hold` and a signed opaque
+`legal_hold_event_reference` only when the viewer also has
+`LEGAL_HOLD_ADMIN`. Ordinary approval and rejection require a distinct
+authorized decision-maker; the approved audited Django-superuser exception
+may perform direct self-approval or self-rejection. The direct release route
+is superuser-only and remains CRM-admitted and audited.
+
+### Phase 1B.1 People privacy projections
+
+People list, detail, overview, create, update, archive, restore, and related
+Person response paths use the backend-authoritative privacy projection. The
+`primary_email` and `mobile` fields require `PERSON_CONTACT_READ`; without it,
+email is deterministically partially masked and mobile exposes only its final
+two digits. Malformed or too-short values are represented as `Restricted`,
+and absent values remain absent/not provided. `age_range` and `gender` require
+`PERSON_DEMOGRAPHIC_READ` and otherwise return `Restricted` regardless of the
+stored value. Responses include `privacy.contact_restricted` and
+`privacy.demographic_restricted` indicators.
+
+Nested community-account `account_email` and `setup_email` values follow the
+same contact projection. Search clauses for email and mobile are omitted when
+the caller lacks `PERSON_CONTACT_READ`; name, job-title, and company search
+remain subject to existing record-scope rules. Counts, pagination, and
+duplicate-response projections use the resulting authorized queryset and do
+not disclose protected values. Protected contact or demographic fields are
+rejected on writes without the corresponding capability, while unrelated
+permitted fields remain writable.
+
+Status: **Implemented / source-inspected; automated tests and runtime
+verification deferred to GDPR Phase 1C hardening**. The API and CRM must be
+released together for the expanded effective-capability disclosure contract;
+older strict CRM clients may not understand the two new capability codes.
+
+The dedicated `PRIVACY_PERSON_DISCLOSED` action is implemented for approved
+protected disclosures made through the existing Django-superuser bypass path.
+For those detail and overview responses, the event is written before the
+protected response and uses the existing privacy audit service, trusted
+provenance and normalized `AuditEventSubject` Person association. Safe metadata
+contains only the operation, disclosure category, capability codes, outcome and
+superuser authority indicator; raw Person values, credentials, request payloads
+and search terms are excluded. Audit persistence failure prevents the response.
+Ordinary authorized detail, overview and directory reads, masked responses and
+unprotected reads do not generate blanket disclosure events. No new reveal
+workflow was introduced. Denial auditing remains on the existing
+authorization-failure contract, and comprehensive Person access auditing
+remains `GDPR-FUTURE-001`. The required audit-choice migration is generated but
+not applied; automated and runtime verification remain deferred to GDPR Phase 1C
+hardening.

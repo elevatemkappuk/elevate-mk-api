@@ -231,11 +231,12 @@ class CommunityDirectoryApiTests(TestCase):
         former.person.membership.save(update_fields=["status", "ended_at"])
         self.assertEqual(self.client.get(f"{self.list_url}{former.person.community_profile.directory_id}/").status_code, 404)
 
-        technical = self.create_member(
-            "Technical", "Account", "technical-target@example.com", visible=True,
+        technical_person = Person.objects.create(
+            first_name="Technical", last_name="Account", primary_email="technical-target@example.com",
             record_type=Person.RecordType.TECHNICAL,
         )
-        self.assertEqual(self.client.get(f"{self.list_url}{technical.person.community_profile.directory_id}/").status_code, 404)
+        technical_profile = CommunityProfile.objects.create(person=technical_person, directory_visible=True)
+        self.assertEqual(self.client.get(f"{self.list_url}{technical_profile.directory_id}/").status_code, 404)
 
         unlinked = Person.objects.create(first_name="Unlinked", last_name="Member")
         Membership.objects.create(

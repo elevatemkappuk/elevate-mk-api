@@ -166,3 +166,13 @@ Keep Person as the core identity record. Add new business concepts through their
 ## Regression Coverage
 
 Focused backend tests cover model/manager invariants, API authorization and BUSINESS visibility, directory filters and pagination, identity-collision and stale-evidence handling, lifecycle and audit behavior, membership/profile/taxonomy/notes workflows, and import integration where Person creation or enrichment is involved. Run only the focused module affected by a change unless a task explicitly requires broader coverage.
+
+## Phase 1B.1 privacy boundary
+
+People response serializers apply the approved contact and demographic
+capabilities at the final representation boundary. Directory email/mobile
+search is omitted without `PERSON_CONTACT_READ`, while name and professional
+search retain existing record-scope enforcement. Protected write fields are
+rejected server-side without their capability, including unchanged submitted
+values; unrelated permitted writes remain available. See `AUTHORIZATION.md`,
+`API.md`, and `GDPR.md` for the authoritative policy and response contract.

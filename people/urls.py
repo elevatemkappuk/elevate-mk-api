@@ -2,6 +2,7 @@ from django.urls import path
 
 from people.views import (
     PeopleListView,
+    PersonExportView,
     PersonArchiveView,
     PersonAuditHistoryView,
     PersonDetailView,
@@ -15,6 +16,7 @@ from people.views import (
 
 urlpatterns = [
     path("people/", PeopleListView.as_view(), name="people-list"),
+    path("people/export/", PersonExportView.as_view(), name="people-export"),
     path("people/members/", PersonMemberCreateView.as_view(), name="people-member-create"),
     path("people/<int:person_id>/archive/", PersonArchiveView.as_view(), name="people-archive"),
     path("people/<int:person_id>/classification/", PersonClassificationCorrectionView.as_view(), name="people-classification-correction"),

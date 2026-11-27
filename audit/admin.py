@@ -29,6 +29,9 @@ class AuditEventAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return False
 
+    def has_module_permission(self, request):
+        return bool(getattr(request.user, "is_active", False) and getattr(request.user, "is_superuser", False))
+
     def has_view_permission(self, request, obj=None):
-        return super().has_view_permission(request, obj)
+        return self.has_module_permission(request)
 

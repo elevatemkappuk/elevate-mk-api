@@ -16,16 +16,17 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import include, path
-from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
+from config.api_documentation import ProtectedSpectacularAPIView, ProtectedSpectacularRedocView, ProtectedSpectacularSwaggerView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('api/schema/', SpectacularAPIView.as_view(), name='api-schema'),
-    path('api/docs/', SpectacularSwaggerView.as_view(url_name='api-schema'), name='api-docs'),
-    path('api/redoc/', SpectacularRedocView.as_view(url_name='api-schema'), name='api-redoc'),
+    path('api/schema/', ProtectedSpectacularAPIView.as_view(), name='api-schema'),
+    path('api/docs/', ProtectedSpectacularSwaggerView.as_view(url_name='api-schema'), name='api-docs'),
+    path('api/redoc/', ProtectedSpectacularRedocView.as_view(url_name='api-schema'), name='api-redoc'),
     path('api/v1/', include('accounts.urls')),
     path('api/v1/', include('dashboard.urls')),
     path('api/v1/', include('people.urls')),
+    path('api/v1/', include('audit.urls')),
     path('api/v1/', include('memberships.urls')),
     path('api/v1/', include('professional_profiles.urls')),
     path('api/v1/', include('skills.urls')),

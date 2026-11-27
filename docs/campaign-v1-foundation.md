@@ -1,5 +1,15 @@
 # Campaign V1 foundation
 
+## Phase 1B.2 privacy projection boundary
+
+Audience Preview and recipient projections apply the effective
+`PERSON_CONTACT_READ` boundary. Callers without contact access cannot use
+email/mobile search, receive the protected query term in the response, or see
+raw recipient email snapshots. Internal preparation retains the server-side
+snapshot needed for provider processing. Provider diagnostics returned by the
+API are bounded and sanitized; raw provider responses and credentials are not
+exposed.
+
 Campaign V1 is the CRM-owned audience and preparation workflow. Elevate owns
 **WHO**: audience criteria, CRM consent eligibility, campaign records,
 immutable recipient evidence, current-state rechecks, provider identity

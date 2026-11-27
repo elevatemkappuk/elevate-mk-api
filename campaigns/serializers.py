@@ -1,8 +1,12 @@
+import re
+
 from rest_framework import serializers
 from django.conf import settings
 from drf_spectacular.utils import extend_schema_field
 
 from marketing_preferences.serializers import AudienceSelectionSerializer, PEOPLE_ORDERING_CHOICES
+from people.privacy import mask_email, person_privacy_capabilities
+from staff_access.models import CapabilityDefinition
 from staff_access.models import StaffRole
 from staff_access.permissions import user_has_any_active_staff_role
 from .models import Campaign, CampaignPreparation, CampaignRecipientSnapshot
@@ -36,6 +40,7 @@ class CampaignPreparationSerializer(serializers.ModelSerializer):
     can_start_provider_preparation = serializers.SerializerMethodField()
     can_retry_provider_preparation = serializers.SerializerMethodField()
     brevo_campaigns_url = serializers.SerializerMethodField()
+    provider_error_message = serializers.SerializerMethodField()
 
     class Meta:
         model = CampaignPreparation
@@ -67,8 +72,13 @@ class CampaignPreparationSerializer(serializers.ModelSerializer):
             return None
         return str(getattr(settings, "BREVO_MARKETING_CAMPAIGNS_URL", "") or "").strip() or None
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
+    def get_provider_error_message(self, obj):
+        return safe_provider_error_message(obj.provider_error_message)
+
 
 class CampaignSerializer(serializers.ModelSerializer):
+    audience_selection = serializers.SerializerMethodField()
     current_preparation = CampaignPreparationSerializer(read_only=True)
     is_archived = serializers.BooleanField(read_only=True)
     can_archive = serializers.SerializerMethodField()
@@ -96,9 +106,39 @@ class CampaignSerializer(serializers.ModelSerializer):
     def get_can_delete(self, obj):
         return self._can_write() and campaign_delete_block_reason(obj) is None
 
+    @extend_schema_field(serializers.DictField())
+    def get_audience_selection(self, obj):
+        selection = dict(obj.audience_selection or {})
+        capabilities = person_privacy_capabilities(request=self.context.get("request"))
+        if CapabilityDefinition.PERSON_CONTACT_READ not in capabilities:
+            # Preparation still uses the stored criteria internally, but a
+            # protected search term is not echoed to unauthorized readers.
+            selection["q"] = ""
+        return selection
+
 
 class CampaignRecipientSnapshotSerializer(serializers.ModelSerializer):
+    email_snapshot = serializers.SerializerMethodField()
+
     class Meta:
         model = CampaignRecipientSnapshot
         fields = ("id", "person", "email_snapshot", "first_name_snapshot", "last_name_snapshot", "consent_state_snapshot", "decision", "exclusion_reason", "captured_at", "provider_outcome", "provider_error_code")
         read_only_fields = fields
+
+    @extend_schema_field(serializers.CharField(allow_null=True))
+    def get_email_snapshot(self, obj):
+        capabilities = person_privacy_capabilities(request=self.context.get("request"))
+        if CapabilityDefinition.PERSON_CONTACT_READ in capabilities:
+            return obj.email_snapshot or None
+        return mask_email(obj.email_snapshot)
+
+
+def safe_provider_error_message(value):
+    if not value:
+        return None
+    message = " ".join(str(value).split())
+    message = re.sub(r"https?://\S+", "[redacted-provider-url]", message)
+    message = re.sub(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "[redacted-email]", message)
+    message = re.sub(r"(?i)(api[-_ ]?key|authorization|bearer|secret|token)\s*[:=]\s*[^\s|]+", r"\1=[redacted]", message)
+    message = re.sub(r"(?<!\d)(?:\+?\d[\d ()-]{7,}\d)(?!\d)", "[redacted-phone]", message)
+    return message[:500]

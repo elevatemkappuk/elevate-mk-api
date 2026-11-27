@@ -9,6 +9,7 @@ from memberships.models import Membership
 from people.admin import PersonAdmin
 from people.models import Person
 from staff_access.models import StaffRole, StaffRoleAssignment
+from config.test_utils import test_actor
 from people.services import correct_person_classification
 
 
@@ -45,7 +46,7 @@ class IdentityBoundaryTests(TestCase):
         )
         role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
         with self.assertRaises(ValidationError):
-            StaffRoleAssignment.objects.assign_role(user=user, role=role)
+            StaffRoleAssignment.objects.assign_role(user=user, role=role, assigned_by=test_actor())
 
     def test_person_admin_cannot_change_classification_directly(self):
         admin_user = User.objects.create_superuser(
@@ -73,6 +74,7 @@ class IdentityBoundaryTests(TestCase):
         StaffRoleAssignment.objects.assign_role(
             user=actor,
             role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN),
+            assigned_by=test_actor(),
         )
         target = User.objects.create_user(
             email="target@example.com",

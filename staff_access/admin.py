@@ -1,16 +1,30 @@
 from django.contrib import admin
 from django.contrib import messages
+from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.utils.translation import ngettext
 
 from audit.models import AuditEvent
 from audit.services import record_audit_event
 from staff_access.exceptions import FinalCrmAdminProtectionError
-from staff_access.models import StaffInvitation, StaffRole, StaffRoleAssignment
+from staff_access.models import (
+    CAPABILITY_POLICY_STATE_KEY,
+    CapabilityPolicyState,
+    StaffInvitation,
+    StaffRole,
+    StaffRoleAssignment,
+    CapabilityDefinition,
+    RoleCapabilityDefault,
+    StaffCapabilityAssignment,
+    StaffCapabilityRestriction,
+)
 from staff_access.services import (
+    activate_staff_role,
     ensure_staff_role_can_be_deactivated,
     revoke_staff_role_assignments,
 )
+from staff_access.governance import apply_superuser_capability_change
+from staff_access.models import CapabilityProposal
 from staff_access.permissions import user_has_any_active_staff_role
 
 
@@ -21,7 +35,7 @@ def can_manage_staff_access(user):
     )
 
 
-def record_staff_role_audit_event(*, action, actor_user, assignment, request=None):
+def record_staff_role_audit_event(*, action, actor_user, assignment, request=None, metadata_extra=None):
     request_id = None
     ip_address = None
     if request is not None:
@@ -46,6 +60,7 @@ def record_staff_role_audit_event(*, action, actor_user, assignment, request=Non
             "target_user_id": str(assignment.user_id),
             "staff_role_id": str(assignment.role_id),
             "staff_role_code": assignment.role.code,
+            **(metadata_extra or {}),
         },
         request_id=request_id,
         ip_address=ip_address,
@@ -95,6 +110,10 @@ class StaffRoleAdmin(admin.ModelAdmin):
             was_active = StaffRole.objects.filter(pk=obj.pk).values_list("is_active", flat=True).first()
             if was_active and not obj.is_active:
                 obj.deactivate(actor_user=request.user, request=request)
+                obj.refresh_from_db()
+                return
+            if was_active is False and obj.is_active:
+                activate_staff_role(obj, actor_user=request.user)
                 obj.refresh_from_db()
                 return
 
@@ -159,42 +178,17 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
 
     def save_model(self, request, obj, form, change):
         if change:
-            super().save_model(request, obj, form, change)
-            return
+            raise PermissionDenied("Existing Staff role assignments must be changed through lifecycle actions.")
+
+        if obj.user_id == request.user.pk and not getattr(request.user, "is_superuser", False):
+            raise PermissionDenied("Staff role assignments cannot target the acting user.")
 
         with transaction.atomic():
-            existing = (
-                StaffRoleAssignment.objects.select_for_update()
-                .select_related("role")
-                .filter(user=obj.user, role=obj.role)
-                .first()
-            )
-            if existing:
-                if not existing.is_active:
-                    existing.reactivate()
-                    record_staff_role_audit_event(
-                        action=AuditEvent.Action.STAFF_ROLE_REACTIVATED,
-                        actor_user=request.user,
-                        assignment=existing,
-                        request=request,
-                    )
-                    self.message_user(request, "Existing assignment reactivated.", level=messages.SUCCESS)
-                else:
-                    self.message_user(request, "Assignment already exists and remains active.", level=messages.WARNING)
-                obj.pk = existing.pk
-                return
-
-            assignment = StaffRoleAssignment.objects.create(
+            assignment, created, reactivated, policy_version = StaffRoleAssignment.objects.assign_role(
                 user=obj.user,
                 role=obj.role,
                 assigned_by=request.user,
-            )
-            assignment = StaffRoleAssignment.objects.select_related("role").get(pk=assignment.pk)
-            record_staff_role_audit_event(
-                action=AuditEvent.Action.STAFF_ROLE_ASSIGNED,
-                actor_user=request.user,
-                assignment=assignment,
-                request=request,
+                return_details=True,
             )
 
         obj.pk = assignment.pk
@@ -210,15 +204,7 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
                     assignments=queryset,
                     revoked_by=request.user,
                     request=request,
-                    audit=False,
                 )
-                for assignment in assignments:
-                    record_staff_role_audit_event(
-                        action=AuditEvent.Action.STAFF_ROLE_REVOKED,
-                        actor_user=request.user,
-                        assignment=assignment,
-                        request=request,
-                    )
         except FinalCrmAdminProtectionError as error:
             self.message_user(request, error.messages[0], level=messages.ERROR)
             return
@@ -240,19 +226,21 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
         updated = 0
         with transaction.atomic():
             assignments = list(
-                queryset.select_for_update()
+                queryset
                 .select_related("role")
                 .filter(is_active=False)
             )
+            if any(assignment.user_id == request.user.pk for assignment in assignments) and not getattr(request.user, "is_superuser", False):
+                raise PermissionDenied("Staff role assignments cannot target the acting user.")
             for assignment in assignments:
-                assignment.reactivate()
-                record_staff_role_audit_event(
-                    action=AuditEvent.Action.STAFF_ROLE_REACTIVATED,
-                    actor_user=request.user,
-                    assignment=assignment,
-                    request=request,
+                assignment, created, reactivated, policy_version = StaffRoleAssignment.objects.assign_role(
+                    user=assignment.user,
+                    role=assignment.role,
+                    assigned_by=request.user,
+                    return_details=True,
                 )
-                updated += 1
+                if reactivated:
+                    updated += 1
         self.message_user(
             request,
             ngettext(
@@ -283,3 +271,143 @@ class StaffInvitationAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+class SuperuserPrivacyAdminMixin:
+    """Django Admin boundary for the approved direct superuser exception."""
+
+    def _is_authorized(self, request):
+        return bool(request.user.is_authenticated and request.user.is_active and request.user.is_superuser)
+
+    def has_module_permission(self, request):
+        return self._is_authorized(request)
+
+    def has_view_permission(self, request, obj=None):
+        return self._is_authorized(request)
+
+    def has_add_permission(self, request):
+        return self._is_authorized(request)
+
+    def has_change_permission(self, request, obj=None):
+        return self._is_authorized(request)
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def get_actions(self, request):
+        actions = super().get_actions(request)
+        actions.pop("delete_selected", None)
+        return actions
+
+
+@admin.register(RoleCapabilityDefault)
+class RoleCapabilityDefaultAdmin(SuperuserPrivacyAdminMixin, admin.ModelAdmin):
+    list_display = ("role", "capability", "is_enabled", "updated_at")
+    list_filter = ("role", "capability", "is_enabled")
+    readonly_fields = ("created_at", "updated_at")
+
+    def get_readonly_fields(self, request, obj=None):
+        fields = list(super().get_readonly_fields(request, obj))
+        if obj is not None:
+            fields.extend(("role", "capability"))
+        return tuple(dict.fromkeys(fields))
+
+    def save_model(self, request, obj, form, change):
+        previous = RoleCapabilityDefault.objects.filter(pk=obj.pk).first() if change else None
+        if previous is not None and (previous.role_id != obj.role_id or previous.capability_id != obj.capability_id):
+            raise PermissionDenied("Role-default identity fields cannot be changed in place.")
+        if previous is None or previous.is_enabled != obj.is_enabled:
+            operation = (
+                CapabilityProposal.Operation.ROLE_DEFAULT_ENABLE
+                if obj.is_enabled
+                else CapabilityProposal.Operation.ROLE_DEFAULT_DISABLE
+            )
+            apply_superuser_capability_change(
+                actor_user=request.user,
+                capability=obj.capability,
+                operation=operation,
+                role=obj.role,
+                reason=None,
+                request=request,
+                allow_empty_reason=True,
+            )
+            if previous is None:
+                obj.pk = RoleCapabilityDefault.objects.get(role=obj.role, capability=obj.capability).pk
+        obj.refresh_from_db()
+
+
+@admin.register(StaffCapabilityAssignment)
+class StaffCapabilityAssignmentAdmin(SuperuserPrivacyAdminMixin, admin.ModelAdmin):
+    list_display = ("user", "capability", "state", "granted_by", "updated_at")
+    list_filter = ("capability", "state")
+    readonly_fields = ("granted_at", "granted_by", "suspended_at", "suspended_by", "revoked_at", "revoked_by", "created_at", "updated_at")
+
+    def get_readonly_fields(self, request, obj=None):
+        fields = list(super().get_readonly_fields(request, obj))
+        if obj is not None:
+            fields.extend(("user", "capability"))
+        return tuple(dict.fromkeys(fields))
+
+    def save_model(self, request, obj, form, change):
+        previous = StaffCapabilityAssignment.objects.filter(pk=obj.pk).first() if change else None
+        if previous is not None and (previous.user_id != obj.user_id or previous.capability_id != obj.capability_id):
+            raise PermissionDenied("Capability assignment identity fields cannot be changed in place.")
+        old_state = None if previous is None else previous.state
+        if old_state != obj.state:
+            operation = {
+                StaffCapabilityAssignment.State.ACTIVE: (
+                    CapabilityProposal.Operation.INDIVIDUAL_GRANT
+                    if old_state is None
+                    else CapabilityProposal.Operation.INDIVIDUAL_RESTORE
+                ),
+                StaffCapabilityAssignment.State.SUSPENDED: CapabilityProposal.Operation.INDIVIDUAL_SUSPEND,
+                StaffCapabilityAssignment.State.REVOKED: CapabilityProposal.Operation.INDIVIDUAL_REVOKE,
+            }[obj.state]
+            apply_superuser_capability_change(
+                actor_user=request.user,
+                capability=obj.capability,
+                operation=operation,
+                target_user=obj.user,
+                reason=None,
+                request=request,
+                allow_empty_reason=True,
+            )
+            if previous is None:
+                obj.pk = StaffCapabilityAssignment.objects.get(user=obj.user, capability=obj.capability).pk
+        obj.refresh_from_db()
+
+
+@admin.register(StaffCapabilityRestriction)
+class StaffCapabilityRestrictionAdmin(SuperuserPrivacyAdminMixin, admin.ModelAdmin):
+    list_display = ("user", "capability", "is_active", "restricted_by", "updated_at")
+    list_filter = ("capability", "is_active")
+    readonly_fields = ("restricted_at", "restricted_by", "removed_at", "removed_by", "created_at", "updated_at")
+
+    def get_readonly_fields(self, request, obj=None):
+        fields = list(super().get_readonly_fields(request, obj))
+        if obj is not None:
+            fields.extend(("user", "capability"))
+        return tuple(dict.fromkeys(fields))
+
+    def save_model(self, request, obj, form, change):
+        previous = StaffCapabilityRestriction.objects.filter(pk=obj.pk).first() if change else None
+        if previous is not None and (previous.user_id != obj.user_id or previous.capability_id != obj.capability_id):
+            raise PermissionDenied("Capability restriction identity fields cannot be changed in place.")
+        if previous is None or previous.is_active != obj.is_active:
+            operation = (
+                CapabilityProposal.Operation.INDIVIDUAL_RESTRICT
+                if obj.is_active
+                else CapabilityProposal.Operation.INDIVIDUAL_UNRESTRICT
+            )
+            apply_superuser_capability_change(
+                actor_user=request.user,
+                capability=obj.capability,
+                operation=operation,
+                target_user=obj.user,
+                reason=None,
+                request=request,
+                allow_empty_reason=True,
+            )
+            if previous is None:
+                obj.pk = StaffCapabilityRestriction.objects.get(user=obj.user, capability=obj.capability).pk
+        obj.refresh_from_db()

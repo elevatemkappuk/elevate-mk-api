@@ -19,6 +19,12 @@ from staff_access.models import StaffRole, StaffRoleAssignment
 class CrmSessionExpirationTests(TestCase):
     def setUp(self):
         self.password = "Password-123!"
+        self.bootstrap = User.objects.create_superuser(
+            email="session-bootstrap@example.com",
+            password=self.password,
+            person_first_name="Session",
+            person_last_name="Bootstrap",
+        )
         self.user = User.objects.create_user(
             email="staff@example.com",
             password=self.password,
@@ -41,6 +47,7 @@ class CrmSessionExpirationTests(TestCase):
         StaffRoleAssignment.objects.assign_role(
             user=self.user,
             role=StaffRole.objects.get(code=StaffRole.CRM_MANAGER),
+            assigned_by=self.bootstrap,
         )
 
     def login_session(self, path="/api/v1/auth/login/"):

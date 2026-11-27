@@ -75,10 +75,10 @@ jobs:
               raise SystemExit("CSRF bootstrap: csrftoken cookie was not issued")
           print("CSRF bootstrap: passed")
 
-          schema = get("/api/schema/?format=json", 200, parse_json=True)
-          if not isinstance(schema, dict) or not isinstance(schema.get("openapi"), str) or not schema["openapi"].startswith("3."):
-              raise SystemExit("OpenAPI schema: missing valid OpenAPI version")
-          print("OpenAPI schema: passed")
+          get("/api/schema/?format=json", 403)
+          get("/api/docs/", 403)
+          get("/api/redoc/", 403)
+          print("Protected API documentation: passed")
 
           get("/api/v1/auth/me/", 401)
           print("Authentication protection: passed")

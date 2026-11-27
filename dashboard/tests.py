@@ -10,6 +10,7 @@ from memberships.models import Membership
 from people.models import Person
 from professional_profiles.models import Industry, ProfessionalProfile
 from staff_access.models import StaffRole, StaffRoleAssignment
+from config.test_utils import test_actor
 from campaigns.models import Campaign
 from .queries import dashboard_projection
 
@@ -44,7 +45,7 @@ class DashboardTests(APITestCase):
         self.user.save()
         self.assertEqual(self.client.get("/api/v1/dashboard/").status_code, 403)
         for role in self.roles.values():
-            assignment = StaffRoleAssignment.objects.assign_role(user=self.user, role=role)
+            assignment = StaffRoleAssignment.objects.assign_role(user=self.user, role=role, assigned_by=test_actor())
             response = self.client.get("/api/v1/dashboard/")
             self.assertEqual(response.status_code, 200)
             self.assertEqual(set(response.data), {"overview", "growth", "community_profile", "marketing", "attention"})

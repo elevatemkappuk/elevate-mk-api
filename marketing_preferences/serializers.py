@@ -1,7 +1,9 @@
 from rest_framework import serializers
 
 from marketing_preferences.models import MarketingPreference
+from people.privacy import mask_email, person_privacy_capabilities
 from professional_profiles.models import ProfessionalProfile
+from staff_access.models import CapabilityDefinition
 
 
 PEOPLE_ORDERING_CHOICES = (
@@ -96,7 +98,10 @@ class AudiencePreviewPersonSerializer(serializers.Serializer):
     exclusion_reasons = serializers.SerializerMethodField()
 
     def get_primary_email(self, instance):
-        return instance.primary_email or None
+        capabilities = person_privacy_capabilities(request=self.context.get("request"))
+        if CapabilityDefinition.PERSON_CONTACT_READ in capabilities:
+            return instance.primary_email or None
+        return mask_email(instance.primary_email)
 
     def get_exclusion_reasons(self, instance):
         classification = instance.audience_classification

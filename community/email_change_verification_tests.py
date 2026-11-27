@@ -88,6 +88,10 @@ class CommunityEmailChangeVerificationApiTests(TestCase):
 
     def test_authenticated_verification_logs_out_current_session_without_auto_login(self):
         self.client.force_login(self.user)
+        session = self.client.session
+        session["elevate_auth_context"] = "community"
+        session["elevate_auth_version"] = self.user.auth_version
+        session.save()
 
         response = self.client.post(self.url, {"request_id": str(self.change_request.public_id), "token": self.raw_token}, format="json")
 

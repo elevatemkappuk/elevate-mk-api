@@ -2,6 +2,17 @@
 Status: Living Documentation
 Last Updated: 2026-08-31
 
+## API documentation authentication boundary
+
+Swagger, ReDoc, and raw OpenAPI schema requests accept Django session
+authentication only when protected. Mobile JWT credentials and Community
+authentication are intentionally rejected for technical documentation access.
+Local development is explicitly configured as open; staging requires the
+dedicated technical documentation permission or active Django superuser
+authority; production is disabled by default and requires an explicit secure
+configuration exception. This boundary does not change CRM session, mobile
+JWT, or Community authentication contracts.
+
 ## Current Authentication Architecture
 Elevate currently separates human identity from authentication account data:
 
@@ -361,10 +372,11 @@ Current logout endpoint:
 Current logout flow:
 
 1. An authenticated client sends the logout request.
-2. While the authenticated actor is still available, `LogoutView` writes an append-only `AuditEvent` with action `LOGOUT`.
-3. `LogoutView` then calls Django `logout(request)`.
-4. Django clears the authenticated session state.
-5. Subsequent protected requests from that client are anonymous unless a new login occurs.
+2. `LogoutView` accepts only the Django CRM session authentication class; mobile JWT logout remains exclusively on `TokenLogoutView`.
+3. While the authenticated actor is still available, `LogoutView` writes an append-only `AuditEvent` with action `LOGOUT`.
+4. `LogoutView` then calls Django `logout(request)`.
+5. Django clears the authenticated session state.
+6. Subsequent protected requests from that client are anonymous unless a new login occurs.
 
 Request-flow diagram:
 ```text
@@ -468,10 +480,34 @@ Current `/api/v1/auth/me/` behavior:
 - does not become a staff-only endpoint
 - does not use Django `is_staff` or `is_superuser` as Elevate operational authorization
 
-## Planned Authorization
-Planned, not yet implemented:
+## Implemented Authorization Boundary
 
-- Staff CRM authorization separated from authentication
-- Elevate operational authorization based on `StaffRole` and `StaffRoleAssignment`
+Staff CRM authorization is implemented separately from authentication.
 
-Those models, permissions, and enforcement rules are not currently implemented.
+- Elevate operational authorization is based on active `StaffRoleAssignment`
+  rows linked to active canonical `StaffRole` definitions.
+- The current operational CRM roles are `CRM_ADMIN`, `CRM_MANAGER`, and
+  `CRM_VIEWER`.
+- `GET /api/v1/staff/access/me/` is admitted only through a Django CRM session
+  and an active operational CRM role; mobile JWT authentication is not accepted
+  for that endpoint.
+- The Phase 1A.4A effective-access response is intentionally limited to the
+  exact `capability_codes` and `policy_version` fields. Its CRM capability
+  disclosure allowlist is currently empty.
+
+Evidence status: the authorization boundary and Phase 1A.4A route contract are
+source-inspected. The focused API suite passed 34/34 against isolated
+PostgreSQL database `test_elevate_gdpr_phase1a4a_20261124`; `manage.py check`
+passed; `makemigrations --check --dry-run` reported `No changes detected`;
+`migrate --plan` reported no planned migration operations; and `git diff --check`
+was clean. No schema or migration files changed or were applied. Broader
+runtime, deployment, CRM, and cross-repository behavior remain unverified.
+
+## Phase 1A.3 audit provenance
+
+Implemented and locally verified in the isolated Phase 1A.3 tests. HTTP audit
+provenance is generated server-side by the audit
+middleware; caller-supplied request identifiers and IP values cannot replace
+the trusted request context. Background, system, migration, and legacy events
+retain explicit provenance classifications. This does not change login,
+session, JWT, credential, or authentication-revocation contracts.

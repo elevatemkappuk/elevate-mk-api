@@ -15,6 +15,7 @@ from datetime import timedelta
 import math
 
 import environ
+from django.core.exceptions import ImproperlyConfigured
 from corsheaders.defaults import default_headers
 
 from config.storage import build_storage_config
@@ -36,6 +37,17 @@ SECRET_KEY = env("DJANGO_SECRET_KEY")
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = env("DJANGO_DEBUG")
+
+ELEVATE_ENVIRONMENT = env("ELEVATE_ENVIRONMENT", default="").strip().lower()
+if ELEVATE_ENVIRONMENT not in {"local", "staging", "production"}:
+    raise ImproperlyConfigured(
+        "ELEVATE_ENVIRONMENT must be explicitly set to local, staging, or production."
+    )
+API_DOCUMENTATION_PRODUCTION_ENABLED = env.bool(
+    "API_DOCUMENTATION_PRODUCTION_ENABLED",
+    default=False,
+)
+API_DOCUMENTATION_PERMISSION = "accounts.access_api_documentation"
 
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=[])
 
@@ -86,6 +98,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'audit.middleware.AuditProvenanceMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]

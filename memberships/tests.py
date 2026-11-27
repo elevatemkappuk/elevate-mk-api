@@ -9,6 +9,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from accounts.models import User
+from config.test_utils import test_actor
 from audit.models import AuditEvent
 from memberships.models import Membership
 from people.models import Person
@@ -181,10 +182,11 @@ class MembershipIndependenceTests(TestCase):
             password="testpass123",
             person_first_name="Staff",
             person_last_name="Only",
-            person_record_type=Person.RecordType.STAFF,
+            person_record_type=Person.RecordType.TECHNICAL,
+            is_superuser=True,
         )
         role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
-        StaffRoleAssignment.objects.assign_role(user=user, role=role)
+        StaffRoleAssignment.objects.assign_role(user=user, role=role, assigned_by=test_actor())
 
         self.assertFalse(hasattr(user.person, "membership"))
 
@@ -227,9 +229,9 @@ class MembershipApiTests(TestCase):
         admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
         manager_role = StaffRole.objects.get(code=StaffRole.CRM_MANAGER)
         viewer_role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
-        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=manager_role)
-        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=viewer_role)
+        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=admin_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=manager_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=viewer_role, assigned_by=test_actor())
 
         self.business_person = Person.objects.create(
             first_name="Amina",
@@ -271,8 +273,9 @@ class MembershipApiTests(TestCase):
             person_first_name="Tech",
             person_last_name="Admin",
             person_record_type=Person.RecordType.TECHNICAL,
+            is_superuser=True,
         )
-        StaffRoleAssignment.objects.assign_role(user=self.technical_admin_user, role=admin_role)
+        StaffRoleAssignment.objects.assign_role(user=self.technical_admin_user, role=admin_role, assigned_by=test_actor())
 
     def authenticate(self, user):
         self.client.force_authenticate(user=user)
@@ -416,9 +419,9 @@ class MakeMembershipApiTests(TestCase):
         admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
         manager_role = StaffRole.objects.get(code=StaffRole.CRM_MANAGER)
         viewer_role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
-        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=manager_role)
-        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=viewer_role)
+        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=admin_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=manager_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=viewer_role, assigned_by=test_actor())
 
         self.business_person = Person.objects.create(
             first_name="Amina",
@@ -860,9 +863,9 @@ class EndMembershipApiTests(TestCase):
         admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
         manager_role = StaffRole.objects.get(code=StaffRole.CRM_MANAGER)
         viewer_role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
-        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=manager_role)
-        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=viewer_role)
+        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=admin_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=manager_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=viewer_role, assigned_by=test_actor())
 
         self.business_person = Person.objects.create(
             first_name="Amina",

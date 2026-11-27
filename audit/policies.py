@@ -1,8 +1,14 @@
 from django.db.models import Q
+import hashlib
+import logging
 
 from audit.models import AuditEvent
 from staff_access.models import StaffRole
-from staff_access.permissions import get_active_staff_role_codes_for_user
+from staff_access.permissions import get_active_staff_role_codes_for_user, user_has_any_active_staff_role
+from staff_access.models import CapabilityDefinition
+from staff_access.permissions import user_has_capability
+
+logger = logging.getLogger(__name__)
 
 PERSON_AUDIT_RESTRICTED_ENTITY_TYPES = frozenset({"InternalNote"})
 PERSON_AUDIT_RESTRICTED_ACTIONS = frozenset(
@@ -24,6 +30,7 @@ PERSON_AUDIT_DESCRIPTION_OVERRIDES = {
     AuditEvent.Action.PERSON_UPDATED: "Person updated",
     AuditEvent.Action.PERSON_ARCHIVED: "Person archived",
     AuditEvent.Action.PERSON_RESTORED: "Person restored",
+    AuditEvent.Action.PRIVACY_PERSON_DISCLOSED: "Protected Person data disclosed",
     AuditEvent.Action.MEMBERSHIP_CREATED: "Membership created",
     AuditEvent.Action.MEMBERSHIP_ENDED: "Membership ended",
     AuditEvent.Action.PROFESSIONAL_PROFILE_CREATED: "Professional profile created",
@@ -56,7 +63,9 @@ PERSON_AUDIT_ALLOWED_CHANGE_FIELDS_BY_ENTITY_TYPE = {
 
 def build_person_audit_scope_q(person_id):
     normalized_person_id = str(person_id)
-    return Q(metadata__person_id=normalized_person_id) | Q(
+    return Q(subjects__subject_type="PERSON", subjects__person_id=normalized_person_id) | Q(
+        metadata__person_id=normalized_person_id
+    ) | Q(
         entity_type="Person",
         entity_id=normalized_person_id,
     )
@@ -126,5 +135,62 @@ def project_safe_change_value(value):
     return None
 
 
+def get_privacy_audit_queryset_for_user(user, *, person):
+    """Return a privacy projection after capability and Person-scope checks."""
+    if not getattr(user, "is_authenticated", False) or not getattr(user, "is_active", False):
+        return AuditEvent.objects.none()
+    if not user_has_capability(user, CapabilityDefinition.PRIVACY_AUDIT_READ):
+        return AuditEvent.objects.none()
+    if person is None or getattr(person, "record_type", None) not in {"COMMUNITY", "STAFF"}:
+        return AuditEvent.objects.none()
+    if getattr(person, "record_type", None) != "COMMUNITY" and not user_has_any_active_staff_role(
+        user, (StaffRole.CRM_ADMIN,)
+    ):
+        return AuditEvent.objects.none()
+    return AuditEvent.objects.privacy().select_related("actor_user").only(
+        "id",
+        "action",
+        "entity_type",
+        "entity_id",
+        "actor_user",
+        "actor_user__email",
+        "occurred_at",
+        "changes",
+    ).filter(build_person_audit_scope_q(person.pk)).order_by("-occurred_at", "-id")
+
+
 def is_safe_change_scalar(value):
     return value is None or isinstance(value, (bool, int, float, str))
+
+
+def record_privacy_authorization_failure(*, request, denial_code, person_id=None, operation="PRIVACY_READ"):
+    """Persist a safe privacy denial without recording request data or identifiers."""
+    from audit.services import record_audit_event
+
+    actor = getattr(request, "user", None)
+    if not getattr(actor, "is_authenticated", False):
+        actor = None
+    target = "privacy"
+    if person_id is not None:
+        target = hashlib.sha256(f"privacy-person:{person_id}".encode()).hexdigest()[:24]
+    try:
+        record_audit_event(
+            action=AuditEvent.Action.CAPABILITY_PERMISSION_MUTATED,
+            actor_user=actor,
+            entity_type="PrivacyAuthorization",
+            entity_id=target,
+            metadata={
+                "event_type": "PRIVACY_AUTHORIZATION_DENIED",
+                "denial_code": str(denial_code),
+                "operation": str(operation),
+                "outcome": "DENIED",
+            },
+            audit_domain=AuditEvent.Domain.PRIVACY,
+        )
+    except Exception:
+        logger.exception(
+            "Unable to persist privacy authorization-denial audit event.",
+            extra={"denial_code": str(denial_code), "operation": str(operation)},
+        )
+        return False
+    return True

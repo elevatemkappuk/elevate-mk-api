@@ -1,11 +1,15 @@
+from copy import copy
+
 from interests.models import PersonInterest
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.db.models import Prefetch, Q
+from django.http import HttpResponse
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import generics, serializers, status
-from rest_framework.exceptions import APIException, NotFound
+from rest_framework.exceptions import APIException, NotFound, PermissionDenied
+from rest_framework.negotiation import DefaultContentNegotiation
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -40,12 +44,14 @@ from people.serializers import (
 from people.services import CreateNewIdentityCollision, correct_person_classification, evaluate_create_new_identity
 from external_references.services import enqueue_coalesced_person_sync_job, enqueue_person_sync_job
 from people.querying import PeopleDirectoryQuery
+from people.privacy import person_privacy_capabilities, record_person_privacy_disclosure
 from memberships.models import Membership
 from community.models import CommunityAccountInvitation
-from staff_access.models import StaffRole
-from staff_access.permissions import HasActiveStaffRoleCodes, user_has_any_active_staff_role
+from staff_access.models import CapabilityDefinition, StaffRole
+from staff_access.permissions import HasActiveStaffRoleCodes, get_effective_capability_codes_for_user, user_has_any_active_staff_role
 from skills.models import PersonSkill
 from tags.models import PersonTag
+from people.export import build_people_export, export_columns, record_export_audit
 
 
 class PeoplePagination(PageNumberPagination):
@@ -153,6 +159,75 @@ class BusinessPersonQuerysetMixin:
         return person
 
 
+class PersonExportContentNegotiation(DefaultContentNegotiation):
+    """Keep the export format query parameter out of DRF renderer selection."""
+
+    def select_renderer(self, request, renderers, format_suffix=None):
+        export_format = request.query_params.get(self.settings.URL_FORMAT_OVERRIDE)
+        if export_format in {"csv", "xlsx"}:
+            request = copy(request)
+            request._request = copy(request._request)
+            request._request.GET = request._request.GET.copy()
+            request._request.GET.pop(self.settings.URL_FORMAT_OVERRIDE, None)
+        return super().select_renderer(request, renderers, format_suffix)
+
+
+class PersonExportView(BusinessPersonQuerysetMixin, generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [IsAuthenticated, HasPeopleAccess]
+    content_negotiation_class = PersonExportContentNegotiation
+
+    def get(self, request, *args, **kwargs):
+        query_serializer = PersonListQuerySerializer(data=request.query_params)
+        query_serializer.is_valid(raise_exception=True)
+        export_format = request.query_params.get("format", "csv").lower()
+        if export_format not in {"csv", "xlsx"}:
+            raise serializers.ValidationError({"format": "format must be csv or xlsx."})
+
+        capabilities = person_privacy_capabilities(request=request)
+        export_capability = get_effective_capability_codes_for_user(
+            request.user,
+            requested_codes={CapabilityDefinition.PERSON_EXPORT},
+            request=request,
+        )
+        if CapabilityDefinition.PERSON_EXPORT not in export_capability:
+            record_export_audit(
+                request=request,
+                export_format=export_format,
+                fields=export_columns(capabilities),
+                record_count=0,
+                outcome="DENIED",
+                reason_code="PERSON_EXPORT_REQUIRED",
+            )
+            raise PermissionDenied("PERSON_EXPORT is required for People exports.")
+
+        params = dict(query_serializer.validated_data)
+        if not user_has_any_active_staff_role(request.user, (StaffRole.CRM_ADMIN,)):
+            params["record_type"] = [Person.RecordType.COMMUNITY.value]
+        queryset = PeopleDirectoryQuery(
+            self.get_business_people_queryset(),
+            params,
+            allow_contact_search=CapabilityDefinition.PERSON_CONTACT_READ in capabilities,
+        ).apply().select_related("professional_profile", "membership")
+        rows = list(queryset.order_by("last_name", "first_name", "pk"))
+        columns = export_columns(capabilities)
+        payload = build_people_export(rows, capabilities=capabilities, export_format=export_format)
+        record_export_audit(
+            request=request,
+            export_format=export_format,
+            fields=columns,
+            record_count=len(rows),
+            outcome="SUCCESS",
+            reason_code=None,
+        )
+        response = HttpResponse(payload["content"], content_type=payload["content_type"])
+        response["Content-Disposition"] = f'attachment; filename="{payload["filename"]}"'
+        response["Cache-Control"] = "private, no-store"
+        response["Pragma"] = "no-cache"
+        response["Expires"] = "0"
+        return response
+
+
 class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
     authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     serializer_class = PersonDirectoryListSerializer
@@ -225,7 +300,11 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
         ).select_related("transactional_email_job").order_by("-created_at", "-id")
         if not user_has_any_active_staff_role(self.request.user, (StaffRole.CRM_ADMIN,)):
             params = {**params, "record_type": [Person.RecordType.COMMUNITY.value]}
-        return PeopleDirectoryQuery(self.get_business_people_queryset(), params).apply().select_related(
+        return PeopleDirectoryQuery(
+            self.get_business_people_queryset(),
+            params,
+            allow_contact_search=CapabilityDefinition.PERSON_CONTACT_READ in person_privacy_capabilities(request=self.request),
+        ).apply().select_related(
             "user", "professional_profile", "membership",
         ).prefetch_related(
             Prefetch(
@@ -264,7 +343,7 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
         tags=["People"],
     )
     def post(self, request, *args, **kwargs):
-        input_serializer = PersonCreateSerializer(data=request.data)
+        input_serializer = PersonCreateSerializer(data=request.data, context={"request": request})
         input_serializer.is_valid(raise_exception=True)
 
         with transaction.atomic():
@@ -274,7 +353,7 @@ class PeopleListView(BusinessPersonQuerysetMixin, generics.ListAPIView):
                 "created": {"from": False, "to": True},
             }, identity_override_metadata(input_serializer.validated_data))
 
-        return Response(PersonListSerializer(person).data, status=status.HTTP_201_CREATED)
+        return Response(PersonListSerializer(person, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
     @staticmethod
     def create_person(validated_data):
@@ -368,7 +447,7 @@ class PersonMemberCreateView(generics.GenericAPIView):
         tags=["People", "Membership"],
     )
     def post(self, request, *args, **kwargs):
-        input_serializer = PersonMemberCreateSerializer(data=request.data)
+        input_serializer = PersonMemberCreateSerializer(data=request.data, context={"request": request})
         input_serializer.is_valid(raise_exception=True)
         person_data = PeopleListView.person_data(input_serializer.validated_data)
 
@@ -407,7 +486,7 @@ class PersonMemberCreateView(generics.GenericAPIView):
                 metadata={"person_id": str(person.id)},
             )
 
-        return Response(PersonListSerializer(person).data, status=status.HTTP_201_CREATED)
+        return Response(PersonListSerializer(person, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 
 class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
@@ -454,6 +533,14 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
         ],
     )
     def get(self, request, *args, **kwargs):
+        person = self.get_object()
+        if request.user.is_superuser:
+            record_person_privacy_disclosure(
+                request=request,
+                person=person,
+                capabilities=person_privacy_capabilities(request=request),
+                operation="PERSON_DETAIL",
+            )
         return super().get(request, *args, **kwargs)
 
     def get_queryset(self):
@@ -484,7 +571,7 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
         tags=["People"],
     )
     def patch(self, request, *args, **kwargs):
-        input_serializer = PersonUpdateSerializer(data=request.data)
+        input_serializer = PersonUpdateSerializer(data=request.data, context={"request": request})
         input_serializer.is_valid(raise_exception=True)
 
         with transaction.atomic():
@@ -556,7 +643,7 @@ class PersonDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
                         source_event_id=audit_event.id,
                     )
 
-        return Response(PersonListSerializer(person).data)
+        return Response(PersonListSerializer(person, context={"request": request}).data)
 
 
 class PersonClassificationCorrectionView(generics.GenericAPIView):
@@ -580,7 +667,7 @@ class PersonClassificationCorrectionView(generics.GenericAPIView):
             raise NotFound("Not found.")
         except DjangoValidationError as error:
             raise serializers.ValidationError(error.message_dict)
-        return Response(PersonListSerializer(person).data)
+        return Response(PersonListSerializer(person, context={"request": request}).data)
 
 
 class PersonArchiveView(BusinessPersonQuerysetMixin, generics.GenericAPIView):
@@ -609,7 +696,7 @@ class PersonArchiveView(BusinessPersonQuerysetMixin, generics.GenericAPIView):
             PeopleListView.record_person_audit(
                 AuditEvent.Action.PERSON_ARCHIVED, request.user, person, {"archived": {"from": False, "to": True}}
             )
-        return Response(PersonListSerializer(person).data)
+        return Response(PersonListSerializer(person, context={"request": request}).data)
 
     def get_locked_business_person(self):
         person = self.get_business_people_queryset().select_for_update().filter(
@@ -643,7 +730,7 @@ class PersonRestoreView(PersonArchiveView):
             PeopleListView.record_person_audit(
                 AuditEvent.Action.PERSON_RESTORED, request.user, person, {"archived": {"from": True, "to": False}}
             )
-        return Response(PersonListSerializer(person).data)
+        return Response(PersonListSerializer(person, context={"request": request}).data)
 
 
 class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPIView):
@@ -754,6 +841,14 @@ class PersonOverviewDetailView(BusinessPersonQuerysetMixin, generics.RetrieveAPI
         ],
     )
     def get(self, request, *args, **kwargs):
+        person = self.get_object()
+        if request.user.is_superuser:
+            record_person_privacy_disclosure(
+                request=request,
+                person=person,
+                capabilities=person_privacy_capabilities(request=request),
+                operation="PERSON_OVERVIEW",
+            )
         return super().get(request, *args, **kwargs)
 
     def get_queryset(self):
@@ -910,7 +1005,9 @@ class PersonAuditHistoryView(BusinessPersonQuerysetMixin, generics.GenericAPIVie
         return self.get_paginated_response(serializer.data)
 
     def get_queryset_for_person(self, person_id):
-        queryset = AuditEvent.objects.select_related("actor_user").filter(build_person_audit_scope_q(person_id))
+        queryset = AuditEvent.objects.select_related("actor_user").operational().filter(
+            build_person_audit_scope_q(person_id)
+        )
         queryset = filter_person_audit_visibility_for_user(queryset, self.request.user)
         return queryset.order_by("-occurred_at", "-id")
 

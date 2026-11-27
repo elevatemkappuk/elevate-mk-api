@@ -23,14 +23,18 @@ FILTER_KEYS = (
 )
 
 
-def build_active_people_selection(selection, ordering):
+def build_active_people_selection(selection, ordering, *, allow_contact_search=True):
     """Apply the canonical People directory semantics to active BUSINESS People."""
     query_params = {
         **selection,
         "record_state": "active",
         "ordering": ordering,
     }
-    return PeopleDirectoryQuery(Person.objects.active_business(), query_params).apply()
+    return PeopleDirectoryQuery(
+        Person.objects.active_business(),
+        query_params,
+        allow_contact_search=allow_contact_search,
+    ).apply()
 
 
 def annotate_email_marketing_classification(queryset):

@@ -15,6 +15,12 @@ from staff_access.models import StaffRole, StaffRoleAssignment
 class AuthenticationRevocationTests(TestCase):
     def setUp(self):
         self.password = "Old-password-123!"
+        self.bootstrap = User.objects.create_superuser(
+            email="revocation-bootstrap@example.com",
+            password=self.password,
+            person_first_name="Revocation",
+            person_last_name="Bootstrap",
+        )
         self.user = User.objects.create_user(
             email="member@example.com",
             password=self.password,
@@ -172,14 +178,16 @@ class AuthenticationRevocationTests(TestCase):
 
     def test_staff_role_removal_invalidates_crm_session_until_fresh_login(self):
         role = StaffRole.objects.get(code=StaffRole.CRM_MANAGER)
-        assignment = StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=role)
+        assignment = StaffRoleAssignment.objects.assign_role(
+            user=self.staff_user, role=role, assigned_by=self.bootstrap
+        )
         crm_client = self.login_session(user=self.staff_user)
         self.assertEqual(crm_client.get("/api/v1/people/").status_code, 200)
 
-        assignment.revoke()
+        assignment.revoke(revoked_by=self.bootstrap)
 
         self.assertEqual(crm_client.get("/api/v1/people/").status_code, 401)
-        assignment.reactivate()
+        assignment.reactivate(assigned_by=self.bootstrap)
         self.assertEqual(crm_client.get("/api/v1/people/").status_code, 401)
 
         fresh_client = self.login_session(user=self.staff_user)

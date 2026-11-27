@@ -213,7 +213,9 @@ def _provider_error_code(error):
 
 
 def _safe_provider_error(error):
-    return " ".join(str(error or "Provider preparation failed.").split())[:500]
+    from campaigns.serializers import safe_provider_error_message
+
+    return safe_provider_error_message(error) or "Provider preparation failed."
 
 
 def _safe_reconciliation_code(result):

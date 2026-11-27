@@ -9,6 +9,7 @@ from audit.models import AuditEvent
 from marketing_preferences.models import MarketingPreference
 from people.models import Person
 from staff_access.models import StaffRole, StaffRoleAssignment
+from config.test_utils import test_actor
 from accounts.models import User
 
 from .models import Campaign, CampaignPreparation, CampaignRecipientSnapshot
@@ -35,8 +36,8 @@ class CampaignFoundationApiTests(TestCase):
         self._preference(self.opted_out, MarketingPreference.State.OPTED_OUT)
 
     def _staff(self, email, role):
-        user = User.objects.create_user(email=email, password="password123", person_first_name="Campaign", person_last_name="Staff", person_record_type=Person.RecordType.TECHNICAL)
-        StaffRoleAssignment.objects.assign_role(user=user, role=StaffRole.objects.get(code=role))
+        user = User.objects.create_user(email=email, password="password123", person_first_name="Campaign", person_last_name="Staff", person_record_type=Person.RecordType.STAFF)
+        StaffRoleAssignment.objects.assign_role(user=user, role=StaffRole.objects.get(code=role), assigned_by=test_actor())
         return user
 
     def _preference(self, person, state):
@@ -117,6 +118,41 @@ class CampaignFoundationApiTests(TestCase):
         self.authenticate(self.viewer)
         self.assertEqual(self.client.get(f"{self.create_url}{response.data['id']}/").status_code, 200)
         self.assertEqual(self.client.get(self.create_url).status_code, 200)
+
+    def test_viewer_receives_masked_historical_recipient_and_safe_campaign_search(self):
+        campaign = self._snapshot_ready_campaign()
+        campaign.audience_selection["q"] = "included@example.com"
+        campaign.save(update_fields=["audience_selection", "updated_at"])
+        self.authenticate(self.viewer)
+
+        campaign_response = self.client.get(f"{self.create_url}{campaign.id}/")
+        self.assertEqual(campaign_response.status_code, 200)
+        self.assertEqual(campaign_response.data["audience_selection"]["q"], "")
+
+        recipient_response = self.client.get(f"{self.create_url}{campaign.id}/recipients/?page_size=100")
+        self.assertEqual(recipient_response.status_code, 200)
+        row = next(item for item in recipient_response.data["results"] if item["person"] == self.included.id)
+        self.assertEqual(row["email_snapshot"], "i***@e***.com")
+        self.assertNotIn("INCLUDED@example.com", str(recipient_response.data))
+
+    def test_campaign_provider_error_projection_redacts_sensitive_diagnostics(self):
+        campaign = self._snapshot_ready_campaign()
+        preparation = campaign.current_preparation
+        preparation.status = CampaignPreparation.Status.PROVIDER_FAILED
+        preparation.provider_error_message = "Contact included@example.com at +44 7700 900123; token=secret-value https://provider.example/contact/1"
+        preparation.save(update_fields=["status", "provider_error_message", "updated_at"])
+        campaign.status = Campaign.Status.PROVIDER_FAILED
+        campaign.save(update_fields=["status", "updated_at"])
+        self.authenticate(self.viewer)
+
+        response = self.client.get(f"{self.create_url}{campaign.id}/")
+
+        self.assertEqual(response.status_code, 200)
+        message = response.data["current_preparation"]["provider_error_message"]
+        self.assertNotIn("included@example.com", message)
+        self.assertNotIn("7700", message)
+        self.assertNotIn("secret-value", message)
+        self.assertNotIn("https://provider.example", message)
 
     @override_settings(BREVO_MARKETING_CAMPAIGNS_URL="https://app.brevo.example/campaigns/listing")
     def test_campaigns_navigation_url_is_only_exposed_for_stored_provider_campaigns_and_survives_archive(self):
@@ -416,7 +452,7 @@ class CampaignFoundationApiTests(TestCase):
         response = self.client.get(f"{self.create_url}{campaign.id}/recipients/?page_size=100")
         self.assertEqual(response.status_code, 200)
         row = next(item for item in response.data["results"] if item["id"] == snapshot.id)
-        self.assertEqual(row["email_snapshot"], historical_email)
+        self.assertEqual(row["email_snapshot"], "i***@e***.com")
         self.assertEqual(row["first_name_snapshot"], snapshot.first_name_snapshot)
         self.assertEqual(row["decision"], snapshot.decision)
         self.assertEqual(row["provider_error_code"], "BREVO_CONTACT_NOT_FOUND_FOR_EXISTING_REFERENCE")

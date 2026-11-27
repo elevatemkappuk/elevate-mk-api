@@ -80,6 +80,11 @@ class User(AbstractUser):
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = []
 
+    class Meta:
+        permissions = [
+            ("access_api_documentation", "Can access protected API documentation"),
+        ]
+
     objects = UserManager()
 
     def save(self, *args, **kwargs):

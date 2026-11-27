@@ -8,9 +8,10 @@ from rest_framework.test import APIClient
 from accounts.models import User
 from audit.admin import AuditEventAdmin
 from audit.models import AuditEvent, AuditEventImmutableError
-from audit.services import record_audit_event
+from audit.services import TrustedAuditProvenance, record_audit_event, set_audit_provenance
 from people.models import Person
 from staff_access.models import StaffRole, StaffRoleAssignment
+from config.test_utils import test_actor
 
 
 class AuditEventModelTests(TestCase):
@@ -33,6 +34,50 @@ class AuditEventModelTests(TestCase):
         self.assertEqual(event.actor_user, self.user)
         self.assertEqual(event.entity_type, "User")
         self.assertEqual(event.entity_id, str(self.user.id))
+
+    def test_untrusted_system_context_does_not_persist_caller_request_context(self):
+        event = record_audit_event(
+            action=AuditEvent.Action.LOGIN_FAILED,
+            entity_type="Authentication",
+            request_id="caller-supplied-request-id",
+            ip_address="203.0.113.10",
+        )
+
+        self.assertIsNone(event.request_id)
+        self.assertIsNone(event.ip_address)
+        self.assertFalse(event.provenance_trusted)
+
+    def test_callers_cannot_inject_trusted_provenance(self):
+        provenance = TrustedAuditProvenance(
+            source=AuditEvent.ProvenanceSource.HTTP_REQUEST,
+            provenance_id="forged",
+            trusted=True,
+        )
+        with self.assertRaises(ValueError):
+            set_audit_provenance(provenance)
+        with self.assertRaises(ValueError):
+            record_audit_event(
+                action=AuditEvent.Action.LOGIN_FAILED,
+                entity_type="Authentication",
+                provenance=provenance,
+            )
+
+    def test_untrusted_http_provenance_discards_request_context(self):
+        provenance = TrustedAuditProvenance(
+            source=AuditEvent.ProvenanceSource.HTTP_REQUEST,
+            provenance_id="untrusted-http",
+            request_id="forged-request-id",
+            ip_address="203.0.113.10",
+            trusted=False,
+        )
+        event = record_audit_event(
+            action=AuditEvent.Action.LOGIN_FAILED,
+            entity_type="Authentication",
+            provenance=provenance,
+        )
+        self.assertIsNone(event.request_id)
+        self.assertIsNone(event.ip_address)
+        self.assertFalse(event.provenance_trusted)
 
     def test_actor_user_may_be_null(self):
         event = record_audit_event(
@@ -132,7 +177,10 @@ class AuditEventModelTests(TestCase):
             entity_type="Authentication",
         )
 
-        self.assertEqual(AuditEvent.objects.count(), 1)
+        self.assertEqual(
+            AuditEvent.objects.filter(action=AuditEvent.Action.LOGIN_FAILED).count(),
+            1,
+        )
 
 
 class AuditEventAdminTests(TestCase):
@@ -182,7 +230,7 @@ class AuthenticationAuditIntegrationTests(TestCase):
             format="json",
         )
 
-        event = AuditEvent.objects.get()
+        event = AuditEvent.objects.get(action=AuditEvent.Action.LOGIN_SUCCEEDED)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(event.action, AuditEvent.Action.LOGIN_SUCCEEDED)
         self.assertEqual(event.actor_user, self.user)
@@ -198,7 +246,7 @@ class AuthenticationAuditIntegrationTests(TestCase):
             format="json",
         )
 
-        event = AuditEvent.objects.get()
+        event = AuditEvent.objects.get(action=AuditEvent.Action.LOGIN_FAILED)
         self.assertEqual(response.status_code, 400)
         self.assertEqual(event.action, AuditEvent.Action.LOGIN_FAILED)
         self.assertIsNone(event.actor_user)
@@ -212,7 +260,7 @@ class AuthenticationAuditIntegrationTests(TestCase):
             format="json",
         )
 
-        event = AuditEvent.objects.get()
+        event = AuditEvent.objects.get(action=AuditEvent.Action.LOGIN_FAILED)
         self.assertEqual(response.status_code, 400)
         self.assertEqual(event.action, AuditEvent.Action.LOGIN_FAILED)
         self.assertIsNone(event.actor_user)
@@ -223,7 +271,10 @@ class AuthenticationAuditIntegrationTests(TestCase):
         response = self.client.post(self.login_url, {"email": "member@example.com"}, format="json")
 
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(AuditEvent.objects.count(), 0)
+        self.assertEqual(
+            AuditEvent.objects.filter(action=AuditEvent.Action.LOGIN_FAILED).count(),
+            0,
+        )
 
     def test_authenticated_logout_creates_exactly_one_logout_event(self):
         self.client.post(
@@ -257,7 +308,15 @@ class AuthenticationAuditIntegrationTests(TestCase):
         response = self.client.get(self.csrf_url)
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(AuditEvent.objects.count(), 0)
+        self.assertEqual(
+            AuditEvent.objects.exclude(
+                action__in=[
+                    AuditEvent.Action.CAPABILITY_POLICY_BASELINED,
+                    AuditEvent.Action.CAPABILITY_CATALOG_EXTENDED,
+                ]
+            ).count(),
+            0,
+        )
 
 
 @override_settings(ROOT_URLCONF="config.urls")
@@ -313,9 +372,9 @@ class PersonAuditHistoryApiTests(TestCase):
         manager_role = StaffRole.objects.get(code=StaffRole.CRM_MANAGER)
         viewer_role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
 
-        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=manager_role)
-        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=viewer_role)
+        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=admin_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=manager_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=viewer_role, assigned_by=test_actor())
 
         self.business_person = Person.objects.create(first_name="Amina", last_name="Zulu")
         self.archived_business_person = Person.objects.create(
@@ -560,7 +619,10 @@ class PersonAuditHistoryApiTests(TestCase):
         result = response.data["results"][0]
         self.assertEqual(result["id"], event.id)
         self.assertEqual(result["description"], "Internal note updated")
-        self.assertEqual(result["actor"], {"id": self.admin_user.id, "email": self.admin_user.email})
+        self.assertEqual(
+            result["actor"],
+            {"id": self.admin_user.id, "email": self.admin_user.email, "contact_restricted": False},
+        )
         self.assertEqual(result["entity_type"], "InternalNote")
         self.assertEqual(result["changes"], {})
         self.assertNotIn("metadata", result)
