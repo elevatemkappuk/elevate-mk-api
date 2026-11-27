@@ -18,6 +18,28 @@ preserved. Detailed database and authorization contracts remain in
 This document records the approved architecture and the current
 implementation status. It does not claim GDPR compliance through code alone.
 
+For the staff-facing explanation of these rules, see the CRM's
+[Privacy and Permissions Business Guide](../../elevate-mk-crm/docs/privacy-and-permissions-business-guide.md).
+
+## Current functional and technical map
+
+Use this subject-based map for current behavior. The historical evidence archive
+at the end preserves named validation results and superseded decisions without
+making development chronology the primary structure.
+
+| Subject | Status | Authoritative detail |
+| --- | --- | --- |
+| Staff roles, capabilities and authorization | Implemented; focused evidence recorded | [AUTHORIZATION.md](AUTHORIZATION.md) |
+| Authentication and session boundaries | Implemented; deployment compatibility unverified | [AUTHENTICATION.md](AUTHENTICATION.md) |
+| Privacy governance, audit and legal holds | Implemented; operational activation unverified | This guide and [AUTHORIZATION.md](AUTHORIZATION.md) |
+| People privacy and protected disclosure | Implemented/source-inspected; final hardening remains | [People privacy](#people-privacy-and-protected-disclosure) |
+| Marketing privacy and provider boundaries | Implemented/source-inspected; provider verification remains | [Marketing privacy](#marketing-consent-and-provider-privacy) |
+| Exports and bulk operations | Implemented/source-inspected; runtime export verification remains | [Exports](#exports-and-bulk-operations) |
+| API documentation exposure | Implemented/source-inspected; deployment verification remains | [API documentation exposure](#api-documentation-exposure) |
+| Cross-repository compatibility and production behavior | Unverified | [Final hardening](#final-hardening-and-production-readiness) |
+| Comprehensive Person access auditing | Deferred | `GDPR-FUTURE-001` |
+| Automatic disposal and anonymisation | Deferred | Formal legal/privacy approval required |
+
 ## Capability foundation
 
 Status: API foundation and capability governance implementation are
@@ -92,7 +114,7 @@ search protection, campaign protection, or export enforcement. Runtime
 compatibility across the API, CRM, Mobile, and Community applications was not
 validated in this stage.
 
-## Evidence and status
+## Current implementation evidence
 
 - **Approved:** catalog, default matrix, evaluator precedence,
   audited superuser exception, and deferred enforcement boundaries.
@@ -149,7 +171,7 @@ validated in this stage.
   operational writers, and independent specialist review completion where noted
   in the Main Codex handoff.
 
-### Phase 1A.4C.2A lifecycle remediation
+### Staff lifecycle remediation evidence
 
 Status: **Implemented / focused validation verified in an isolated PostgreSQL
 test environment; governance API exposure remains deferred.**
@@ -178,7 +200,7 @@ run remains limited by two pre-existing Admin audit assertions that do not
 exclude the migration-generated `CAPABILITY_CATALOG_EXTENDED` event; those
 assertions are not treated as remediation failures.
 
-### Phase 1A.4C.2B governance API
+### Governance API evidence
 
 Status: **Implemented / focused API and CRM consumption validation verified in
 the isolated local scope; deployment remains unverified.**
@@ -278,7 +300,7 @@ event. QA accepted the scoped evidence. Production/staging, deployment,
 cross-repository runtime behavior, and operational activation remain
 unverified.
 
-## Revised superuser validation evidence
+## Superuser validation evidence
 
 This subsection preserves historical intermediate runtime evidence and is
 superseded by the authoritative final validation status recorded above.
@@ -305,7 +327,7 @@ in the shared role-to-assignment-to-user order and invalidates pending
 role-default proposals when their role becomes inactive. These changes were
 implemented but runtime-unverified until the final focused rerun.
 
-## Phase 1A.3 privacy-audit foundation
+## Privacy-audit foundation and retention
 
 Status: **Implemented and locally verified.** This stage adds
 the versioned audit contract, trusted request provenance, separate operational
@@ -337,7 +359,7 @@ earlier Phase 1A.3 focused suite passed 19/19 and the affected broader suite pas
 behavior, CRM integration, and cross-repository runtime compatibility remain
 deferred or unverified.
 
-## Phase 1A.4A effective Staff Access projection
+## Effective Staff Access projection
 
 Status: **Implemented / isolated local runtime verified; deployment and
 operational runtime remain unverified.**
@@ -413,7 +435,7 @@ runtime/deployment verification remains outstanding. GOV-003, GOV-005, uncovered
 reconciliation, legal approval for disposal, and cross-repository runtime
 compatibility remain open or unverified.
 
-### Phase 1A.4C remediation notes
+### Governance remediation notes
 
 The proposal endpoint rejects direct individual operations instead of creating
 pending proposals that cannot be approved. Governance reasons reject obvious
@@ -464,7 +486,7 @@ The API denial audit now records route-specific operation labels for privacy
 audit and legal-hold authorization failures. The persistent UAT database is
 `elevate_gdpr_phase1a4c_manual`; operational, staging, deployment, and browser
 verification remain separate evidence.
-## Phase 1A.4D privacy history and legal holds
+## Privacy history and legal holds
 
 Implemented / isolated validation verified. The backend exposes a dedicated privacy audit
 history projection separate from operational Person History and CRM-session
@@ -502,7 +524,7 @@ action until rejected or otherwise resolved. Person-wide and event-specific
 targets continue through the existing services and signed opaque references;
 no migration is required.
 
-## Phase 1A.4E and 1A.6 consolidated status
+## Security implementation and activation readiness
 
 Status: **Implemented / source-inspected for the earlier Phase 1A.4E/1.6
 closure batch; automated tests and final hardening execution were deferred.**
@@ -548,7 +570,7 @@ Production activation requires final security, QA, architecture and
 documentation acceptance, runtime/deployment verification, and any required
 legal or privacy approvals.
 
-## Phase 1B.1 People privacy
+## People privacy and protected disclosure
 
 Status: **Implemented / source-inspected; verification was unexecuted at the
 Phase 1B.1 cutoff**.
@@ -621,7 +643,7 @@ marketing preferences; Community account lifecycle/provider data; and audit
 history. Person export enforcement, comprehensive Person record-access
 auditing (`GDPR-FUTURE-001`), and later privacy workflows remain deferred.
 
-## Phase 1B.2 Marketing privacy
+## Marketing consent and provider privacy
 
 Status: **Implemented / source-inspected; automated tests and runtime/provider
 verification were deferred at the Phase 1B.2 cutoff**.
@@ -650,7 +672,7 @@ The added regression tests were **Implemented / Unexecuted at the Phase 1B.2
 cutoff** under the deferred test policy. No model changes or migration is
 required for this stage; current Phase 1C evidence remains subset-specific.
 
-## Phase 1B.3 exports and bulk operations
+## Exports and bulk operations
 
 Status: **Implemented / source-inspected; automated tests, migration
 application, runtime downloads, and final security verification were deferred
@@ -701,7 +723,7 @@ and remains subject to automated regression coverage. This result does not
 replace Phase 1C automated hardening, migration/runtime verification,
 independent specialist acceptance, or production-activation requirements.
 
-## Phase 1B.4 API exposure protection
+## API documentation exposure
 
 Status: **Implemented / source-inspected; automated tests and environment
 runtime verification were deferred for the Phase 1B.4 closure batch**.
@@ -743,7 +765,7 @@ All planned GDPR Phase 1 functional development stages are marked complete for
 development purposes only. This does not constitute final security acceptance,
 runtime verification, legal/privacy approval, or production readiness.
 
-## Phase 1C final hardening status
+## Final hardening and production readiness
 
 Status: **In progress / not accepted**. Source-level architecture review notes
 found no material drift; this is not independent final acceptance. A narrow
@@ -806,3 +828,21 @@ persistence remain required. The reconciliation helper has no non-test
 application caller or scheduler in the current repository; its actorless
 rejection is implemented, and any future operational integration remains a
 production activation prerequisite rather than a new scheduling subsystem.
+
+## Historical evidence archive
+
+The following records preserve the implementation chronology only for audit and
+traceability. They do not replace the subject-based sections above:
+
+| Historical subject | Preserved evidence |
+| --- | --- |
+| Capability foundation and governance | Approved catalog, role defaults, evaluator precedence, migrations, focused PostgreSQL evidence and audit behavior |
+| Staff lifecycle and governance API | Lock-order remediation, proposal lifecycle, direct superuser path, API projections and focused validation |
+| Privacy auditing, retention and legal holds | Audit actions, subject associations, retention classification, legal-hold workflows and isolated migration evidence |
+| People, marketing and exports | Privacy projections, masking, protected writes, consent boundaries, export controls and documented UAT/test evidence |
+| API documentation exposure | Environment-specific access rules, technical permission boundary, configuration defaults and schema diagnostic limitations |
+| Final hardening | Targeted findings, accepted test baselines, unexecuted or operational prerequisites, and legal/privacy dependencies |
+
+Historical evidence remains subject to the status labels in this document. A
+recorded test or isolated UAT result is not a claim of staging, production,
+deployment or legal approval.

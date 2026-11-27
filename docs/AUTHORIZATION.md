@@ -5,6 +5,8 @@ Last Updated: 2026-11-24
 ## Scope
 This document describes the currently implemented staff authorization foundation for the Elevate MK Django API.
 
+Business readers should use the CRM's [Privacy and Permissions Business Guide](../../elevate-mk-crm/docs/privacy-and-permissions-business-guide.md); this document remains the authoritative technical authorization contract.
+
 ## Technical API documentation authorization
 
 API documentation routes are not CRM resources and do not use operational CRM
@@ -344,7 +346,7 @@ submission boundary, not a CRM authorization exception. It uses its own DTO,
 service, response projection, CSRF protection, and anonymous throttle. It does not
 grant access to People, Membership, ProfessionalProfile, audit, or other CRM APIs.
 
-## Phase 1A.4A effective Staff Access projection (historical; superseded)
+## Effective Staff Access projection (historical contract)
 
 Status: **Implemented / source-inspected; runtime verification not claimed.**
 
@@ -384,7 +386,7 @@ was clean. No schema or migration files changed or were applied. Broader
 runtime, deployment, CRM tests/build/runtime, and cross-repository consumption
 remain unverified.
 
-## Phase 1A.3 privacy-audit authorization
+## Privacy-audit authorization
 
 Implemented and locally verified in isolated PostgreSQL validation.
 `PRIVACY_AUDIT_READ` gates privacy-audit projections and
@@ -401,7 +403,7 @@ Current targeted evidence: the isolated PostgreSQL focused authorization and
 privacy regression set passed 69/69, including the 9/9 remediation subset.
 This verifies the local implementation only; operational activation and
 cross-repository runtime behavior remain unverified.
-## Phase 1A.4D privacy and legal-hold API authorization
+## Privacy and legal-hold authorization
 
 The privacy-audit history endpoint requires CRM session authentication, an
 active operational CRM role, `PRIVACY_AUDIT_READ`, and an authorized Community,
@@ -430,9 +432,9 @@ Legal-hold Person selection uses a dedicated capability-protected projection
 containing only active non-technical Person identifiers and names; it does not
 reuse the broader contact/demographic People directory projection.
 
-## Phase 1B.1 People privacy enforcement
+## People privacy enforcement
 
-## Phase 1B.2 marketing privacy enforcement
+## Marketing privacy enforcement
 
 Marketing audience and Campaign endpoints retain their existing CRM-role
 permission classes. `PERSON_CONTACT_READ` is an additional backend projection
@@ -449,7 +451,7 @@ but Django remains authoritative for direct requests, manipulated filters, and
 response projections. Marketing privacy changes add no new capability or
 parallel authorization path.
 
-## Phase 1B.3 export authorization
+## Export authorization
 
 `GET /api/v1/people/export/` requires the existing CRM session, active People
 record scope, and effective `PERSON_EXPORT`. Contact and demographic output is
@@ -490,7 +492,7 @@ directory reads, masked responses and list reads are not blanket disclosure
 events. No new reveal workflow was introduced, and comprehensive Person access
 auditing remains the deferred `GDPR-FUTURE-001` enhancement.
 
-### Phase 1A.4E and 1A.6 source-level closure status
+### Security implementation and activation status
 
 The accepted Phase 1A.4E integration preserves the separation between Django
 Staff CRM sessions and mobile JWT authentication, with capability enforcement,
@@ -516,7 +518,7 @@ corrections. Remaining operational writer coverage,
 reconciliation integration, deployment/migration validation, and any legal or
 privacy approvals remain activation dependencies.
 
-### Phase 1C targeted remediation status
+### Final targeted remediation status
 
 Application role assignment, deactivation, and revocation services now reject
 missing actors and cannot disable their mandatory audit path. Django Admin uses
