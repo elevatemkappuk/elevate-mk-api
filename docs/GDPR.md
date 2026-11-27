@@ -839,6 +839,86 @@ application caller or scheduler in the current repository; its actorless
 rejection is implemented, and any future operational integration remains a
 production activation prerequisite rather than a new scheduling subsystem.
 
+## Future privacy enhancements and deferred scope
+
+This section is the authoritative forward-looking register for GDPR work that
+is not part of the completed Phase 1 engineering scope. It distinguishes
+approved deferred requirements from proposed enhancements that still require
+requirements elicitation and approval. None of the proposed items below is
+implemented by this roadmap update.
+
+### Privacy and access-control enhancements
+
+| Reference | Objective and status | Outstanding requirements and dependencies |
+| --- | --- | --- |
+| `GDPR-FUTURE-001` | Comprehensive Person record-access auditing — **approved deferred requirement** | Define the auditable access boundary, safe event volume, retention, authorized projections, operational reporting, and performance controls. This remains distinct from mandatory security-sensitive failure logging and privileged-operation auditing already required. |
+| `GDPR-FUTURE-002` | Controlled restricted personal-data reveal with authorization, justification, and audit evidence — **proposed; requirements not approved** | Define eligible fields, exceptional workflow, approval/role boundaries, reason requirements, fail-closed audit behavior, and UI/API exposure. No reveal interface or exceptional workflow is implied by this entry. |
+| `GDPR-FUTURE-003` | Extended personal-data classification and field-level protection — **proposed; requirements not approved** | Assess location, addresses, notes, professional profiles, skills, interests, tags, membership information, and other Person-related data; classify each field and review API, CRM, Community, Mobile, marketing, import, export, cache, and audit surfaces. |
+
+The current privacy capability governance, record-level authorization,
+permission-aware projections, deliberate disclosure auditing, masking,
+protected writes, legal holds, and export controls are existing foundations.
+They do not pre-approve the future capabilities in this table.
+
+### Data retention and lifecycle management
+
+| Reference | Objective and status | Outstanding requirements and dependencies |
+| --- | --- | --- |
+| `GDPR-FUTURE-004` | Configurable, formally approved retention policies and retention eligibility assessment — **proposed; requirements not approved** | Define lawful basis, retention categories, eligibility inputs, policy ownership, approval, versioning, dry-run and impact assessment, execution authority, and audit evidence. The current 24-month retention rule remains provisional and requires legal/organizational approval. |
+| `GDPR-FUTURE-005` | Historical and legacy data classification and reconciliation — **deferred; dataset-specific decision required** | Determine whether reconciliation is needed for a future operational dataset, then define classification, remediation, ownership, evidence, and safe migration controls. It was intentionally skipped for the existing test dataset. |
+| `GDPR-FUTURE-006` | Controlled disposal, anonymisation, selective/permanent deletion, and referential-integrity protection — **proposed; requirements not approved** | Define data-subject and business exceptions, legal holds, dependency handling, irreversible-operation approvals, dry runs, rollback limits, audit, and recovery. Any execution must be authorized and audited. |
+| `GDPR-FUTURE-007` | Legal-hold integration with retention and disposal operations — **partially founded; operational behavior deferred** | Existing legal-hold workflows protect covered records and preserve release governance. Future work must define how approved retention evaluation, disposal, anonymisation, and deletion honor active holds and historical decisions. |
+
+Existing legal-hold capability and retention-protection behavior is not a
+substitute for a formally approved disposal or anonymisation policy. No
+automatic disposal, deletion, anonymisation, or retention scheduler is
+authorized by this roadmap.
+
+### Data subject rights
+
+| Reference | Objective and status | Outstanding requirements and dependencies |
+| --- | --- | --- |
+| `GDPR-FUTURE-008` | DSAR and right-of-access handling — **proposed; requirements not approved** | Define intake, identity verification, scope, searches, exemptions, legal holds, review, approval, fulfilment, redaction, deadlines, delivery, and audit. |
+| `GDPR-FUTURE-009` | Rectification, erasure, restriction of processing, objection, and portability workflows — **proposed; requirements not approved** | Define request tracking, authorization, verification, legal/retention exceptions, dependent records, provider coordination, output formats, completion evidence, and escalation. |
+
+These entries are proposed business capabilities, not current API contracts or
+promises that a request can be fulfilled through existing screens.
+
+### External provider privacy integration
+
+| Reference | Objective and status | Outstanding requirements and dependencies |
+| --- | --- | --- |
+| `GDPR-FUTURE-010` | Brevo privacy lifecycle integration — **partially founded; lifecycle scope deferred** | Define correction, deletion, anonymisation, suppression, reconciliation, failure handling, provider retention, audit evidence, and protection against reintroduction of deleted data. Existing consent synchronization remains bounded and provider-aware. |
+| `GDPR-FUTURE-011` | Eventbrite and other external-provider privacy assessment — **proposed; requirements not approved** | Inventory personal data and processing, establish provider obligations, lawful-basis and retention decisions, correction/deletion paths, failure handling, and safe operational evidence. |
+
+External-provider changes require a separate provider, legal, privacy, and
+operational review. No live provider calls or lifecycle mutation is authorized
+by this register.
+
+### Cross-application privacy and compatibility
+
+| Reference | Objective and status | Outstanding requirements and dependencies |
+| --- | --- | --- |
+| `GDPR-FUTURE-012` | Consistent privacy terminology and permission enforcement across API, CRM, Community, and Mobile — **proposed continuing requirement** | Review application-specific personal-data exposure, state and cache invalidation, authentication-boundary compatibility, record-level scope, and cross-repository regression evidence whenever a future feature adds or changes personal data processing. |
+| `GDPR-FUTURE-013` | Cross-application privacy integration and compatibility verification — **proposed; requirements not approved** | Define contract ownership, supported client versions, migration/rollout sequencing, failure behavior, privacy projections, and staging/runtime verification. |
+
+Future features that introduce personal data or new processing activities must
+complete a proportionate privacy and access-control assessment and update the
+relevant subject-based documentation before implementation acceptance.
+
+### Development sequencing and readiness
+
+- GDPR Phase 1 engineering is complete for local development progression.
+- Events V1 is the next development priority.
+- The future enhancements in this section remain deferred until explicitly
+  authorized; they do not currently block Events V1 development.
+- Deferral is not security risk acceptance and does not exempt the project
+  from applicable legal or privacy obligations.
+- Production activation remains subject to the outstanding operational,
+  security, deployment, privacy, legal, and independent-acceptance
+  prerequisites recorded in [Final hardening and production readiness](#final-hardening-and-production-readiness).
+
+
 ## Historical evidence archive
 
 The following records preserve the implementation chronology only for audit and
