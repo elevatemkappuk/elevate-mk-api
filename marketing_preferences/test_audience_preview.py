@@ -11,6 +11,7 @@ from people.models import Person
 from professional_profiles.models import Industry, ProfessionalProfile
 from skills.models import PersonSkill, Skill
 from staff_access.models import StaffRole, StaffRoleAssignment
+from config.test_utils import test_actor
 from tags.models import PersonTag, Tag
 from accounts.models import User
 from external_references.models import ExternalPersonReference, ExternalPersonSyncJob
@@ -52,7 +53,7 @@ class AudiencePreviewApiTests(TestCase):
             (self.manager, StaffRole.CRM_MANAGER),
             (self.viewer, StaffRole.CRM_VIEWER),
         ):
-            StaffRoleAssignment.objects.assign_role(user=user, role=StaffRole.objects.get(code=role))
+            StaffRoleAssignment.objects.assign_role(user=user, role=StaffRole.objects.get(code=role), assigned_by=test_actor())
 
         self.url = "/api/v1/marketing/audiences/preview/"
         self.eligible = Person.objects.create(

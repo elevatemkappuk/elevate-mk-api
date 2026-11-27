@@ -9,6 +9,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from accounts.models import User
+from config.test_utils import test_actor
 from data_imports.adapters.eventbrite import REQUIRED_COLUMN_ALIASES, EventbriteStructureError
 from data_imports.models import ImportBatch, ImportRecord
 from data_imports.services.eventbrite_ingestion import ingest_eventbrite_workbook, normalize_eventbrite_row
@@ -269,7 +270,7 @@ class EventbriteUploadApiTests(APITestCase):
         self.viewer = self.create_user("event-viewer@example.com")
         for code, user in ((StaffRole.CRM_ADMIN, self.admin), (StaffRole.CRM_MANAGER, self.manager), (StaffRole.CRM_VIEWER, self.viewer)):
             role, _ = StaffRole.objects.get_or_create(code=code, defaults={"name": code})
-            StaffRoleAssignment.objects.assign_role(user=user, role=role)
+            StaffRoleAssignment.objects.assign_role(user=user, role=role, assigned_by=test_actor())
 
     @staticmethod
     def create_user(email):

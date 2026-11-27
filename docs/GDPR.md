@@ -811,6 +811,59 @@ PostgreSQL test database; this remains historical pre-remediation baseline
 evidence. This does not verify operational migration
 application, deployment, production/staging behavior, or cross-repository
 runtime compatibility.
+
+### Automated test infrastructure performance
+
+The current runner applies `MD5PasswordHasher` only inside automated test
+processes, restores the original hasher after a normal run, and applies the
+same test-only setting in spawned parallel workers. A dedicated compatibility
+canary explicitly restores PBKDF2 and verifies production-equivalent password
+encoding and checking. Production, development and deployment settings are
+unchanged. Role-assignment fixtures use an attributable authorized test actor;
+the deliberate missing-actor rejection test remains unchanged.
+
+Fresh databases remain migration-authoritative. When the runner positively
+identifies a reused serial `--keepdb` PostgreSQL database, it restores canonical
+roles, privacy capabilities, enabled role defaults, the capability-policy
+singleton and reference taxonomies. This prevents a reused database from
+losing migration-seeded authorization data after a `TransactionTestCase`
+flush. Suites with no database dependency no longer trigger reference-data
+writes. A fresh-database path remains mandatory for migration and clean-install
+acceptance; `--keepdb` is a local iteration aid, not a substitute for that path.
+Serial `--keepdb` and fresh parallel databases are the supported modes.
+Combining `--keepdb` with parallel worker clones is not supported because
+pre-existing clones are created before primary-database reference restoration.
+
+Bounded performance evidence on the current worktree is:
+
+- default discovery found **1474** tests in **0.682 seconds**;
+- a representative 175-test group improved from **437.304 seconds** to
+  **11.889 seconds** after test-only password-hasher optimization;
+- direct hashing measurements averaged **0.659803 seconds** for the default
+  production hasher and **0.000013 seconds** for the test-only MD5 hasher;
+- bounded groups passed **135/135 in 11.505 seconds**, **391/391 in 28.253
+  seconds**, **218/218 in 9.505 seconds**, and **225/225 in 20.751 seconds**;
+- security-sensitive authentication/governance tests passed **118/118**,
+  PostgreSQL concurrency tests passed **10/10**, fresh migration tests passed
+  **3/3**, and test-runner canaries passed **4/4**;
+- the final fresh serial run passed **1474/1474** tests in **151.026 seconds**;
+  isolated database setup took **5.141 seconds**, teardown took **3.453
+  seconds**, and total elapsed time was **160.381 seconds**;
+- fresh Django-managed database migration/setup took **6.757 seconds** and
+  teardown took **0.665 seconds**, while verified `--keepdb` reuse took
+  **0.450 seconds**; and
+- the 27-test PostgreSQL governance transaction class remains a measured
+  hotspot at approximately **40 seconds** because it deliberately preserves
+  commit, rollback, locking and concurrency behavior.
+
+Local Windows multiprocessing remains unavailable in the current execution
+environment because process-pipe creation fails with `WinError 5` before a
+worker starts. The existing Linux CI contract remains `--parallel 4`; local
+Windows profiling therefore uses serial execution. The earlier unrestricted
+run remains accurately classified as interrupted after **1117 tests in
+3050.129 seconds with 82 errors**; it was superseded for current acceptance by
+the final fresh serial result above.
+
 OpenAPI generation was inspected and emitted existing serializer/authenticator
 diagnostics. Those diagnostics are classified as **nonblocking for this Phase
 1C documentation update only** because they are unrelated to the privacy/logout

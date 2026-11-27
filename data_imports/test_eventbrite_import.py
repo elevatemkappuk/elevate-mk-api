@@ -5,6 +5,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from accounts.models import User
+from config.test_utils import test_actor
 from audit.models import AuditEvent
 from data_imports.models import ImportBatch, ImportRecord
 from data_imports.services import eventbrite_import
@@ -375,8 +376,8 @@ class EventbriteImportApiTests(APITestCase):
         )
         admin_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_ADMIN, defaults={"name": "CRM Administrator"})
         manager_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_MANAGER, defaults={"name": "CRM Manager"})
-        StaffRoleAssignment.objects.assign_role(user=self.admin, role=admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.manager, role=manager_role)
+        StaffRoleAssignment.objects.assign_role(user=self.admin, role=admin_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.manager, role=manager_role, assigned_by=test_actor())
 
     def test_import_endpoint_dispatches_eventbrite_only_for_crm_admin_and_returns_safe_event_counts(self):
         batch = ImportBatch.objects.create(

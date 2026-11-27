@@ -9,6 +9,7 @@ from audit.models import AuditEvent
 from marketing_preferences.models import MarketingPreference
 from people.models import Person
 from staff_access.models import StaffRole, StaffRoleAssignment
+from config.test_utils import test_actor
 from accounts.models import User
 
 from .models import Campaign, CampaignPreparation, CampaignRecipientSnapshot
@@ -36,7 +37,7 @@ class CampaignFoundationApiTests(TestCase):
 
     def _staff(self, email, role):
         user = User.objects.create_user(email=email, password="password123", person_first_name="Campaign", person_last_name="Staff", person_record_type=Person.RecordType.STAFF)
-        StaffRoleAssignment.objects.assign_role(user=user, role=StaffRole.objects.get(code=role))
+        StaffRoleAssignment.objects.assign_role(user=user, role=StaffRole.objects.get(code=role), assigned_by=test_actor())
         return user
 
     def _preference(self, person, state):

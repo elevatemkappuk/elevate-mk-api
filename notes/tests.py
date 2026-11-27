@@ -13,6 +13,7 @@ from notes.admin import InternalNoteAdmin
 from notes.models import InternalNote, InternalNoteImmutableDeleteError
 from people.models import Person
 from staff_access.models import StaffRole, StaffRoleAssignment
+from config.test_utils import test_actor
 
 
 class InternalNoteModelTests(TestCase):
@@ -178,9 +179,9 @@ class InternalNoteApiTests(TestCase):
         manager_role = StaffRole.objects.get(code=StaffRole.CRM_MANAGER)
         viewer_role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
 
-        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=manager_role)
-        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=viewer_role)
+        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=admin_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=manager_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=viewer_role, assigned_by=test_actor())
 
         self.active_business_person = Person.objects.create(first_name="Amina", last_name="Zulu")
         self.archived_business_person = Person.objects.create(

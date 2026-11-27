@@ -15,6 +15,7 @@ from professional_profiles.admin import IndustryAdmin, ProfessionalProfileAdmin
 from professional_profiles.models import Industry, ProfessionalProfile
 from professional_profiles.taxonomy import CANONICAL_INDUSTRIES
 from staff_access.models import StaffRole, StaffRoleAssignment
+from config.test_utils import test_actor
 
 
 class IndustryModelTests(TestCase):
@@ -226,9 +227,9 @@ class IndustryApiTests(TestCase):
         manager_role = StaffRole.objects.get(code=StaffRole.CRM_MANAGER)
         viewer_role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
 
-        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=manager_role)
-        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=viewer_role)
+        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=admin_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=manager_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=viewer_role, assigned_by=test_actor())
 
         self.first_active = Industry.objects.get(slug="accounting")
         self.second_active = Industry.objects.get(slug="advertising-marketing")
@@ -327,9 +328,9 @@ class ProfessionalProfileApiTests(TestCase):
         manager_role = StaffRole.objects.get(code=StaffRole.CRM_MANAGER)
         viewer_role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
 
-        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=manager_role)
-        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=viewer_role)
+        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=admin_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=manager_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=viewer_role, assigned_by=test_actor())
 
         self.industry = Industry.objects.get(slug="technology")
         self.business_person = Person.objects.create(first_name="Amina", last_name="Zulu")
@@ -497,9 +498,9 @@ class ProfessionalProfileCreateApiTests(TestCase):
         manager_role = StaffRole.objects.get(code=StaffRole.CRM_MANAGER)
         viewer_role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
 
-        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=manager_role)
-        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=viewer_role)
+        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=admin_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=manager_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=viewer_role, assigned_by=test_actor())
 
         self.active_business_person = Person.objects.create(first_name="Amina", last_name="Zulu")
         self.archived_business_person = Person.objects.create(
@@ -882,9 +883,9 @@ class ProfessionalProfileUpdateApiTests(TestCase):
         manager_role = StaffRole.objects.get(code=StaffRole.CRM_MANAGER)
         viewer_role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
 
-        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=manager_role)
-        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=viewer_role)
+        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=admin_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=manager_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=viewer_role, assigned_by=test_actor())
 
         self.active_business_person = Person.objects.create(first_name="Amina", last_name="Zulu")
         self.archived_business_person = Person.objects.create(

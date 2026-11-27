@@ -14,6 +14,7 @@ from rest_framework.test import APIClient
 from unittest.mock import patch
 
 from accounts.models import User
+from config.test_utils import test_actor
 from audit.models import AuditEvent
 from people.models import Person
 from staff_access.admin import (
@@ -55,7 +56,7 @@ class StaffRoleModelTests(TestCase):
             person_last_name="User",
             person_record_type=Person.RecordType.STAFF,
         )
-        StaffRoleAssignment.objects.assign_role(user=user, role=role, assigned_by=user)
+        StaffRoleAssignment.objects.assign_role(user=user, role=role, assigned_by=test_actor())
         role.is_active = False
         role.save(update_fields=["is_active"])
 
@@ -450,7 +451,7 @@ class FinalCrmAdminProtectionTests(TestCase):
         self.admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
         self.manager_role = StaffRole.objects.get(code=StaffRole.CRM_MANAGER)
         self.viewer_role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
-        self.actor = self.create_user("actor@example.com")
+        self.actor = test_actor()
 
     def create_user(self, email):
         return User.objects.create_user(

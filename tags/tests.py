@@ -16,6 +16,7 @@ from professional_profiles.models import Industry, ProfessionalProfile
 from rest_framework.test import APIClient
 from skills.models import PersonSkill, Skill
 from staff_access.models import StaffRole, StaffRoleAssignment
+from config.test_utils import test_actor
 from tags.admin import PersonTagAdmin, TagAdmin
 from tags.models import PersonTag, Tag
 
@@ -229,9 +230,9 @@ class TagApiTests(TestCase):
         self.manager_role = StaffRole.objects.get(code=StaffRole.CRM_MANAGER)
         self.viewer_role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
 
-        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=self.admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=self.manager_role)
-        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=self.viewer_role)
+        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=self.admin_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=self.manager_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=self.viewer_role, assigned_by=test_actor())
 
         self.active_business_person = Person.objects.create(
             first_name="Amina",

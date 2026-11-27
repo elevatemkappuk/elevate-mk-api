@@ -12,6 +12,7 @@ from people.serializers import PersonDirectoryListSerializer
 from people.views import PeopleListView
 from professional_profiles.models import ProfessionalProfile
 from staff_access.models import StaffRole, StaffRoleAssignment
+from config.test_utils import test_actor
 
 
 class PeopleDirectoryProjectionTests(APITestCase):
@@ -23,7 +24,7 @@ class PeopleDirectoryProjectionTests(APITestCase):
             is_superuser=True,
         )
         StaffRoleAssignment.objects.assign_role(
-            user=self.user, role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN),
+            user=self.user, role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN), assigned_by=self.user,
         )
         self.client.force_authenticate(self.user)
         self.contact = Person.objects.create(first_name="Contact", last_name="Directory")
@@ -116,7 +117,7 @@ class PeopleDirectoryProjectionTests(APITestCase):
                     person_first_name="Reader", person_last_name=code,
                     person_record_type=Person.RecordType.STAFF,
                 )
-                StaffRoleAssignment.objects.assign_role(user=reader, role=StaffRole.objects.get(code=code))
+                StaffRoleAssignment.objects.assign_role(user=reader, role=StaffRole.objects.get(code=code), assigned_by=test_actor())
                 self.client.force_authenticate(reader)
                 row = self.rows()[self.member.id]
                 self.assertEqual(row["relationship"], "ACTIVE_MEMBER")

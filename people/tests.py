@@ -19,6 +19,7 @@ from people.models import Person
 from professional_profiles.models import Industry, ProfessionalProfile
 from rest_framework.test import APIClient
 from staff_access.models import StaffRole, StaffRoleAssignment
+from config.test_utils import test_actor
 from skills.models import PersonSkill, Skill
 from tags.models import PersonTag, Tag
 
@@ -40,7 +41,7 @@ class PersonBrevoIntegrationApiTests(TestCase):
             person_record_type=Person.RecordType.TECHNICAL,
             is_superuser=True,
         )
-        StaffRoleAssignment.objects.assign_role(user=self.viewer, role=StaffRole.objects.get(code=StaffRole.CRM_VIEWER))
+        StaffRoleAssignment.objects.assign_role(user=self.viewer, role=StaffRole.objects.get(code=StaffRole.CRM_VIEWER), assigned_by=test_actor())
         self.person = Person.objects.create(first_name="Read", last_name="Only", primary_email="read@example.com")
         self.url = f"/api/v1/people/{self.person.id}/brevo-integration/"
 
@@ -235,9 +236,9 @@ class PeopleApiTests(TestCase):
         self.manager_role = StaffRole.objects.get(code=StaffRole.CRM_MANAGER)
         self.viewer_role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
 
-        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=self.admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=self.manager_role)
-        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=self.viewer_role)
+        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=self.admin_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=self.manager_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=self.viewer_role, assigned_by=test_actor())
 
         self.active_business = Person.objects.create(
             first_name="Amina",
@@ -280,7 +281,7 @@ class PeopleApiTests(TestCase):
         )
         StaffRoleAssignment.objects.assign_role(
             user=self.technical_admin_user,
-            role=self.admin_role,
+            role=self.admin_role, assigned_by=self.technical_admin_user,
         )
 
         for index in range(30):
@@ -635,9 +636,9 @@ class PersonOverviewApiTests(TestCase):
         self.manager_role = StaffRole.objects.get(code=StaffRole.CRM_MANAGER)
         self.viewer_role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
 
-        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=self.admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=self.manager_role)
-        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=self.viewer_role)
+        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=self.admin_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.manager_user, role=self.manager_role, assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=self.viewer_role, assigned_by=test_actor())
 
         self.contact_person = Person.objects.create(
             first_name="Contact",
@@ -1235,7 +1236,7 @@ class PersonWriteLifecycleApiTests(TestCase):
             (self.manager_user, StaffRole.CRM_MANAGER),
             (self.viewer_user, StaffRole.CRM_VIEWER),
         ):
-            StaffRoleAssignment.objects.assign_role(user=user, role=StaffRole.objects.get(code=code))
+            StaffRoleAssignment.objects.assign_role(user=user, role=StaffRole.objects.get(code=code), assigned_by=test_actor())
 
     def authenticate(self, user):
         self.client.force_authenticate(user=user)
@@ -1716,8 +1717,8 @@ class PeopleDirectoryQueryApiTests(TestCase):
         self.admin_user = User.objects.create_user(email="directory-admin@example.com", password="testpass123", person_first_name="Directory", person_last_name="Admin", person_record_type=Person.RecordType.STAFF)
         self.viewer_user = User.objects.create_user(email="directory-viewer@example.com", password="testpass123", person_first_name="Directory", person_last_name="Viewer", person_record_type=Person.RecordType.STAFF)
         self.nonstaff_user = User.objects.create_user(email="directory-nonstaff@example.com", password="testpass123", person_first_name="Directory", person_last_name="Nonstaff", person_record_type=Person.RecordType.TECHNICAL)
-        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN))
-        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=StaffRole.objects.get(code=StaffRole.CRM_VIEWER))
+        StaffRoleAssignment.objects.assign_role(user=self.admin_user, role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN), assigned_by=test_actor())
+        StaffRoleAssignment.objects.assign_role(user=self.viewer_user, role=StaffRole.objects.get(code=StaffRole.CRM_VIEWER), assigned_by=test_actor())
         self.contact = Person.objects.create(first_name="Ada", last_name="Lovelace", primary_email="ada@example.com", mobile="991", location=" Milton Keynes ")
         self.active_member = Person.objects.create(first_name="Grace", last_name="Hopper", primary_email="grace@example.com", location="London")
         self.former_member = Person.objects.create(first_name="Alan", last_name="Turing", archived_at=timezone.now())
@@ -1822,7 +1823,7 @@ class PersonPrivacyApiTests(TestCase):
             person_last_name="Staff",
             person_record_type=Person.RecordType.STAFF,
         )
-        StaffRoleAssignment.objects.assign_role(user=user, role=StaffRole.objects.get(code=role))
+        StaffRoleAssignment.objects.assign_role(user=user, role=StaffRole.objects.get(code=role), assigned_by=test_actor())
         return user
 
     def test_viewer_receives_masked_contact_restricted_demographics_and_safe_account_email(self):
@@ -1892,7 +1893,7 @@ class PersonPrivacyApiTests(TestCase):
             person_first_name="Privacy",
             person_last_name="Superuser",
         )
-        StaffRoleAssignment.objects.assign_role(user=superuser, role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN))
+        StaffRoleAssignment.objects.assign_role(user=superuser, role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN), assigned_by=test_actor())
         self.client.force_authenticate(superuser)
         response = self.client.get(f"/api/v1/people/{self.person.pk}/")
         self.assertEqual(response.data["primary_email"], "amina@example.com")
@@ -1912,7 +1913,7 @@ class PersonPrivacyApiTests(TestCase):
             person_first_name="Privacy",
             person_last_name="Superuser",
         )
-        StaffRoleAssignment.objects.assign_role(user=superuser, role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN))
+        StaffRoleAssignment.objects.assign_role(user=superuser, role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN), assigned_by=superuser)
         self.client.force_authenticate(superuser)
 
         response = self.client.get(f"/api/v1/people/{self.person.pk}/overview/")
@@ -1939,7 +1940,7 @@ class PersonPrivacyApiTests(TestCase):
             person_first_name="Privacy",
             person_last_name="Failure Superuser",
         )
-        StaffRoleAssignment.objects.assign_role(user=superuser, role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN))
+        StaffRoleAssignment.objects.assign_role(user=superuser, role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN), assigned_by=superuser)
         self.client.force_authenticate(superuser)
         with mock.patch("people.privacy.record_audit_event", side_effect=RuntimeError("audit unavailable")):
             with self.assertRaises(RuntimeError):
