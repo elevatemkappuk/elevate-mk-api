@@ -1619,6 +1619,17 @@ unique constraint continues to allow one pending request per hold while
 permitting a new request after rejection. Migration application remains
 unverified in this implementation stage.
 
+### Legal-hold release-request cancellation
+
+The generated `audit.0027_legalhold_release_cancellation` migration adds
+nullable cancellation actor, timestamp, and reason fields to preserve terminal
+cancellation history without altering existing records. The generated
+`audit.0028_alter_auditevent_action` migration adds the
+`LEGAL_HOLD_RELEASE_CANCELLED` audit action choice. Neither migration has been
+applied to an operational database. Cancellation is available only to the
+original requester of a pending request while its hold remains active; it does
+not end retention protection and permits a later request.
+
 ### Phase 1B.1 People privacy schema impact
 
 Phase 1B.1 adds no model, index, or data constraint. Privacy capability

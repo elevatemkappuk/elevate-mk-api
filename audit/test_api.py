@@ -40,9 +40,9 @@ class PrivacyAuditAndLegalHoldApiTests(TestCase):
             ),
         )
         role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
-        StaffRoleAssignment.objects.assign_role(user=self.admin, role=role)
-        StaffRoleAssignment.objects.assign_role(user=self.other_admin, role=role)
-        StaffRoleAssignment.objects.assign_role(user=self.superuser, role=role)
+        StaffRoleAssignment.objects.assign_role(user=self.admin, role=role, assigned_by=self.superuser)
+        StaffRoleAssignment.objects.assign_role(user=self.other_admin, role=role, assigned_by=self.superuser)
+        StaffRoleAssignment.objects.assign_role(user=self.superuser, role=role, assigned_by=self.superuser)
         StaffCapabilityAssignment.objects.create(
             user=self.admin,
             capability=CapabilityDefinition.objects.get(code=CapabilityDefinition.PRIVACY_AUDIT_READ),
@@ -255,7 +255,7 @@ class PrivacyAuditAndLegalHoldApiTests(TestCase):
         self.assertEqual(release_request["justification"], "Independent review requested")
         self.assertEqual(release_request["requested_by"]["display_name"], "Privacy Admin")
 
-    def test_release_request_projection_hides_self_approval_actions(self):
+    def test_release_request_projection_exposes_only_requester_cancellation(self):
         self.authenticate(self.admin)
         create_response = self.client.post(self.holds_url, {"person_id": self.person.pk, "reason": "Investigation"}, format="json")
         hold_id = create_response.data["public_id"]
@@ -265,7 +265,10 @@ class PrivacyAuditAndLegalHoldApiTests(TestCase):
         )
         response = self.client.get(self.holds_url)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["results"][0]["release_requests"][0]["permitted_actions"], [])
+        actions = response.data["results"][0]["release_requests"][0]["permitted_actions"]
+        self.assertEqual(actions, ["cancel"])
+        self.assertNotIn("approve", actions)
+        self.assertNotIn("reject", actions)
 
     def test_technical_person_cannot_become_a_person_hold_target(self):
         self.authenticate(self.admin)
@@ -304,6 +307,55 @@ class PrivacyAuditAndLegalHoldApiTests(TestCase):
             {"reason": "Later review"}, format="json",
         )
         self.assertEqual(second.status_code, 201)
+
+    def test_original_requester_can_cancel_pending_release_without_releasing_hold(self):
+        self.authenticate(self.admin)
+        create_response = self.client.post(self.holds_url, {"person_id": self.person.pk, "reason": "Investigation"}, format="json")
+        hold_id = create_response.data["public_id"]
+        request_response = self.client.post(
+            f"/api/v1/privacy/legal-holds/{hold_id}/release-requests/",
+            {"reason": "Proposed release"}, format="json",
+        )
+        cancel_response = self.client.post(
+            f"/api/v1/privacy/legal-hold-release-requests/{request_response.data['public_id']}/cancel/",
+            {"reason": "Matter remains active"}, format="json",
+        )
+        self.assertEqual(cancel_response.status_code, 200)
+        self.assertEqual(cancel_response.data["status"], LegalHoldReleaseRequest.Status.CANCELLED)
+        request = LegalHoldReleaseRequest.objects.get(public_id=request_response.data["public_id"])
+        self.assertEqual(request.cancelled_by_id, self.admin.pk)
+        self.assertEqual(request.cancellation_reason, "Matter remains active")
+        self.assertTrue(LegalHold.objects.filter(public_id=hold_id, status=LegalHold.Status.ACTIVE).exists())
+        event = AuditEvent.objects.filter(action=AuditEvent.Action.LEGAL_HOLD_RELEASE_CANCELLED).latest("id")
+        self.assertEqual(event.actor_user_id, self.admin.pk)
+        self.assertEqual(event.metadata["outcome"], "CANCELLED")
+        retry = self.client.post(
+            f"/api/v1/privacy/legal-holds/{hold_id}/release-requests/",
+            {"reason": "Later review"}, format="json",
+        )
+        self.assertEqual(retry.status_code, 201)
+
+    def test_only_original_requester_can_cancel_and_reason_is_required(self):
+        self.authenticate(self.admin)
+        create_response = self.client.post(self.holds_url, {"person_id": self.person.pk, "reason": "Investigation"}, format="json")
+        hold_id = create_response.data["public_id"]
+        request_response = self.client.post(
+            f"/api/v1/privacy/legal-holds/{hold_id}/release-requests/",
+            {"reason": "Proposed release"}, format="json",
+        )
+        self.authenticate(self.other_admin)
+        denied = self.client.post(
+            f"/api/v1/privacy/legal-hold-release-requests/{request_response.data['public_id']}/cancel/",
+            {"reason": "Not the requester"}, format="json",
+        )
+        self.assertEqual(denied.status_code, 400)
+        self.authenticate(self.admin)
+        missing_reason = self.client.post(
+            f"/api/v1/privacy/legal-hold-release-requests/{request_response.data['public_id']}/cancel/",
+            {"reason": ""}, format="json",
+        )
+        self.assertEqual(missing_reason.status_code, 400)
+        self.assertEqual(LegalHoldReleaseRequest.objects.get(public_id=request_response.data["public_id"]).status, LegalHoldReleaseRequest.Status.PENDING)
 
     def test_superuser_direct_release_is_explicit_and_audited(self):
         self.authenticate(self.admin)

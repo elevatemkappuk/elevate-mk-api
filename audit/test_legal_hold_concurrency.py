@@ -9,6 +9,7 @@ from accounts.models import User
 from audit.models import AuditEvent, LegalHold, LegalHoldReleaseRequest
 from audit.privacy import (
     approve_legal_hold_release,
+    cancel_legal_hold_release,
     create_legal_hold,
     direct_release_legal_hold,
     reject_legal_hold_release,
@@ -30,7 +31,7 @@ class LegalHoldConcurrencyTests(TransactionTestCase):
         self.target = Person.objects.create(first_name="Held", last_name="Person")
         role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
         for user in (self.admin, self.approver, self.superuser):
-            StaffRoleAssignment.objects.assign_role(user=user, role=role)
+            StaffRoleAssignment.objects.assign_role(user=user, role=role, assigned_by=self.superuser)
             StaffCapabilityAssignment.objects.create(
                 user=user,
                 capability=CapabilityDefinition.objects.get(code=CapabilityDefinition.LEGAL_HOLD_ADMIN),
@@ -126,6 +127,45 @@ class LegalHoldConcurrencyTests(TransactionTestCase):
                 action__in=[AuditEvent.Action.LEGAL_HOLD_RELEASED, AuditEvent.Action.LEGAL_HOLD_RELEASE_REQUESTED]
             ).count(),
             2,
+        )
+
+    def test_concurrent_cancellation_and_rejection_preserve_one_terminal_decision(self):
+        hold, release_request = self._hold_with_pending_request()
+        barrier = Barrier(2)
+        outcomes = []
+
+        def cancel():
+            close_old_connections()
+            try:
+                barrier.wait(timeout=10)
+                cancel_legal_hold_release(actor_user=self.admin, release_request=release_request, reason="Matter remains active")
+                outcomes.append("cancelled")
+            except (ValidationError, PermissionDenied):
+                outcomes.append("terminal")
+            finally:
+                close_old_connections()
+
+        def reject():
+            close_old_connections()
+            try:
+                barrier.wait(timeout=10)
+                reject_legal_hold_release(actor_user=self.superuser, release_request=release_request, reason="Hold remains required")
+                outcomes.append("rejected")
+            except (ValidationError, PermissionDenied):
+                outcomes.append("terminal")
+            finally:
+                close_old_connections()
+
+        self._join([Thread(target=cancel), Thread(target=reject)])
+        self.assertEqual(len(outcomes), 2)
+        release_request.refresh_from_db()
+        self.assertIn(release_request.status, {LegalHoldReleaseRequest.Status.CANCELLED, LegalHoldReleaseRequest.Status.REJECTED})
+        self.assertEqual(
+            AuditEvent.objects.filter(
+                entity_id=str(release_request.public_id),
+                action__in=[AuditEvent.Action.LEGAL_HOLD_RELEASE_CANCELLED, AuditEvent.Action.LEGAL_HOLD_RELEASE_REQUESTED],
+            ).count(),
+            1,
         )
 
     def test_concurrent_approval_and_superuser_release_preserve_audited_terminal_state(self):

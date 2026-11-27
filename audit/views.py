@@ -15,7 +15,7 @@ from audit.policies import (
     get_privacy_audit_queryset_for_user,
     record_privacy_authorization_failure,
 )
-from audit.privacy import approve_legal_hold_release, create_legal_hold, direct_release_legal_hold, reject_legal_hold_release, request_legal_hold_release
+from audit.privacy import approve_legal_hold_release, cancel_legal_hold_release, create_legal_hold, direct_release_legal_hold, reject_legal_hold_release, request_legal_hold_release
 from people.models import Person
 from staff_access.models import CapabilityDefinition, StaffRole
 from staff_access.permissions import HasCrmOperationalAccess, user_has_any_active_staff_role, user_has_capability
@@ -183,6 +183,8 @@ class LegalHoldSerializer(serializers.Serializer):
             if release_request.status == LegalHoldReleaseRequest.Status.PENDING:
                 if actor.is_superuser or release_request.requested_by_id != actor.pk:
                     permitted_actions = ["approve", "reject"]
+                else:
+                    permitted_actions = ["cancel"]
             results.append({
                 "public_id": str(release_request.public_id),
                 "status": release_request.status,
@@ -198,6 +200,10 @@ class LegalHoldSerializer(serializers.Serializer):
                 "rejected_by": _safe_actor_summary(release_request.rejected_by) if release_request.rejected_by_id else None,
                 "rejected_at": release_request.rejected_at,
                 "rejection_reason": release_request.rejection_reason or None,
+                "cancelled_by_id": release_request.cancelled_by_id,
+                "cancelled_by": _safe_actor_summary(release_request.cancelled_by) if release_request.cancelled_by_id else None,
+                "cancelled_at": release_request.cancelled_at,
+                "cancellation_reason": release_request.cancellation_reason or None,
                 "permitted_actions": permitted_actions,
             })
         return results
@@ -313,7 +319,7 @@ class LegalHoldListCreateView(generics.ListCreateAPIView):
                 "release_requests",
                 queryset=LegalHoldReleaseRequest.objects.select_related(
                     "requested_by", "requested_by__person", "approved_by", "approved_by__person",
-                    "rejected_by", "rejected_by__person",
+                    "rejected_by", "rejected_by__person", "cancelled_by", "cancelled_by__person",
                 ),
             )
         )
@@ -365,7 +371,7 @@ class LegalHoldDetailView(generics.RetrieveAPIView):
                 "release_requests",
                 queryset=LegalHoldReleaseRequest.objects.select_related(
                     "requested_by", "requested_by__person", "approved_by", "approved_by__person",
-                    "rejected_by", "rejected_by__person",
+                    "rejected_by", "rejected_by__person", "cancelled_by", "cancelled_by__person",
                 ),
             )
         )
@@ -431,6 +437,35 @@ class LegalHoldReleaseRejectionView(APIView):
         return Response({
             "public_id": str(rejected.public_id),
             "status": rejected.status,
+            "permitted_actions": ["request_release"],
+            "execution_mode": "DIRECT_SUPERUSER" if request.user.is_superuser else "GOVERNED",
+        }, status=status.HTTP_200_OK)
+
+
+class LegalHoldReleaseCancellationView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [LegalHoldPermission, HasCrmOperationalAccess]
+
+    def post(self, request, public_id):
+        release_request = LegalHoldReleaseRequest.objects.select_related("legal_hold").filter(public_id=public_id).first()
+        if release_request is None:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            cancelled = cancel_legal_hold_release(
+                actor_user=request.user,
+                release_request=release_request,
+                reason=request.data.get("reason"),
+            )
+        except (PermissionDenied, ValidationError) as error:
+            record_privacy_authorization_failure(
+                request=request,
+                denial_code="LEGAL_HOLD_RELEASE_CANCELLATION_DENIED",
+                operation="LEGAL_HOLD_RELEASE_CANCELLATION",
+            )
+            return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            "public_id": str(cancelled.public_id),
+            "status": cancelled.status,
             "permitted_actions": ["request_release"],
             "execution_mode": "DIRECT_SUPERUSER" if request.user.is_superuser else "GOVERNED",
         }, status=status.HTTP_200_OK)

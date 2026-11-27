@@ -223,6 +223,46 @@ def reject_legal_hold_release(*, actor_user, release_request, reason):
 
 
 @transaction.atomic
+def cancel_legal_hold_release(*, actor_user, release_request, reason):
+    """Cancel a pending release request without changing the protected hold."""
+    _require_manager(actor_user)
+    reason = _reason(reason)
+    release_request = LegalHoldReleaseRequest.objects.select_related("legal_hold", "requested_by").get(pk=release_request.pk)
+    hold = LegalHold.objects.select_for_update().get(pk=release_request.legal_hold_id)
+    release_request = LegalHoldReleaseRequest.objects.select_for_update().select_related("legal_hold", "requested_by").get(pk=release_request.pk)
+    if release_request.status != LegalHoldReleaseRequest.Status.PENDING:
+        raise ValidationError("The release request is no longer pending.")
+    if release_request.requested_by_id != actor_user.pk:
+        raise PermissionDenied("Only the original requester may cancel this release request.")
+    if hold.status != LegalHold.Status.ACTIVE:
+        raise ValidationError("Only release requests for active legal holds may be cancelled.")
+    now = timezone.now()
+    release_request.status = LegalHoldReleaseRequest.Status.CANCELLED
+    release_request.cancelled_by = actor_user
+    release_request.cancelled_at = now
+    release_request.cancellation_reason = reason
+    release_request.save(update_fields=["status", "cancelled_by", "cancelled_at", "cancellation_reason"])
+    subject_person = hold.person
+    if subject_person is None and hold.audit_event_id:
+        subject = hold.audit_event.subjects.filter(subject_type=AuditEventSubject.SubjectType.PERSON).first()
+        subject_person = getattr(subject, "person", None)
+    record_audit_event(
+        action=AuditEvent.Action.LEGAL_HOLD_RELEASE_CANCELLED,
+        actor_user=actor_user,
+        entity_type="LegalHoldReleaseRequest",
+        entity_id=release_request.public_id,
+        metadata={
+            "operation": "LEGAL_HOLD_RELEASE_CANCELLED",
+            "outcome": "CANCELLED",
+            "release_request_id": str(release_request.public_id),
+        },
+        audit_domain=AuditEvent.Domain.PRIVACY,
+        subject_person=subject_person,
+    )
+    return release_request
+
+
+@transaction.atomic
 def create_retention_policy_version(
     *, actor_user, audit_domain, retention_class, retention_days, effective_at=None, reason=""
 ):

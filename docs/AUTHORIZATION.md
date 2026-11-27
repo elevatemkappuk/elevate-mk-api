@@ -412,6 +412,13 @@ Business-compatible, or Staff Person scope. Technical Persons are denied.
 require `PRIVACY_AUDIT_READ`. Django superuser operations remain the approved
 audited exception and still require CRM admission.
 
+For a pending release request, only its original requester may invoke the
+governed cancellation action, and the hold must still be active. Cancellation
+requires a reason, leaves retention protection unchanged, records an immutable
+terminal outcome, and is rechecked inside the service transaction. Approvals,
+rejections, and direct superuser releases retain their separate authorization
+rules.
+
 Authorization and Person scope are enforced before filtering, counts, and
 pagination. Denials use safe opaque references and reason codes. Mobile JWT
 authentication and `/auth/me/` remain unchanged. The coordinated CRM rollout

@@ -173,6 +173,7 @@ class AuditEvent(models.Model):
         RETENTION_POLICY_VERSION_CREATED = "RETENTION_POLICY_VERSION_CREATED", "Retention policy version created"
         LEGAL_HOLD_PLACED = "LEGAL_HOLD_PLACED", "Legal hold placed"
         LEGAL_HOLD_RELEASE_REQUESTED = "LEGAL_HOLD_RELEASE_REQUESTED", "Legal hold release requested"
+        LEGAL_HOLD_RELEASE_CANCELLED = "LEGAL_HOLD_RELEASE_CANCELLED", "Legal hold release request cancelled"
         LEGAL_HOLD_RELEASED = "LEGAL_HOLD_RELEASED", "Legal hold released"
 
     actor_user = models.ForeignKey(
@@ -411,6 +412,7 @@ class LegalHoldReleaseRequest(models.Model):
         PENDING = "PENDING", "Pending"
         APPROVED = "APPROVED", "Approved"
         REJECTED = "REJECTED", "Rejected"
+        CANCELLED = "CANCELLED", "Cancelled"
 
     public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     legal_hold = models.ForeignKey(
@@ -444,6 +446,15 @@ class LegalHoldReleaseRequest(models.Model):
     )
     rejected_at = models.DateTimeField(null=True, blank=True)
     rejection_reason = models.TextField(blank=True)
+    cancelled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="legal_hold_release_cancellations",
+    )
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancellation_reason = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     objects = ImmutableRetentionQuerySet.as_manager()

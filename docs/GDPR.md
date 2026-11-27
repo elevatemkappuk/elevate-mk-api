@@ -503,9 +503,12 @@ an authoritative relationship exists. Historical reconciliation and backfill
 remain deferred and require separate approval; unresolved records remain
 protected from retention disposal.
 
-The release-request model supports pending, approved, and rejected states
-through `audit.0023_legalhold_release_rejection`; rejection preserves the
-active hold and permits a subsequent request. Legal-hold list/detail
+The release-request model supports pending, approved, rejected, and cancelled
+states. Rejection is recorded by `audit.0023_legalhold_release_rejection`;
+request cancellation is recorded by the additive `audit.0027` fields and
+`audit.0028` audit-action choice update. Cancellation is restricted to the
+original requester while the hold remains active, preserves retention, and
+permits a subsequent request. Legal-hold list/detail
 projections include safe release-request summaries and backend-calculated
 approval/rejection actions, allowing an independent authorized administrator
 to discover pending requests after login or refresh without manual request-ID

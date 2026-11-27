@@ -160,6 +160,7 @@ class PrivacyAuditFoundationTests(TestCase):
         StaffRoleAssignment.objects.assign_role(
             user=crm_admin,
             role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN),
+            assigned_by=self.superuser,
         )
         StaffCapabilityAssignment.objects.create(
             user=crm_admin,
