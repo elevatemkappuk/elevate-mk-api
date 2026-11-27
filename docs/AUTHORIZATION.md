@@ -551,3 +551,21 @@ scheduler in this repository. It rejects actorless invocation and remains safe
 at its service boundary. No new scheduler is introduced; integrating a caller
 and its activation controls is a production prerequisite if future role-loss
 workflows require automatic reconciliation.
+
+## Staff Management V1 — approved planned authorization
+
+The authoritative planned contract is in
+[STAFF_MANAGEMENT.md](STAFF_MANAGEMENT.md). It is not an implemented endpoint
+or permission contract yet.
+
+The approved design adds a narrowly scoped Staff Management exception for an
+authenticated, active Django Superuser with a valid linked Person. This does
+not grant general CRM access, assign an operational role, override
+self-management restrictions, bypass Administrator approval or alter Django
+privilege flags. Django `is_staff` alone remains insufficient.
+
+The planned implementation must also enforce one active CRM-family role,
+two-person approval for CRM Administrator authority, protected technical
+accounts, final-Administrator continuity, independent staff/account lifecycles,
+and automatic suspension of individual privacy grants on staff deactivation.
+These are **Approved / Planned**, not current enforcement claims.

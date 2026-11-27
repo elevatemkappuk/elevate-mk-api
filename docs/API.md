@@ -3217,3 +3217,12 @@ authorization-failure contract, and comprehensive Person access auditing
 remains `GDPR-FUTURE-001`. The required audit-choice migration is generated but
 not applied; automated and runtime verification remain deferred to GDPR Phase 1C
 hardening.
+
+## Staff Management V1 planned API
+
+The planned Staff Management API is documented in
+[STAFF_MANAGEMENT.md](STAFF_MANAGEMENT.md). Directory, onboarding, invitation,
+Administrator approval, role, lifecycle, account-security, audit and privacy
+summary routes described there are **Approved / Planned** and are not currently
+available. Proposed routes must not be presented to clients as deployed
+contracts until implementation and OpenAPI verification are complete.

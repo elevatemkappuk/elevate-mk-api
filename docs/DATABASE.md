@@ -1645,3 +1645,19 @@ role defaults are existing capability-foundation data. The generated
 behavior is documented in `AUTHORIZATION.md`, `API.md`, and `GDPR.md`.
 
 Status: **Implemented / source-inspected; database checks and tests unexecuted**.
+
+## Staff Management V1 planned schema impact
+
+The approved architecture is documented in
+[STAFF_MANAGEMENT.md](STAFF_MANAGEMENT.md). No Staff Management migration has
+been created or applied.
+
+The planned schema work may extend `StaffInvitation` with explicit Person/User
+linkage and one requested CRM role, add a dedicated
+`StaffAdministratorProposal`, and add indexes/constraints needed for pending
+invitation and proposal lookup. One active role within the CRM family must be
+enforced transactionally and, where the schema can express it safely, with a
+database-backed invariant without blocking future complementary role families.
+
+These are **Approved / Planned** changes. The current database model and
+production/test data have not been reconciled in this documentation stage.

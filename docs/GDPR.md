@@ -936,3 +936,21 @@ traceability. They do not replace the subject-based sections above:
 Historical evidence remains subject to the status labels in this document. A
 recorded test or isolated UAT result is not a claim of staging, production,
 deployment or legal approval.
+
+## Staff Management V1 privacy integration
+
+The approved planned Staff Management privacy contract is documented in
+[STAFF_MANAGEMENT.md](STAFF_MANAGEMENT.md). Staff Management will reuse the
+existing capability evaluator and will not become a second privacy-permission
+administration surface.
+
+When operational staff access is deactivated, active individual capability
+grants are planned to move to the existing `SUSPENDED` state atomically with
+role revocation and CRM-session invalidation. Explicit restrictions remain in
+force. Reactivation must not restore suspended grants; explicit restoration
+remains owned by Privacy Administration and requires its existing authorization,
+reason and audit controls.
+
+This integration is **Approved / Planned**. Current evaluator and suspended
+state support are source-inspected foundations, not Staff Management runtime
+verification.

@@ -511,3 +511,21 @@ middleware; caller-supplied request identifiers and IP values cannot replace
 the trusted request context. Background, system, migration, and legacy events
 retain explicit provenance classifications. This does not change login,
 session, JWT, credential, or authentication-revocation contracts.
+
+## Staff Management V1 — approved planned authentication behavior
+
+See [STAFF_MANAGEMENT.md](STAFF_MANAGEMENT.md) for the planned Staff
+Management contract. It is not implemented or runtime-verified.
+
+The planned feature reuses Django CRM sessions, `auth_version`,
+`crm_session_version`, Django password validation, existing password-reset
+tokens and transactional email jobs. Existing active Users retain their
+credentials when accepting staff access. Login-email changes require
+authentication with the existing account and verification at the new address;
+`User.email` remains independent from `Person.primary_email`.
+
+Account disablement, password reset, email change and exceptional recovery must
+invalidate the appropriate sessions and outstanding tokens. Account enablement
+must not resurrect invalidated sessions, revoked staff assignments or suspended
+privacy grants. These statements are **Approved / Planned**, not claims of
+current Staff Management implementation.
