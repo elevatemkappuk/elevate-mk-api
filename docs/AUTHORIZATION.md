@@ -270,9 +270,10 @@ resolve them:
 
 - **GOV-003 — Direct ORM bypass:** direct ORM writes or privileged management
   scripts may bypass the governance service boundary until all callers are
-  constrained and reviewed. The three governance persistence models are not registered in
-  Django Admin; inspected application-level privacy writers are in
-  `staff_access/governance.py`. Trusted migration, maintenance, and
+  constrained and reviewed. The three governance persistence models are registered in
+  Django Admin only behind the active-superuser boundary and route supported
+  mutations through audited governance services; raw deletion is disabled.
+  Trusted migration, maintenance, and
   database-administrator paths remain explicit trust boundaries rather than
   operational interfaces.
 - **GOV-004 — Recovery disabled:** controlled recovery remains disabled pending
@@ -289,7 +290,11 @@ resolve them:
   authorization, capability, and reconciliation paths remains open for
   concurrency review.
 
-GOV-003, GOV-004, the uncovered privileged-writer portion of GOV-006, and
+The current targeted remediation resolves the reviewed application-level
+actor and Admin-write defects; remaining full-suite, operational, and uncovered
+privileged-writer verification is preserved below. GOV-004 is superseded by the
+approved superuser authority decision. GOV-003 residual trusted-writer/operational
+verification, the uncovered privileged-writer portion of GOV-006, and
 operational coverage for GOV-005 block operational governance activation.
 `AUTH-001` and `AUTH-002` also remain open.
 
@@ -301,8 +306,9 @@ superuser an operational CRM role or change existing endpoint permission
 classes. The direct mutation path additionally records actual before/after
 state, actor, target, operation, justification, and superuser authority usage.
 
-The current documentation does not claim capability administration endpoints or
-a Django Admin governance surface. Masking, Person projections, search/export
+The current documentation records the constrained Django Admin governance
+surface; it does not claim unrestricted capability administration endpoints.
+Masking, Person projections, search/export
 enforcement, CRM UI enforcement, automatic disposal, and any exceptional
 restricted-access workflow remain deferred. Source service behavior does not
 establish public activation.
@@ -494,10 +500,45 @@ test-only dataset; new Staff role assignment is limited to active STAFF users,
 or the approved active Django superuser exception, and active canonical roles.
 
 Ordinary Django Admin self-assignment and direct editing of existing
-`StaffRoleAssignment` rows are blocked. System audit events now discard
+`StaffRoleAssignment` rows are blocked. Active authenticated Django
+superusers are the approved exception: through the authorized Django Admin
+boundary they may manage staff roles and privacy permissions, including their
+own assignments, without ordinary CRM justification or two-person approval.
+Every such operation still requires an attributable authenticated actor,
+durable automatic audit, before/after state where applicable, outcome, and a
+privileged-bypass indicator; absence of business justification is recorded as
+absent rather than fabricated. System audit events now discard
 caller-supplied request context unless an explicit trusted provenance is used;
 HTTP provenance continues to use the server-generated request identifier.
-Focused regression tests were added but are **Implemented / Unverified** until
-final GDPR hardening execution. Remaining operational writer coverage,
+Focused regression tests were added and the affected targeted cases are
+**Verified**; the complete bounded suite remains unrerun after the final
+corrections. Remaining operational writer coverage,
 reconciliation integration, deployment/migration validation, and any legal or
 privacy approvals remain activation dependencies.
+
+### Phase 1C targeted remediation status
+
+Application role assignment, deactivation, and revocation services now reject
+missing actors and cannot disable their mandatory audit path. Django Admin uses
+the audited service path. Trusted provenance now requires an internal
+server-bound authority marker; caller-constructed `trusted=True` provenance is
+rejected. Targeted endpoint coverage includes schema, Swagger, and ReDoc under
+the same session and technical-permission policy. These corrections have
+targeted evidence only; the complete Phase 1C security gate remains open for
+GOV-005 caller/scheduling verification, uncovered GOV-006 writers, and the
+remaining AUTH-001/AUTH-002 disposition work.
+
+The approved Django superuser exception is intentionally not classified as a
+GOV-003 bypass. Active authenticated Django superusers using the registered
+Django Admin boundary may administer staff roles and privacy permissions,
+including their own, without ordinary justification or two-person approval.
+The direct privacy-permission Admin boundary admits only active superusers;
+ordinary `is_staff` users and CRM administrators do not receive this exception.
+Automatic audit persistence remains mandatory and records an empty
+justification when none was supplied.
+
+The reconciliation service has no active non-test application caller or
+scheduler in this repository. It rejects actorless invocation and remains safe
+at its service boundary. No new scheduler is introduced; integrating a caller
+and its activation controls is a production prerequisite if future role-loss
+workflows require automatic reconciliation.

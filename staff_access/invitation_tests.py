@@ -25,7 +25,7 @@ class StaffInvitationTests(TestCase):
         self.client = APIClient()
         for code, name in StaffRole.CANONICAL_ROLES:
             StaffRole.objects.update_or_create(code=code, defaults={"name": name, "is_active": True})
-        self.actor = User.objects.create_user(
+        self.actor = User.objects.create_superuser(
             email="admin@example.com",
             password="Strong-password-123!",
             person=Person.objects.create(
@@ -35,6 +35,7 @@ class StaffInvitationTests(TestCase):
         StaffRoleAssignment.objects.assign_role(
             user=self.actor,
             role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN),
+            assigned_by=self.actor,
         )
 
     def test_invitation_stores_only_token_digest_and_redeems_once(self):
@@ -108,7 +109,11 @@ class StaffInvitationTests(TestCase):
             email="reactivate@example.com", password="Old-password-123!",
             person=Person.objects.create(first_name="Re", last_name="Activate", primary_email="reactivate@example.com", record_type=Person.RecordType.STAFF),
         )
-        StaffRoleAssignment.objects.assign_role(user=target, role=StaffRole.objects.get(code=StaffRole.CRM_VIEWER))
+        StaffRoleAssignment.objects.assign_role(
+            user=target,
+            role=StaffRole.objects.get(code=StaffRole.CRM_VIEWER),
+            assigned_by=self.actor,
+        )
         offboard_staff_user(target_user=target, actor_user=self.actor)
         invitation = reactivate_staff_user(target_user=target, actor_user=self.actor)
         with patch("notifications.jobs.send_transactional_email", return_value=SimpleNamespace(provider_message_id="test-id")) as send:

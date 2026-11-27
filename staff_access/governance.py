@@ -687,6 +687,7 @@ def apply_superuser_capability_change(
     role=None,
     target_user=None,
     request=None,
+    allow_empty_reason=False,
 ):
     """Apply one directly audited Django-superuser governance operation.
 
@@ -694,7 +695,7 @@ def apply_superuser_capability_change(
     exception. Ordinary administrators continue through proposals and their
     existing eligibility, restriction, and separation-of-duty rules.
     """
-    reason = _reason(reason)
+    reason = "" if allow_empty_reason and not str(reason or "").strip() else _reason(reason)
     operation = str(operation)
     if operation not in CapabilityProposal.Operation.values:
         raise ValidationError({"operation": "Unknown capability governance operation."})

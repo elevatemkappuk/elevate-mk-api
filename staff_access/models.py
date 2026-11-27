@@ -76,7 +76,7 @@ class StaffRoleAssignmentManager(models.Manager):
     def active(self):
         return self.get_queryset().active()
 
-    def assign_role(self, *, user, role, assigned_by=None, audit=False, return_details=False):
+    def assign_role(self, *, user, role, assigned_by=None, audit=True, return_details=False):
         from staff_access.services import assign_staff_role
 
         return assign_staff_role(

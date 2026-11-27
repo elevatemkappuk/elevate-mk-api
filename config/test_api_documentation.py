@@ -27,11 +27,14 @@ class ApiDocumentationAccessTests(TestCase):
 
     @override_settings(ELEVATE_ENVIRONMENT="staging")
     def test_staging_requires_active_technical_permission(self):
-        self.assertEqual(self.client.get("/api/schema/").status_code, 403)
+        for path in ("/api/schema/", "/api/docs/", "/api/redoc/"):
+            self.assertEqual(self.client.get(path).status_code, 403)
         self.client.force_login(self.user)
-        self.assertEqual(self.client.get("/api/schema/").status_code, 403)
+        for path in ("/api/schema/", "/api/docs/", "/api/redoc/"):
+            self.assertEqual(self.client.get(path).status_code, 403)
         self.user.user_permissions.add(self.permission)
-        self.assertEqual(self.client.get("/api/schema/").status_code, 200)
+        for path in ("/api/schema/", "/api/docs/", "/api/redoc/"):
+            self.assertEqual(self.client.get(path).status_code, 200)
 
     @override_settings(ELEVATE_ENVIRONMENT="staging")
     def test_inactive_technical_user_is_denied(self):
@@ -39,7 +42,8 @@ class ApiDocumentationAccessTests(TestCase):
         self.user.is_active = False
         self.user.save(update_fields=["is_active"])
         self.client.force_login(self.user)
-        self.assertEqual(self.client.get("/api/schema/").status_code, 403)
+        for path in ("/api/schema/", "/api/docs/", "/api/redoc/"):
+            self.assertEqual(self.client.get(path).status_code, 403)
 
     @override_settings(ELEVATE_ENVIRONMENT="production", API_DOCUMENTATION_PRODUCTION_ENABLED=False)
     def test_production_documentation_is_disabled_by_default(self):

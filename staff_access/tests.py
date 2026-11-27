@@ -16,8 +16,15 @@ from unittest.mock import patch
 from accounts.models import User
 from audit.models import AuditEvent
 from people.models import Person
-from staff_access.admin import StaffRoleAdmin, StaffRoleAssignmentAdmin
+from staff_access.admin import (
+    RoleCapabilityDefaultAdmin,
+    StaffCapabilityAssignmentAdmin,
+    StaffCapabilityRestrictionAdmin,
+    StaffRoleAdmin,
+    StaffRoleAssignmentAdmin,
+)
 from staff_access.exceptions import FinalCrmAdminProtectionError
+from staff_access.services import activate_staff_role
 from staff_access.models import (
     CapabilityDefinition,
     CapabilityPolicyState,
@@ -48,7 +55,7 @@ class StaffRoleModelTests(TestCase):
             person_last_name="User",
             person_record_type=Person.RecordType.STAFF,
         )
-        StaffRoleAssignment.objects.assign_role(user=user, role=role)
+        StaffRoleAssignment.objects.assign_role(user=user, role=role, assigned_by=user)
         role.is_active = False
         role.save(update_fields=["is_active"])
 
@@ -76,10 +83,10 @@ class CapabilityFoundationTests(TestCase):
         self.viewer = self.create_user("cap-viewer@example.com")
         self.manager = self.create_user("cap-manager@example.com")
         self.admin = self.create_user("cap-admin@example.com")
-        self.actor = self.create_user("cap-actor@example.com")
-        StaffRoleAssignment.objects.assign_role(user=self.viewer, role=StaffRole.CRM_VIEWER)
-        StaffRoleAssignment.objects.assign_role(user=self.manager, role=StaffRole.CRM_MANAGER)
-        StaffRoleAssignment.objects.assign_role(user=self.admin, role=StaffRole.CRM_ADMIN)
+        self.actor = self.create_user("cap-actor@example.com", superuser=True)
+        StaffRoleAssignment.objects.assign_role(user=self.viewer, role=StaffRole.CRM_VIEWER, assigned_by=self.actor)
+        StaffRoleAssignment.objects.assign_role(user=self.manager, role=StaffRole.CRM_MANAGER, assigned_by=self.actor)
+        StaffRoleAssignment.objects.assign_role(user=self.admin, role=StaffRole.CRM_ADMIN, assigned_by=self.actor)
 
     def test_canonical_capabilities_and_role_defaults_match_approved_matrix(self):
         self.assertEqual(
@@ -340,7 +347,7 @@ class StaffRoleAssignmentModelTests(TestCase):
             person_last_name="User",
             person_record_type=Person.RecordType.STAFF,
         )
-        self.actor = User.objects.create_user(
+        self.actor = User.objects.create_superuser(
             email="actor@example.com",
             password="testpass123",
             person_first_name="Actor",
@@ -355,19 +362,42 @@ class StaffRoleAssignmentModelTests(TestCase):
         assignment = StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role, assigned_by=self.actor)
         self.assertEqual(assignment.user, self.user)
 
+    def test_role_assignment_requires_attributable_actor_and_audit(self):
+        with self.assertRaises(PermissionError):
+            StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role)
+        with self.assertRaises(PermissionError):
+            StaffRoleAssignment.objects.assign_role(
+                user=self.user,
+                role=self.admin_role,
+                assigned_by=self.actor,
+                audit=False,
+            )
+
+    def test_role_revocation_requires_attributable_actor_and_audit(self):
+        assignment = StaffRoleAssignment.objects.assign_role(
+            user=self.user,
+            role=self.admin_role,
+            assigned_by=self.actor,
+        )
+        from staff_access.services import revoke_staff_role_assignments
+        with self.assertRaises(PermissionError):
+            revoke_staff_role_assignments(assignments=[assignment])
+        with self.assertRaises(PermissionError):
+            revoke_staff_role_assignments(assignments=[assignment], revoked_by=self.actor, audit=False)
+
     def test_one_user_can_hold_multiple_different_roles(self):
-        StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.user, role=self.manager_role)
+        StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role, assigned_by=self.actor)
+        StaffRoleAssignment.objects.assign_role(user=self.user, role=self.manager_role, assigned_by=self.actor)
         self.assertEqual(self.user.staff_role_assignments.count(), 2)
 
     def test_duplicate_user_role_assignment_is_prevented(self):
-        StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role)
+        StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role, assigned_by=self.actor)
         with self.assertRaises((IntegrityError, ValidationError)):
             StaffRoleAssignment.objects.create(user=self.user, role=self.admin_role)
 
     def test_revocation_makes_assignment_inactive(self):
-        assignment = StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.actor, role=self.admin_role)
+        assignment = StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role, assigned_by=self.actor)
+        StaffRoleAssignment.objects.assign_role(user=self.actor, role=self.admin_role, assigned_by=self.actor)
         assignment.revoke(revoked_by=self.actor)
         assignment.refresh_from_db()
 
@@ -376,11 +406,11 @@ class StaffRoleAssignmentModelTests(TestCase):
         self.assertEqual(assignment.revoked_by, self.actor)
 
     def test_reactivation_restores_same_assignment_row(self):
-        assignment = StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.actor, role=self.admin_role)
+        assignment = StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role, assigned_by=self.actor)
+        StaffRoleAssignment.objects.assign_role(user=self.actor, role=self.admin_role, assigned_by=self.actor)
         original_id = assignment.id
         assignment.revoke(revoked_by=self.actor)
-        reactivated = StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role)
+        reactivated = StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role, assigned_by=self.actor)
         reactivated.refresh_from_db()
 
         self.assertEqual(reactivated.id, original_id)
@@ -389,16 +419,16 @@ class StaffRoleAssignmentModelTests(TestCase):
         self.assertIsNone(reactivated.revoked_by)
 
     def test_inactive_assignments_do_not_grant_access(self):
-        assignment = StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.actor, role=self.admin_role)
-        assignment.revoke()
+        assignment = StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role, assigned_by=self.actor)
+        StaffRoleAssignment.objects.assign_role(user=self.actor, role=self.admin_role, assigned_by=self.actor)
+        assignment.revoke(revoked_by=self.actor)
         self.assertFalse(StaffRoleAssignment.objects.active().filter(pk=assignment.pk).exists())
 
     def test_assignments_to_inactive_roles_do_not_grant_access(self):
         self.viewer_role.is_active = False
         self.viewer_role.save(update_fields=["is_active"])
         with self.assertRaises(ValidationError):
-            StaffRoleAssignment.objects.assign_role(user=self.user, role=self.viewer_role)
+            StaffRoleAssignment.objects.assign_role(user=self.user, role=self.viewer_role, assigned_by=self.actor)
         self.assertFalse(StaffRoleAssignment.objects.active().exists())
 
     def test_staff_role_assignment_rejects_new_technical_person_user(self):
@@ -411,7 +441,7 @@ class StaffRoleAssignmentModelTests(TestCase):
         )
 
         with self.assertRaises(ValidationError):
-            StaffRoleAssignment.objects.assign_role(user=technical_user, role=self.admin_role)
+            StaffRoleAssignment.objects.assign_role(user=technical_user, role=self.admin_role, assigned_by=self.actor)
         self.assertFalse(StaffRoleAssignment.objects.filter(user=technical_user).exists())
 
 
@@ -497,7 +527,7 @@ class FinalCrmAdminProtectionTests(TestCase):
         self.assign(self.create_user("admin-two@example.com"), self.admin_role)
         assignment.revoke(revoked_by=self.actor)
 
-        assignment.reactivate()
+        assignment.reactivate(assigned_by=self.actor)
 
         assignment.refresh_from_db()
         self.assertTrue(assignment.is_active)
@@ -531,6 +561,12 @@ class FinalCrmAdminProtectionTests(TestCase):
 class StaffPermissionTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.bootstrap = User.objects.create_superuser(
+            email="permission-bootstrap@example.com",
+            password="testpass123",
+            person_first_name="Permission",
+            person_last_name="Bootstrap",
+        )
         self.non_staff_user = User.objects.create_user(
             email="member@example.com",
             password="testpass123",
@@ -558,7 +594,7 @@ class StaffPermissionTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_user_with_permitted_active_staff_role_is_allowed(self):
-        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.manager_role)
+        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.manager_role, assigned_by=self.bootstrap)
         self.client.force_authenticate(user=self.staff_user)
         response = self.client.get("/test-permissions/manager-or-admin/")
         self.assertEqual(response.status_code, 200)
@@ -572,13 +608,13 @@ class StaffPermissionTests(TestCase):
             person_record_type=Person.RecordType.TECHNICAL,
             is_superuser=True,
         )
-        StaffRoleAssignment.objects.assign_role(user=technical_user, role=self.admin_role)
+        StaffRoleAssignment.objects.assign_role(user=technical_user, role=self.admin_role, assigned_by=self.bootstrap)
         self.client.force_authenticate(user=technical_user)
         response = self.client.get("/test-permissions/admin-only/")
         self.assertEqual(response.status_code, 200)
 
     def test_revoked_role_receives_403(self):
-        assignment = StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.admin_role)
+        assignment = StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.admin_role, assigned_by=self.bootstrap)
         backup_staff_user = User.objects.create_user(
             email="backup-staff@example.com",
             password="testpass123",
@@ -586,14 +622,14 @@ class StaffPermissionTests(TestCase):
             person_last_name="Staff",
             person_record_type=Person.RecordType.STAFF,
         )
-        StaffRoleAssignment.objects.assign_role(user=backup_staff_user, role=self.admin_role)
-        assignment.revoke()
+        StaffRoleAssignment.objects.assign_role(user=backup_staff_user, role=self.admin_role, assigned_by=self.bootstrap)
+        assignment.revoke(revoked_by=self.bootstrap)
         self.client.force_authenticate(user=self.staff_user)
         response = self.client.get("/test-permissions/admin-only/")
         self.assertEqual(response.status_code, 403)
 
     def test_inactive_role_receives_403(self):
-        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.viewer_role)
+        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.viewer_role, assigned_by=self.bootstrap)
         self.viewer_role.is_active = False
         self.viewer_role.save(update_fields=["is_active"])
         self.client.force_authenticate(user=self.staff_user)
@@ -620,8 +656,21 @@ class StaffAdminTests(TestCase):
         )
         self.role_admin = StaffRoleAdmin(StaffRole, self.site)
         self.assignment_admin = StaffRoleAssignmentAdmin(StaffRoleAssignment, self.site)
+        self.role_default_admin = RoleCapabilityDefaultAdmin(RoleCapabilityDefault, self.site)
+        self.capability_assignment_admin = StaffCapabilityAssignmentAdmin(StaffCapabilityAssignment, self.site)
+        self.capability_restriction_admin = StaffCapabilityRestrictionAdmin(StaffCapabilityRestriction, self.site)
         self.crm_admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
         self.crm_viewer_role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
+        CapabilityPolicyState.objects.get_or_create(
+            singleton_key=1,
+            defaults={
+                "key": "capability-governance",
+                "version": 1,
+                "baseline_snapshot": [],
+                "reason": "Staff admin test baseline",
+                "updated_by": self.admin_user,
+            },
+        )
 
     def build_request(self, user=None):
         request = self.factory.post("/admin/")
@@ -649,6 +698,83 @@ class StaffAdminTests(TestCase):
 
         self.assertFalse(self.assignment_admin.has_delete_permission(request))
         self.assertNotIn("delete_selected", self.assignment_admin.get_actions(request))
+
+    def test_superuser_admin_can_apply_privacy_permission_without_justification(self):
+        request = self.build_request()
+        capability, _created = CapabilityDefinition.objects.get_or_create(
+            code=CapabilityDefinition.PERSON_EXPORT,
+            defaults={
+                "name": "Person export",
+                "description": "Export permitted Person data.",
+            },
+        )
+        CapabilityPolicyState.objects.get_or_create(
+            singleton_key=1,
+            defaults={
+                "key": "capability-governance",
+                "version": 1,
+                "baseline_snapshot": {},
+                "reason": "Admin test baseline",
+            },
+        )
+        assignment = StaffCapabilityAssignment(
+            user=self.target_user,
+            capability=capability,
+            state=StaffCapabilityAssignment.State.ACTIVE,
+        )
+
+        self.capability_assignment_admin.save_model(request, assignment, form=None, change=False)
+
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.granted_by_id, self.admin_user.id)
+        event = AuditEvent.objects.filter(
+            action=AuditEvent.Action.CAPABILITY_PERMISSION_MUTATED,
+            entity_type="StaffCapabilityAssignment",
+        ).order_by("-id").first()
+        self.assertEqual(event.actor_user_id, self.admin_user.id)
+        self.assertTrue(event.metadata["superuser_authority"])
+        self.assertEqual(event.metadata["reason"], "")
+
+    def test_ordinary_admin_boundary_cannot_use_superuser_privacy_admin(self):
+        ordinary = User.objects.create_user(
+            email="ordinary-admin@example.com",
+            password="testpass123",
+            person_first_name="Ordinary",
+            person_last_name="Admin",
+            person_record_type=Person.RecordType.STAFF,
+        )
+        request = self.build_request(ordinary)
+        self.assertFalse(self.capability_assignment_admin.has_add_permission(request))
+        self.assertFalse(self.capability_restriction_admin.has_add_permission(request))
+        self.assertFalse(self.role_default_admin.has_change_permission(request))
+
+    def test_superuser_privacy_admin_cannot_delete_rows_outside_governance(self):
+        request = self.build_request()
+        self.assertFalse(self.capability_assignment_admin.has_delete_permission(request))
+        self.assertFalse(self.capability_restriction_admin.has_delete_permission(request))
+        self.assertFalse(self.role_default_admin.has_delete_permission(request))
+        self.assertNotIn("delete_selected", self.capability_assignment_admin.get_actions(request))
+
+    def test_superuser_privacy_admin_keeps_target_identity_fields_immutable(self):
+        request = self.build_request()
+
+        self.assertIn("role", self.role_default_admin.get_readonly_fields(request, RoleCapabilityDefault()))
+        self.assertIn("capability", self.role_default_admin.get_readonly_fields(request, RoleCapabilityDefault()))
+        self.assertIn("user", self.capability_assignment_admin.get_readonly_fields(request, StaffCapabilityAssignment()))
+        self.assertIn("capability", self.capability_assignment_admin.get_readonly_fields(request, StaffCapabilityAssignment()))
+        self.assertIn("user", self.capability_restriction_admin.get_readonly_fields(request, StaffCapabilityRestriction()))
+        self.assertIn("capability", self.capability_restriction_admin.get_readonly_fields(request, StaffCapabilityRestriction()))
+
+    def test_role_activation_fails_closed_without_policy_state(self):
+        self.crm_viewer_role.is_active = False
+        self.crm_viewer_role.save(update_fields=["is_active"])
+        CapabilityPolicyState.objects.filter(singleton_key=1).delete()
+
+        with self.assertRaises(RuntimeError):
+            activate_staff_role(self.crm_viewer_role, actor_user=self.admin_user)
+
+        self.crm_viewer_role.refresh_from_db()
+        self.assertFalse(self.crm_viewer_role.is_active)
 
     def test_staff_role_assignment_admin_records_assigned_by_on_create(self):
         request = self.build_request()
@@ -706,7 +832,9 @@ class StaffAdminTests(TestCase):
 
     def test_staff_role_assignment_admin_revokes_selected_assignments(self):
         request = self.build_request()
-        assignment = StaffRoleAssignment.objects.assign_role(user=self.target_user, role=self.crm_admin_role)
+        assignment = StaffRoleAssignment.objects.assign_role(
+            user=self.target_user, role=self.crm_admin_role, assigned_by=self.admin_user
+        )
         other_admin = User.objects.create_user(
             email="other-admin@example.com",
             password="testpass123",
@@ -714,7 +842,7 @@ class StaffAdminTests(TestCase):
             person_last_name="Admin",
             person_record_type=Person.RecordType.STAFF,
         )
-        StaffRoleAssignment.objects.assign_role(user=other_admin, role=self.crm_admin_role)
+        StaffRoleAssignment.objects.assign_role(user=other_admin, role=self.crm_admin_role, assigned_by=self.admin_user)
 
         self.assignment_admin.revoke_selected_assignments(request, StaffRoleAssignment.objects.filter(pk=assignment.pk))
         assignment.refresh_from_db()
@@ -739,7 +867,9 @@ class StaffAdminTests(TestCase):
 
     def test_staff_role_assignment_admin_reactivates_selected_assignments(self):
         request = self.build_request()
-        assignment = StaffRoleAssignment.objects.assign_role(user=self.target_user, role=self.crm_admin_role)
+        assignment = StaffRoleAssignment.objects.assign_role(
+            user=self.target_user, role=self.crm_admin_role, assigned_by=self.admin_user
+        )
         other_admin = User.objects.create_user(
             email="other-admin@example.com",
             password="testpass123",
@@ -747,7 +877,7 @@ class StaffAdminTests(TestCase):
             person_last_name="Admin",
             person_record_type=Person.RecordType.STAFF,
         )
-        StaffRoleAssignment.objects.assign_role(user=other_admin, role=self.crm_admin_role)
+        StaffRoleAssignment.objects.assign_role(user=other_admin, role=self.crm_admin_role, assigned_by=self.admin_user)
         assignment.revoke(revoked_by=self.admin_user)
 
         self.assignment_admin.reactivate_selected_assignments(request, StaffRoleAssignment.objects.filter(pk=assignment.pk))
@@ -773,7 +903,9 @@ class StaffAdminTests(TestCase):
 
     def test_staff_role_assignment_admin_reuses_existing_row_for_reactivation(self):
         request = self.build_request()
-        assignment = StaffRoleAssignment.objects.assign_role(user=self.target_user, role=self.crm_viewer_role)
+        assignment = StaffRoleAssignment.objects.assign_role(
+            user=self.target_user, role=self.crm_viewer_role, assigned_by=self.admin_user
+        )
         original_id = assignment.id
         assignment.revoke(revoked_by=self.admin_user)
 
@@ -786,7 +918,7 @@ class StaffAdminTests(TestCase):
         self.assertEqual(StaffRoleAssignment.objects.filter(user=self.target_user, role=self.crm_viewer_role).count(), 1)
         self.assertEqual(
             AuditEvent.objects.filter(action=AuditEvent.Action.STAFF_ROLE_ASSIGNED).count(),
-            0,
+            1,
         )
         event = AuditEvent.objects.get(action=AuditEvent.Action.STAFF_ROLE_REACTIVATED)
         self.assertEqual(event.entity_id, str(original_id))
@@ -821,7 +953,7 @@ class StaffAdminTests(TestCase):
         assignment = StaffRoleAssignment(user=self.target_user, role=self.crm_admin_role)
         before_events = AuditEvent.objects.count()
 
-        with patch("staff_access.admin.record_audit_event", side_effect=RuntimeError("audit down")):
+        with patch("staff_access.services.record_audit_event", side_effect=RuntimeError("audit down")):
             with self.assertRaises(RuntimeError):
                 self.assignment_admin.save_model(request, assignment, form=None, change=False)
 
@@ -832,7 +964,9 @@ class StaffAdminTests(TestCase):
 
     def test_staff_role_assignment_admin_reactivation_rolls_back_when_audit_write_fails(self):
         request = self.build_request()
-        assignment = StaffRoleAssignment.objects.assign_role(user=self.target_user, role=self.crm_admin_role)
+        assignment = StaffRoleAssignment.objects.assign_role(
+            user=self.target_user, role=self.crm_admin_role, assigned_by=self.admin_user
+        )
         other_admin = User.objects.create_user(
             email="other-admin@example.com",
             password="testpass123",
@@ -840,12 +974,12 @@ class StaffAdminTests(TestCase):
             person_last_name="Admin",
             person_record_type=Person.RecordType.STAFF,
         )
-        StaffRoleAssignment.objects.assign_role(user=other_admin, role=self.crm_admin_role)
+        StaffRoleAssignment.objects.assign_role(user=other_admin, role=self.crm_admin_role, assigned_by=self.admin_user)
         assignment.revoke(revoked_by=self.admin_user)
         revoked_at = assignment.revoked_at
         revoked_by = assignment.revoked_by
 
-        with patch("staff_access.admin.record_audit_event", side_effect=RuntimeError("audit down")):
+        with patch("staff_access.services.record_audit_event", side_effect=RuntimeError("audit down")):
             with self.assertRaises(RuntimeError):
                 self.assignment_admin.reactivate_selected_assignments(
                     request,
@@ -860,7 +994,9 @@ class StaffAdminTests(TestCase):
 
     def test_staff_role_assignment_admin_revoke_rolls_back_when_audit_write_fails(self):
         request = self.build_request()
-        assignment = StaffRoleAssignment.objects.assign_role(user=self.target_user, role=self.crm_admin_role)
+        assignment = StaffRoleAssignment.objects.assign_role(
+            user=self.target_user, role=self.crm_admin_role, assigned_by=self.admin_user
+        )
         other_admin = User.objects.create_user(
             email="other-admin@example.com",
             password="testpass123",
@@ -868,9 +1004,9 @@ class StaffAdminTests(TestCase):
             person_last_name="Admin",
             person_record_type=Person.RecordType.STAFF,
         )
-        StaffRoleAssignment.objects.assign_role(user=other_admin, role=self.crm_admin_role)
+        StaffRoleAssignment.objects.assign_role(user=other_admin, role=self.crm_admin_role, assigned_by=self.admin_user)
 
-        with patch("staff_access.admin.record_audit_event", side_effect=RuntimeError("audit down")):
+        with patch("staff_access.services.record_audit_event", side_effect=RuntimeError("audit down")):
             with self.assertRaises(RuntimeError):
                 self.assignment_admin.revoke_selected_assignments(
                     request,
@@ -892,7 +1028,9 @@ class StaffAdminTests(TestCase):
         self.assertIn("is_active", form.errors)
 
     def test_staff_role_admin_deactivation_invalidates_existing_crm_sessions(self):
-        StaffRoleAssignment.objects.assign_role(user=self.target_user, role=self.crm_viewer_role)
+        StaffRoleAssignment.objects.assign_role(
+            user=self.target_user, role=self.crm_viewer_role, assigned_by=self.admin_user
+        )
         client = APIClient()
         response = client.post(
             "/api/v1/auth/login/",
@@ -918,7 +1056,9 @@ class StaffAdminTests(TestCase):
 
     def test_bulk_revoke_of_all_crm_admins_is_rejected_without_audit_events(self):
         request = self.build_request()
-        first = StaffRoleAssignment.objects.assign_role(user=self.target_user, role=self.crm_admin_role)
+        first = StaffRoleAssignment.objects.assign_role(
+            user=self.target_user, role=self.crm_admin_role, assigned_by=self.admin_user
+        )
         second_user = User.objects.create_user(
             email="second-admin@example.com",
             password="testpass123",
@@ -926,7 +1066,7 @@ class StaffAdminTests(TestCase):
             person_last_name="Admin",
             person_record_type=Person.RecordType.STAFF,
         )
-        second = StaffRoleAssignment.objects.assign_role(user=second_user, role=self.crm_admin_role)
+        second = StaffRoleAssignment.objects.assign_role(user=second_user, role=self.crm_admin_role, assigned_by=self.admin_user)
 
         self.assignment_admin.revoke_selected_assignments(
             request,
@@ -941,7 +1081,9 @@ class StaffAdminTests(TestCase):
 
     def test_mixed_bulk_revoke_succeeds_when_another_crm_admin_remains(self):
         request = self.build_request()
-        crm_admin = StaffRoleAssignment.objects.assign_role(user=self.target_user, role=self.crm_admin_role)
+        crm_admin = StaffRoleAssignment.objects.assign_role(
+            user=self.target_user, role=self.crm_admin_role, assigned_by=self.admin_user
+        )
         remaining_admin = User.objects.create_user(
             email="remaining-admin@example.com",
             password="testpass123",
@@ -949,7 +1091,7 @@ class StaffAdminTests(TestCase):
             person_last_name="Admin",
             person_record_type=Person.RecordType.STAFF,
         )
-        StaffRoleAssignment.objects.assign_role(user=remaining_admin, role=self.crm_admin_role)
+        StaffRoleAssignment.objects.assign_role(user=remaining_admin, role=self.crm_admin_role, assigned_by=self.admin_user)
         manager = StaffRoleAssignment.objects.assign_role(
             user=User.objects.create_user(
                 email="manager@example.com",
@@ -959,6 +1101,7 @@ class StaffAdminTests(TestCase):
                 person_record_type=Person.RecordType.STAFF,
             ),
             role=StaffRole.objects.get(code=StaffRole.CRM_MANAGER),
+            assigned_by=self.admin_user,
         )
         viewer = StaffRoleAssignment.objects.assign_role(
             user=User.objects.create_user(
@@ -969,6 +1112,7 @@ class StaffAdminTests(TestCase):
                 person_record_type=Person.RecordType.STAFF,
             ),
             role=self.crm_viewer_role,
+            assigned_by=self.admin_user,
         )
 
         self.assignment_admin.revoke_selected_assignments(
@@ -994,6 +1138,12 @@ class FinalCrmAdminConcurrencyTests(TransactionTestCase):
             code=StaffRole.CRM_ADMIN,
             defaults={"name": "CRM Admin", "is_active": True},
         )
+        self.bootstrap = User.objects.create_superuser(
+            email="concurrency-bootstrap@example.com",
+            password="testpass123",
+            person_first_name="Concurrency",
+            person_last_name="Bootstrap",
+        )
         self.first = self.create_assignment("first-admin@example.com")
         self.second = self.create_assignment("second-admin@example.com")
 
@@ -1005,7 +1155,7 @@ class FinalCrmAdminConcurrencyTests(TransactionTestCase):
             person_last_name="User",
             person_record_type=Person.RecordType.STAFF,
         )
-        return StaffRoleAssignment.objects.assign_role(user=user, role=self.role)
+        return StaffRoleAssignment.objects.assign_role(user=user, role=self.role, assigned_by=self.bootstrap)
 
     def test_concurrent_admin_revocations_leave_an_operational_admin(self):
         barrier = threading.Barrier(2)
@@ -1015,7 +1165,7 @@ class FinalCrmAdminConcurrencyTests(TransactionTestCase):
             close_old_connections()
             try:
                 barrier.wait()
-                assignment.revoke()
+                assignment.revoke(revoked_by=self.bootstrap)
             except FinalCrmAdminProtectionError:
                 errors.append("final_crm_admin")
             except Exception as error:

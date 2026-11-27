@@ -29,7 +29,7 @@ class EffectiveAccessEndpointTests(TestCase):
     def setUp(self):
         self.password = "testpass123"
         self.manager = self.create_staff_user("access-manager@example.com")
-        self.admin = self.create_staff_user("access-admin@example.com")
+        self.admin = self.create_staff_user("access-admin@example.com", superuser=True)
         self.viewer = self.create_staff_user("access-viewer@example.com")
         self.non_staff = User.objects.create_user(
             email="access-member@example.com",
@@ -37,9 +37,9 @@ class EffectiveAccessEndpointTests(TestCase):
             person_first_name="Access",
             person_last_name="Member",
         )
-        StaffRoleAssignment.objects.assign_role(user=self.manager, role=StaffRole.CRM_MANAGER)
-        StaffRoleAssignment.objects.assign_role(user=self.admin, role=StaffRole.CRM_ADMIN)
-        StaffRoleAssignment.objects.assign_role(user=self.viewer, role=StaffRole.CRM_VIEWER)
+        StaffRoleAssignment.objects.assign_role(user=self.manager, role=StaffRole.CRM_MANAGER, assigned_by=self.admin)
+        StaffRoleAssignment.objects.assign_role(user=self.admin, role=StaffRole.CRM_ADMIN, assigned_by=self.admin)
+        StaffRoleAssignment.objects.assign_role(user=self.viewer, role=StaffRole.CRM_VIEWER, assigned_by=self.admin)
 
     def create_staff_user(self, email, *, superuser=False):
         return User.objects.create_user(
@@ -164,7 +164,7 @@ class EffectiveAccessEndpointTests(TestCase):
 
     def test_superuser_audit_bypass_is_preserved_after_crm_admission(self):
         superuser = self.create_staff_user("access-superuser@example.com", superuser=True)
-        StaffRoleAssignment.objects.assign_role(user=superuser, role=StaffRole.CRM_ADMIN)
+        StaffRoleAssignment.objects.assign_role(user=superuser, role=StaffRole.CRM_ADMIN, assigned_by=superuser)
         client = self.session_client(superuser)
         before = AuditEvent.objects.filter(action=AuditEvent.Action.PRIVACY_SUPERUSER_BYPASS).count()
 

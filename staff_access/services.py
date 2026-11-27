@@ -31,6 +31,18 @@ def _invitation_token_hash(token):
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _require_staff_role_mutation_actor(actor_user):
+    """Require an active CRM administrator or the approved Django superuser."""
+    from staff_access.permissions import user_has_any_active_staff_role
+
+    if actor_user is None or not getattr(actor_user, "is_active", False):
+        raise PermissionError("Staff role mutation requires an active authenticated actor.")
+    if getattr(actor_user, "is_superuser", False):
+        return
+    if not user_has_any_active_staff_role(actor_user, (StaffRole.CRM_ADMIN,)):
+        raise PermissionError("Staff role mutation requires an active CRM_ADMIN actor.")
+
+
 def create_staff_invitation(*, actor_user, email, first_name, last_name, role_codes, expiry_hours=72):
     """Create a pending Staff identity without creating a User yet."""
     from accounts.models import User
@@ -170,6 +182,11 @@ def offboard_staff_user(*, target_user, actor_user, request=None):
 
 def assign_staff_role(*, user, role, assigned_by=None, audit=True, return_details=False):
     """Assign or reactivate one Staff role under the shared lifecycle lock contract."""
+    if assigned_by is None:
+        raise PermissionError("Staff role assignment requires an attributable actor.")
+    if not audit:
+        raise PermissionError("Staff role assignment auditing cannot be disabled.")
+    _require_staff_role_mutation_actor(assigned_by)
     if isinstance(role, str):
         role = StaffRole.objects.get(code=role)
 
@@ -229,6 +246,12 @@ def assign_staff_role(*, user, role, assigned_by=None, audit=True, return_detail
                 actor_user=assigned_by,
                 entity_type="StaffRoleAssignment",
                 entity_id=assignment.pk,
+                changes={
+                    "is_active": {
+                        "from": None if created else False,
+                        "to": True,
+                    },
+                },
                 metadata={
                     "target_user_id": str(locked_user.pk),
                     "staff_role_id": str(locked_role.pk),
@@ -245,11 +268,14 @@ def activate_staff_role(role, *, actor_user=None):
     """Reactivate a role while preserving the shared policy lock contract."""
     if actor_user is None:
         raise PermissionError("Role activation requires an authenticated actor.")
+    _require_staff_role_mutation_actor(actor_user)
     with transaction.atomic():
         policy_state = CapabilityPolicyState.objects.select_for_update().filter(
             singleton_key=1,
             key=CAPABILITY_POLICY_STATE_KEY,
         ).first()
+        if policy_state is None:
+            raise RuntimeError("Capability policy state is required for audited role activation.")
         locked_roles = list(StaffRole.objects.select_for_update().order_by("pk"))
         locked_role = next(item for item in locked_roles if item.pk == role.pk)
         if locked_role.is_active:
@@ -455,6 +481,9 @@ def ensure_staff_role_can_be_deactivated(role):
 
 def deactivate_staff_role(role, *, actor_user=None, request=None):
     """Deactivate a non-canonical-admin role through the Staff Access domain."""
+    if actor_user is None:
+        raise PermissionError("Staff role deactivation requires an attributable actor.")
+    _require_staff_role_mutation_actor(actor_user)
     with transaction.atomic():
         policy_state = CapabilityPolicyState.objects.select_for_update().filter(
             singleton_key=1,
@@ -512,6 +541,12 @@ def revoke_staff_role_assignments(*, assignments, revoked_by=None, revoked_at=No
     operations. The selected assignment rows are then locked in primary-key
     order before the effective-admin count is re-evaluated.
     """
+    if revoked_by is None:
+        raise PermissionError("Staff role revocation requires an attributable actor.")
+    if not audit:
+        raise PermissionError("Staff role revocation auditing cannot be disabled.")
+    _require_staff_role_mutation_actor(revoked_by)
+
     if hasattr(assignments, "values_list"):
         assignment_ids = assignments.values_list("pk", flat=True)
     else:

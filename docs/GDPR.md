@@ -227,14 +227,14 @@ admission and invalid-proposal-operation coverage.
 
 ## Security and privacy limitations
 
-The existing Django Admin path can still expose raw audit records to principals
-with technical audit permissions, and existing superusers can administer
-operational staff roles through the pre-existing Staff Admin path. These are
-separate security findings and are not silently changed by this foundation.
-The current security review leaves GOV-003 (direct ORM/trusted-writer boundary)
-open. GOV-004, the former controlled-recovery finding, is superseded by the
-approved direct Django superuser authority decision; final isolated validation
-verified the replacement path. Mandatory transactional audit, before/after
+The constrained Django Admin path remains subject to the separately tracked
+raw-audit exposure review, while existing superusers can administer operational
+staff roles through the approved Staff Admin path. The reviewed application-level
+GOV-003 writers are corrected; trusted maintenance/DBA boundaries and broader
+operational verification remain separate dependencies. GOV-004, the former
+controlled-recovery finding, is superseded by the approved direct Django
+superuser authority decision. The replacement path is source-verified and
+targeted-tested; broader runtime validation remains separate. Mandatory transactional audit, before/after
 recording, and rollback-on-audit-failure integrity remain required. GOV-006 lock ordering is verified for governance,
 role revocation, offboarding and reconciliation paths covered by focused tests,
 but all privileged operational writers are not yet covered. GOV-005's actorless
@@ -247,12 +247,22 @@ complete for the isolated local scope; operational governance activation
 remains blocked by the documented activation gates.
 
 The previous controlled-recovery requirement is superseded by the approved
-full Django superuser authority model. The API now provides one explicit,
+full Django superuser authority model. Active authenticated Django superusers
+using the authorized Django Admin boundary may directly assign, deactivate,
+revoke, grant, restrict, and restore staff roles and privacy permissions,
+including their own, without ordinary CRM justification or two-person
+approval. The absence of justification is recorded accurately. Mandatory
+automatic auditing, authenticated actor attribution, before/after state,
+outcome, privileged-bypass metadata, and fail-closed audit persistence remain
+required. Ordinary `is_staff` users and ordinary CRM administrators do not
+receive this exception. The API now provides one explicit,
 audited direct-operation service path for active superusers. It does not expose
-new public endpoints or Django Admin governance screens. Ordinary administrators
+new public endpoints. The constrained Django Admin governance surface is
+active-superuser-only, routes supported mutations through audited services, and
+disables raw deletion. Ordinary administrators
 remain subject to eligibility, restrictions, self-administration limits,
 proposal lifecycle, and two-person approval. The replacement path is
-implemented and runtime-verified in the final isolated suite; production,
+implemented and targeted-tested in the final remediation; production,
 operational activation, and cross-repository behavior remain unverified.
 
 ### Final validation supersession (authoritative current status)
@@ -398,8 +408,8 @@ existing Phase 1A.3 regression suites. The remediation subset passed 9/9 and
 the broader authorized focused set passed 69/69 against isolated PostgreSQL
 test database `test_elevate`; no operational database was migrated. AUTH-002
 remains preserved with its scoped raw-admin resolution;
-trusted provenance construction is a non-blocking follow-up, not an accepted
-risk. GOV-003, GOV-005, uncovered GOV-006 writers, AUTH-001, legacy TECHNICAL
+trusted provenance forgery rejection is implemented and targeted-tested; broader
+runtime/deployment verification remains outstanding. GOV-003, GOV-005, uncovered GOV-006 writers, AUTH-001, legacy TECHNICAL
 reconciliation, legal approval for disposal, and cross-repository runtime
 compatibility remain open or unverified.
 
@@ -723,10 +733,10 @@ warnings and errors; no broad schema cleanup was included. No new privacy
 capability, application API contract, migration execution, personal-data
 workflow, or comprehensive Person access auditing was introduced. Existing
 Phase 1C obligations remain open, including pending
-migrations, accumulated tests, authentication and governance findings,
+migrations, targeted security remediation, authentication and governance findings,
 authorization concurrency and revocation, People and Marketing disclosure
 auditing, provider verification, CSV/XLSX and Excel verification, export audit
-verification, manual UAT, independent specialist acceptance, and legal/privacy
+verification, the waived historical-campaign UAT scenario, independent specialist acceptance, and legal/privacy
 and production activation approvals.
 
 All planned GDPR Phase 1 functional development stages are marked complete for
@@ -742,7 +752,8 @@ the shared logout endpoint to accept only valid CRM or Community sessions;
 mobile JWT authentication remains separate. The corresponding API checks and
 focused privacy/export/Community tests passed: **49/49** after correcting
 stale test fixtures and masking expectations. The expanded API suite passed
-**1458/1458** on a fresh isolated PostgreSQL test database. Django `check` and
+**1458/1458** on a fresh isolated PostgreSQL test database (historical
+pre-remediation baseline evidence, not a post-correction result). Django `check` and
 `makemigrations --check --dry-run` passed; `migrate --plan` still reports
 `accounts.0003`, `audit.0024`, and `audit.0026` as pending and no migrations
 were applied.
@@ -765,8 +776,9 @@ device-session revocation flow.
 The custom `ElevateTestRunner` now supplements Django's default `test*.py`
 discovery with suffix-named modules matching `*_tests.py`, including the
 authentication, Community, and People/export modules. The corrected expanded
-runner executed **1458/1458** tests successfully on a fresh isolated
-PostgreSQL test database. This does not verify operational migration
+runner previously executed **1458/1458** tests successfully on a fresh isolated
+PostgreSQL test database; this remains historical pre-remediation baseline
+evidence. This does not verify operational migration
 application, deployment, production/staging behavior, or cross-repository
 runtime compatibility.
 OpenAPI generation was inspected and emitted existing serializer/authenticator
@@ -774,8 +786,23 @@ diagnostics. Those diagnostics are classified as **nonblocking for this Phase
 1C documentation update only** because they are unrelated to the privacy/logout
 corrections under review; schema generation is not claimed clean, and no broad
 schema cleanup was performed. Remaining final-hardening obligations include
-migration application in an authorized non-production environment, accumulated
-API/CRM suites, export and audit-failure runtime checks, cross-repository
+migration application in an authorized non-production environment, targeted
+security verification, export and audit-failure runtime checks, cross-repository
 compatibility, and independent final security/QA acceptance. AUTH-001,
 AUTH-002, GOV-003, GOV-005, uncovered GOV-006 paths, and trusted-provenance
-hardening remain open or activation dependencies; no risk is accepted here.
+runtime/deployment verification remain open or activation dependencies; no risk is accepted here. The
+targeted remediation now requires attributable actors and mandatory audit
+persistence for application role mutations, and rejects caller-constructed
+trusted provenance. These corrections have focused test evidence but do not
+supersede the established complete-suite baseline.
+
+The approved Django superuser administrative-freedom decision is preserved:
+active authenticated superusers using Django Admin may directly administer
+roles and privacy permissions, including their own, without ordinary business
+justification or two-person approval. This is an authorized exception, not a
+GOV-003 vulnerability. Automatic auditing, authenticated actor attribution,
+before/after state, outcome, privileged-bypass metadata, and fail-closed audit
+persistence remain required. The reconciliation helper has no non-test
+application caller or scheduler in the current repository; its actorless
+rejection is implemented, and any future operational integration remains a
+production activation prerequisite rather than a new scheduling subsystem.

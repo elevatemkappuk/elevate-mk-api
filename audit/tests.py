@@ -8,7 +8,7 @@ from rest_framework.test import APIClient
 from accounts.models import User
 from audit.admin import AuditEventAdmin
 from audit.models import AuditEvent, AuditEventImmutableError
-from audit.services import record_audit_event
+from audit.services import TrustedAuditProvenance, record_audit_event, set_audit_provenance
 from people.models import Person
 from staff_access.models import StaffRole, StaffRoleAssignment
 
@@ -42,6 +42,38 @@ class AuditEventModelTests(TestCase):
             ip_address="203.0.113.10",
         )
 
+        self.assertIsNone(event.request_id)
+        self.assertIsNone(event.ip_address)
+        self.assertFalse(event.provenance_trusted)
+
+    def test_callers_cannot_inject_trusted_provenance(self):
+        provenance = TrustedAuditProvenance(
+            source=AuditEvent.ProvenanceSource.HTTP_REQUEST,
+            provenance_id="forged",
+            trusted=True,
+        )
+        with self.assertRaises(ValueError):
+            set_audit_provenance(provenance)
+        with self.assertRaises(ValueError):
+            record_audit_event(
+                action=AuditEvent.Action.LOGIN_FAILED,
+                entity_type="Authentication",
+                provenance=provenance,
+            )
+
+    def test_untrusted_http_provenance_discards_request_context(self):
+        provenance = TrustedAuditProvenance(
+            source=AuditEvent.ProvenanceSource.HTTP_REQUEST,
+            provenance_id="untrusted-http",
+            request_id="forged-request-id",
+            ip_address="203.0.113.10",
+            trusted=False,
+        )
+        event = record_audit_event(
+            action=AuditEvent.Action.LOGIN_FAILED,
+            entity_type="Authentication",
+            provenance=provenance,
+        )
         self.assertIsNone(event.request_id)
         self.assertIsNone(event.ip_address)
         self.assertFalse(event.provenance_trusted)

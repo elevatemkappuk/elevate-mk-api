@@ -50,12 +50,18 @@ class CapabilityGovernanceTests(TransactionTestCase):
 
     def setUp(self):
         self._ensure_governance_reference_state()
+        self.bootstrap = User.objects.create_superuser(
+            email="governance-bootstrap@example.com",
+            password="testpass123",
+            person_first_name="Governance",
+            person_last_name="Bootstrap",
+        )
         self.actor = self.create_user("governance-actor@example.com")
         self.approver = self.create_user("governance-approver@example.com")
         self.target = self.create_user("governance-target@example.com")
-        StaffRoleAssignment.objects.assign_role(user=self.actor, role=StaffRole.CRM_ADMIN)
-        StaffRoleAssignment.objects.assign_role(user=self.approver, role=StaffRole.CRM_ADMIN)
-        StaffRoleAssignment.objects.assign_role(user=self.target, role=StaffRole.CRM_MANAGER)
+        StaffRoleAssignment.objects.assign_role(user=self.actor, role=StaffRole.CRM_ADMIN, assigned_by=self.bootstrap)
+        StaffRoleAssignment.objects.assign_role(user=self.approver, role=StaffRole.CRM_ADMIN, assigned_by=self.bootstrap)
+        StaffRoleAssignment.objects.assign_role(user=self.target, role=StaffRole.CRM_MANAGER, assigned_by=self.bootstrap)
         self.contact = CapabilityDefinition.objects.get(code=CapabilityDefinition.PERSON_CONTACT_READ)
         self.demographic = CapabilityDefinition.objects.get(code=CapabilityDefinition.PERSON_DEMOGRAPHIC_READ)
         self.admin_capability = CapabilityDefinition.objects.get(code=CapabilityDefinition.STAFF_CAPABILITY_ADMIN)
@@ -113,11 +119,10 @@ class CapabilityGovernanceTests(TransactionTestCase):
                     """
                 )
 
-    def test_governance_models_have_no_django_admin_mutation_surface(self):
-        self.assertNotIn(RoleCapabilityDefault, admin.site._registry)
-        self.assertNotIn(StaffCapabilityAssignment, admin.site._registry)
-        self.assertNotIn(StaffCapabilityRestriction, admin.site._registry)
-        self.assertNotIn(CapabilityPolicyState, admin.site._registry)
+    def test_governance_models_have_superuser_only_django_admin_boundary(self):
+        self.assertIn(RoleCapabilityDefault, admin.site._registry)
+        self.assertIn(StaffCapabilityAssignment, admin.site._registry)
+        self.assertIn(StaffCapabilityRestriction, admin.site._registry)
         self.assertNotIn(CapabilityProposal, admin.site._registry)
         self.assertNotIn(CapabilityProposalDecision, admin.site._registry)
 

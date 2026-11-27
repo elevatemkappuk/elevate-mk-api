@@ -25,9 +25,10 @@ class GovernanceApiTests(TestCase):
         self.admin = self.create_staff("governance-api-admin@example.com")
         self.approver = self.create_staff("governance-api-approver@example.com")
         self.target = self.create_staff("governance-api-target@example.com")
-        StaffRoleAssignment.objects.assign_role(user=self.admin, role=StaffRole.CRM_ADMIN)
-        StaffRoleAssignment.objects.assign_role(user=self.approver, role=StaffRole.CRM_ADMIN)
-        StaffRoleAssignment.objects.assign_role(user=self.target, role=StaffRole.CRM_MANAGER)
+        self.bootstrap = self.create_staff("governance-api-bootstrap@example.com", superuser=True)
+        StaffRoleAssignment.objects.assign_role(user=self.admin, role=StaffRole.CRM_ADMIN, assigned_by=self.bootstrap)
+        StaffRoleAssignment.objects.assign_role(user=self.approver, role=StaffRole.CRM_ADMIN, assigned_by=self.bootstrap)
+        StaffRoleAssignment.objects.assign_role(user=self.target, role=StaffRole.CRM_MANAGER, assigned_by=self.bootstrap)
         self.admin_client = self.login(self.admin)
         self.approver_client = self.login(self.approver)
 
@@ -297,7 +298,7 @@ class GovernanceApiTests(TestCase):
         self.assertEqual(ordinary.status_code, 403)
 
         superuser = self.create_staff("governance-api-superuser@example.com", superuser=True)
-        StaffRoleAssignment.objects.assign_role(user=superuser, role=StaffRole.CRM_ADMIN)
+        StaffRoleAssignment.objects.assign_role(user=superuser, role=StaffRole.CRM_ADMIN, assigned_by=superuser)
         response = self.login(superuser).post(
             "/api/v1/staff/governance/superuser-actions/",
             {
@@ -313,7 +314,7 @@ class GovernanceApiTests(TestCase):
 
     def test_crm_admitted_superuser_can_read_governance_projections(self):
         superuser = self.create_staff("governance-api-read-superuser@example.com", superuser=True)
-        StaffRoleAssignment.objects.assign_role(user=superuser, role=StaffRole.CRM_ADMIN)
+        StaffRoleAssignment.objects.assign_role(user=superuser, role=StaffRole.CRM_ADMIN, assigned_by=superuser)
         client = self.login(superuser)
 
         directory = client.get("/api/v1/staff/governance/targets/?q=Governance")
@@ -333,7 +334,7 @@ class GovernanceApiTests(TestCase):
 
     def test_superuser_direct_operations_require_reason_and_apply_without_proposal(self):
         superuser = self.create_staff("governance-api-direct-superuser@example.com", superuser=True)
-        StaffRoleAssignment.objects.assign_role(user=superuser, role=StaffRole.CRM_ADMIN)
+        StaffRoleAssignment.objects.assign_role(user=superuser, role=StaffRole.CRM_ADMIN, assigned_by=superuser)
         client = self.login(superuser)
         role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
 

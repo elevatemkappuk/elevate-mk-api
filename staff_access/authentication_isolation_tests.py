@@ -28,6 +28,12 @@ class CrmAuthenticationIsolationTests(TestCase):
             person_last_name="Contact",
             person_record_type=Person.RecordType.STAFF,
         )
+        self.bootstrap = User.objects.create_superuser(
+            email="crm-bootstrap@example.com",
+            password=self.password,
+            person_first_name="CRM",
+            person_last_name="Bootstrap",
+        )
         self.non_staff_member = User.objects.create_user(
             email="member@example.com",
             password=self.password,
@@ -47,8 +53,8 @@ class CrmAuthenticationIsolationTests(TestCase):
         )
         self.admin_role = StaffRole.objects.get(code=StaffRole.CRM_ADMIN)
         self.viewer_role = StaffRole.objects.get(code=StaffRole.CRM_VIEWER)
-        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.admin_role)
-        StaffRoleAssignment.objects.assign_role(user=self.no_membership_staff, role=self.viewer_role)
+        StaffRoleAssignment.objects.assign_role(user=self.staff_user, role=self.admin_role, assigned_by=self.bootstrap)
+        StaffRoleAssignment.objects.assign_role(user=self.no_membership_staff, role=self.viewer_role, assigned_by=self.bootstrap)
 
         self.people_url = "/api/v1/people/"
         self.dashboard_url = "/api/v1/dashboard/"

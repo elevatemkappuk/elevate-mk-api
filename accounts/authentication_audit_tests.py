@@ -16,6 +16,12 @@ from staff_access.models import StaffRole, StaffRoleAssignment
 class AuthenticationAuditTests(TestCase):
     def setUp(self):
         self.password = "Password-123!"
+        self.bootstrap = User.objects.create_superuser(
+            email="audit-bootstrap@example.com",
+            password=self.password,
+            person_first_name="Audit",
+            person_last_name="Bootstrap",
+        )
         self.user = User.objects.create_user(
             email="member@example.com",
             password=self.password,
@@ -38,6 +44,7 @@ class AuthenticationAuditTests(TestCase):
         StaffRoleAssignment.objects.assign_role(
             user=self.staff_user,
             role=StaffRole.objects.get(code=StaffRole.CRM_MANAGER),
+            assigned_by=self.bootstrap,
         )
         self.client = APIClient()
 
@@ -137,13 +144,13 @@ class AuthenticationAuditTests(TestCase):
     def test_domain_staff_role_revocation_is_audited_without_token_data(self):
         assignment = StaffRoleAssignment.objects.get(user=self.staff_user)
 
-        assignment.revoke(revoked_by=self.staff_user)
+        assignment.revoke(revoked_by=self.bootstrap)
 
         event = AuditEvent.objects.get(
             action=AuditEvent.Action.STAFF_ROLE_REVOKED,
             entity_type="StaffRoleAssignment",
             entity_id=str(assignment.id),
         )
-        self.assertEqual(event.actor_user, self.staff_user)
+        self.assertEqual(event.actor_user, self.bootstrap)
         self.assertTrue(event.metadata["target_user_id"])
         self.assertNotIn("token", str({"metadata": event.metadata, "changes": event.changes}).lower())

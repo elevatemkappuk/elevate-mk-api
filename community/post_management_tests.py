@@ -23,6 +23,12 @@ class CommunityPostManagementApiTests(TestCase):
     def setUp(self):
         cache.clear()
         self.client = APIClient()
+        self.bootstrap = User.objects.create_superuser(
+            email="community-post-bootstrap@example.com",
+            password="Strong-password-123!",
+            person_first_name="Community",
+            person_last_name="Bootstrap",
+        )
         self.author = self.member("Amina", "Author", "author@example.com")
         self.viewer = self.member("Ben", "Viewer", "viewer@example.com")
         self.post = self.create_post()
@@ -171,7 +177,7 @@ class CommunityPostManagementApiTests(TestCase):
         self.assertEqual(self.client.post(f"{self.post_url()}replies/", {"body": "Unavailable"}, format="json").status_code, 404)
         manager = self.staff_user("Mara", "Manager", "deleted-manager@example.com")
         role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_MANAGER, defaults={"name": "CRM Manager"})
-        StaffRoleAssignment.objects.create(user=manager, role=role)
+        StaffRoleAssignment.objects.assign_role(user=manager, role=role, assigned_by=self.bootstrap)
         self.client.force_authenticate(manager)
         report_id = str(CommunityContentReport.objects.get(post=self.post).public_id)
         self.assertEqual(self.client.post(f"/api/v1/community/moderation/reports/{report_id}/restore/", {}, format="json").status_code, 409)
@@ -181,7 +187,7 @@ class CommunityPostManagementApiTests(TestCase):
         report = self.client.post(f"{self.post_url()}report/", {"reason": "OFF_TOPIC"}, format="json")
         manager = self.staff_user("Mara", "Manager", "manager@example.com")
         role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_MANAGER, defaults={"name": "CRM Manager"})
-        StaffRoleAssignment.objects.create(user=manager, role=role)
+        StaffRoleAssignment.objects.assign_role(user=manager, role=role, assigned_by=self.bootstrap)
         self.client.force_authenticate(manager)
         removed = self.client.post(f"/api/v1/community/moderation/reports/{report.data['report_id']}/remove/", {"resolution": "Removed."}, format="json")
         self.assertEqual(removed.status_code, 200)

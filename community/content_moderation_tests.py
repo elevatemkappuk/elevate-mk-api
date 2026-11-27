@@ -15,6 +15,12 @@ from staff_access.models import StaffRole, StaffRoleAssignment
 class CommunityContentModerationApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.bootstrap = User.objects.create_superuser(
+            email="community-bootstrap@example.com",
+            password="Strong-password-123!",
+            person_first_name="Community",
+            person_last_name="Bootstrap",
+        )
         self.reporter = self.member("Reporter", "One", "reporter@example.com")
         self.author = self.member("Author", "Two", "author@example.com")
         self.post = CommunityPost.objects.create(
@@ -68,8 +74,8 @@ class CommunityContentModerationApiTests(TestCase):
         manager = self.staff_user("Manager", "Staff", "manager@example.com")
         viewer_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_VIEWER, defaults={"name": "CRM Viewer"})
         manager_role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_MANAGER, defaults={"name": "CRM Manager"})
-        StaffRoleAssignment.objects.create(user=viewer, role=viewer_role)
-        StaffRoleAssignment.objects.create(user=manager, role=manager_role)
+        StaffRoleAssignment.objects.assign_role(user=viewer, role=viewer_role, assigned_by=self.bootstrap)
+        StaffRoleAssignment.objects.assign_role(user=manager, role=manager_role, assigned_by=self.bootstrap)
         self.client.force_authenticate(self.reporter)
         response = self.client.post(self.report_url(), {"reason": "OTHER"}, format="json")
         report_id = response.data["report_id"]
@@ -99,7 +105,7 @@ class CommunityContentModerationApiTests(TestCase):
         self.assertEqual(response.status_code, 201)
         manager = self.staff_user("Manager", "Staff", "reply-manager@example.com")
         role, _ = StaffRole.objects.get_or_create(code=StaffRole.CRM_MANAGER, defaults={"name": "CRM Manager"})
-        StaffRoleAssignment.objects.create(user=manager, role=role)
+        StaffRoleAssignment.objects.assign_role(user=manager, role=role, assigned_by=self.bootstrap)
         self.client.force_authenticate(manager)
         detail = self.client.get(f"/api/v1/community/moderation/reports/{response.data['report_id']}/")
         self.assertEqual(detail.status_code, 200)

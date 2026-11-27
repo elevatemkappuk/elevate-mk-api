@@ -38,12 +38,24 @@ class TrustedAuditProvenance:
     request_id: str | None = None
     ip_address: str | None = None
     trusted: bool = False
+    _authority: object | None = None
 
 
 _provenance_context = ContextVar("audit_provenance", default=None)
+_TRUSTED_PROVENANCE_AUTHORITY = object()
+
+
+def _is_authoritative_provenance(provenance):
+    return bool(
+        provenance is not None
+        and provenance.trusted
+        and provenance._authority is _TRUSTED_PROVENANCE_AUTHORITY
+    )
 
 
 def set_audit_provenance(provenance):
+    if provenance is not None and provenance.trusted and not _is_authoritative_provenance(provenance):
+        raise ValueError("Trusted audit provenance can only be established by a server boundary.")
     return _provenance_context.set(provenance)
 
 
@@ -62,6 +74,7 @@ def build_http_provenance(request):
         request_id=uuid.uuid4().hex,
         ip_address=None,
         trusted=True,
+        _authority=_TRUSTED_PROVENANCE_AUTHORITY,
     )
 
 
@@ -117,6 +130,8 @@ def record_audit_event(
             provenance_id=uuid.uuid4().hex,
             trusted=False,
         )
+    if resolved_provenance.trusted and not _is_authoritative_provenance(resolved_provenance):
+        raise ValueError("Trusted audit provenance can only be established by a server boundary.")
     if resolved_provenance.source not in AuditEvent.ProvenanceSource.values:
         raise ValueError(f"Unsupported provenance source: {resolved_provenance.source}")
 
@@ -128,12 +143,12 @@ def record_audit_event(
     )
     trusted_request_id = (
         resolved_provenance.request_id
-        if resolved_provenance.source == AuditEvent.ProvenanceSource.HTTP_REQUEST
+        if _is_authoritative_provenance(resolved_provenance)
         else request_id if resolved_provenance.trusted else None
     )
     trusted_ip = (
         resolved_provenance.ip_address
-        if resolved_provenance.source == AuditEvent.ProvenanceSource.HTTP_REQUEST
+        if _is_authoritative_provenance(resolved_provenance)
         else ip_address if resolved_provenance.trusted else None
     )
     with transaction.atomic():
