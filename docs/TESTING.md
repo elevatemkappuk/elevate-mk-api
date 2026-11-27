@@ -87,9 +87,11 @@ PostgreSQL and the repository's automatic test runner. The faster
 `backend-validation.yml` workflow performs system, migration, OpenAPI, and
 selected contract checks; it does not replace the full backend suite.
 
-During implementation, run only authorized focused tests. At feature
-completion run affected application and integration groups. At milestone
-closure run the complete fresh isolated API suite. CI runs its established
+During implementation, run focused tests for changed functionality, relevant
+security/concurrency tests, and affected regression modules where necessary.
+Do not run the complete API or CRM suites automatically at the end of each
+Staff Management stage. Full API, CRM, Community and Mobile regression is
+reserved for Phase 8 final feature verification. CI runs its established
 comprehensive workflows. Separate approval remains required for tests,
 migrations, scanners, operational data, or other restricted operations when
 required by the workspace policy.

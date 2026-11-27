@@ -1,6 +1,6 @@
 # Staff Management V1
 
-Status: **Approved architecture / Planned implementation**
+Status: **Approved architecture / Phase 2B role integrity implemented; later implementation planned**
 
 This document is the API repository's authoritative living guide for Staff
 Management V1. It records approved requirements and architecture, existing
@@ -24,6 +24,71 @@ invalidation. See [Authentication](AUTHENTICATION.md),
 
 The historical GDPR baseline of 1,474/1,474 API tests is not new Staff
 Management verification.
+
+Phase 2A implemented the centralized authorization foundation in
+`staff_access.authorization`. Active CRM Administrators and eligible active
+Django Superusers with a non-archived linked Person can access the Staff
+Management boundary. The Superuser exception is scoped to Staff Management and
+does not create a role or grant general CRM or privacy authority. Current User
+`is_staff`/`is_superuser` flags identify protected technical targets, while
+Person classification does not. Self-targeted administrative operations are
+denied, including for Superusers. Denials at the policy boundary are recorded
+with safe actor, target, operation and reason metadata through the centralized
+audit service.
+
+Phase 2A evidence: focused Staff Management authorization, staff lifecycle and
+invitation tests passed **79/79**; affected authentication, session-revocation,
+GDPR privacy-governance and audit tests passed **39/39**. This is local
+isolated verification, not full-suite or deployment evidence.
+
+The policy is a reusable foundation. Role-family integrity, administrator
+approval, final-administrator continuity integration, complete lifecycle audit
+coverage, and other Staff Management workflows remain planned for later
+approved stages. `STAFF-001`, `STAFF-002` and `STAFF-003` remain unresolved
+according to their documented scope.
+
+## Phase 2B role integrity and continuity
+
+The canonical CRM roles have explicit `StaffRole.family = "CRM"` metadata.
+`StaffRoleAssignment.role_family` mirrors the assigned role family and is
+validated against it. Migration `staff_access.0009_role_family_integrity`
+backfills canonical roles and adds the conditional database constraint
+`staff_access_one_active_role_family`, preserving revoked historical rows and
+leaving null-family future roles available for later complementary families.
+
+`assign_staff_role` remains the authoritative initial/reactivation service and
+rejects a second active CRM-family role. `replace_staff_role` performs an
+atomic, reason-required CRM role replacement, preserves the old assignment,
+increments the target CRM session generation, and records both role events.
+Invitation issuance, pending-role updates and redemption now require exactly
+one canonical CRM role.
+
+Administrator continuity counts only an active, non-archived linked Person,
+active User, active canonical CRM_ADMIN role and active unrevoked assignment.
+Superuser status alone does not count. CRM_ADMIN role locks serialize supported
+revocation and replacement continuity decisions; affected User rows and role
+assignments are locked within the same transaction. Mandatory audit failures
+roll back the mutation.
+
+Phase 2B focused verification passed **83/83** role-integrity, authorization,
+staff lifecycle and invitation tests, including PostgreSQL row-locking
+concurrency coverage. The directly affected authentication, session, privacy
+and audit groups passed **79/79**. The combined focused command passed
+**163/163** tests in **11.010 seconds** with no skips. Django checks and
+migration-drift checks passed. Full API/CRM regression remains reserved for
+Phase 8.
+
+The Django Admin assignment add, reactivation and revocation paths now invoke
+the centralized target policy before the role services. Direct database
+administration remains an explicit trusted boundary; no application-level
+supported writer identified in this phase is intended to bypass the service
+or Admin safeguards.
+
+Remaining limitations: direct trusted database administration remains outside
+application controls; CRM_ADMIN appointment approval remains Phase 2C; account
+disablement, deactivation privacy suspension and complete lifecycle audit
+coverage remain later stages. `STAFF-001` is materially reduced for supported
+role mutation paths but is not globally resolved.
 
 ## Scope and boundaries
 

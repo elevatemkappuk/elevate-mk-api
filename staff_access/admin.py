@@ -25,14 +25,15 @@ from staff_access.services import (
 )
 from staff_access.governance import apply_superuser_capability_change
 from staff_access.models import CapabilityProposal
-from staff_access.permissions import user_has_any_active_staff_role
+from staff_access.authorization import (
+    StaffOperation,
+    authorize_staff_operation,
+    can_access_staff_management,
+)
 
 
 def can_manage_staff_access(user):
-    return bool(
-        getattr(user, "is_superuser", False)
-        or user_has_any_active_staff_role(user, (StaffRole.CRM_ADMIN,))
-    )
+    return can_access_staff_management(user)
 
 
 def record_staff_role_audit_event(*, action, actor_user, assignment, request=None, metadata_extra=None):
@@ -180,8 +181,14 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
         if change:
             raise PermissionDenied("Existing Staff role assignments must be changed through lifecycle actions.")
 
-        if obj.user_id == request.user.pk and not getattr(request.user, "is_superuser", False):
+        if obj.user_id == request.user.pk:
             raise PermissionDenied("Staff role assignments cannot target the acting user.")
+        authorize_staff_operation(
+            actor=request.user,
+            target=obj.user,
+            operation=StaffOperation.ROLE_ASSIGNMENT,
+            request=request,
+        )
 
         with transaction.atomic():
             assignment, created, reactivated, policy_version = StaffRoleAssignment.objects.assign_role(
@@ -198,10 +205,18 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
 
     @admin.action(description="Revoke selected staff role assignments")
     def revoke_selected_assignments(self, request, queryset):
+        assignments = list(queryset.select_related("user"))
+        for assignment in assignments:
+            authorize_staff_operation(
+                actor=request.user,
+                target=assignment.user,
+                operation=StaffOperation.ROLE_CHANGE,
+                request=request,
+            )
         try:
             with transaction.atomic():
                 assignments = revoke_staff_role_assignments(
-                    assignments=queryset,
+                    assignments=assignments,
                     revoked_by=request.user,
                     request=request,
                 )
@@ -227,12 +242,16 @@ class StaffRoleAssignmentAdmin(admin.ModelAdmin):
         with transaction.atomic():
             assignments = list(
                 queryset
-                .select_related("role")
+                .select_related("role", "user")
                 .filter(is_active=False)
             )
-            if any(assignment.user_id == request.user.pk for assignment in assignments) and not getattr(request.user, "is_superuser", False):
-                raise PermissionDenied("Staff role assignments cannot target the acting user.")
             for assignment in assignments:
+                authorize_staff_operation(
+                    actor=request.user,
+                    target=assignment.user,
+                    operation=StaffOperation.ROLE_ASSIGNMENT,
+                    request=request,
+                )
                 assignment, created, reactivated, policy_version = StaffRoleAssignment.objects.assign_role(
                     user=assignment.user,
                     role=assignment.role,

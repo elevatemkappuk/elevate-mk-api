@@ -30,6 +30,7 @@ from staff_access.permissions import (
     get_effective_capability_codes_for_user,
     record_governance_authorization_failure,
     user_has_any_active_staff_role,
+    HasStaffManagementAccess,
 )
 from staff_access.serializers import (
     StaffEmailChangeConfirmSerializer,
@@ -67,8 +68,8 @@ from people.models import Person
 from accounts.models import User
 
 
-class StaffAdminPermission(HasActiveStaffRoleCodes):
-    required_role_codes = (StaffRole.CRM_ADMIN,)
+class StaffAdminPermission(HasStaffManagementAccess):
+    pass
 
 
 class OrdinaryGovernancePermission(IsAuthenticated):

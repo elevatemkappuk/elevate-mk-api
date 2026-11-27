@@ -187,6 +187,15 @@ class HasCrmOperationalAccess(HasActiveStaffRoleCodes):
     required_role_codes = CRM_OPERATIONAL_ROLE_CODES
 
 
+class HasStaffManagementAccess(BasePermission):
+    message = "You do not have Staff Management authority."
+
+    def has_permission(self, request, view):
+        from staff_access.authorization import can_access_staff_management
+
+        return can_access_staff_management(request.user)
+
+
 class HasCapability(BasePermission):
     message = "You do not have the required capability."
     required_capability = None

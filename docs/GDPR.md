@@ -951,6 +951,8 @@ force. Reactivation must not restore suspended grants; explicit restoration
 remains owned by Privacy Administration and requires its existing authorization,
 reason and audit controls.
 
-This integration is **Approved / Planned**. Current evaluator and suspended
-state support are source-inspected foundations, not Staff Management runtime
-verification.
+Phase 2A verified that Staff Management authorization remains separate from
+the GDPR capability evaluator; no capability, grant, restriction or privacy
+precedence rule was changed. Privacy-grant suspension and restoration remain
+later lifecycle work. This integration is therefore **Approved / Planned**
+except for the verified authorization-independence boundary.

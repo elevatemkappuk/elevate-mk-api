@@ -512,10 +512,26 @@ the trusted request context. Background, system, migration, and legacy events
 retain explicit provenance classifications. This does not change login,
 session, JWT, credential, or authentication-revocation contracts.
 
-## Staff Management V1 — approved planned authentication behavior
+## Staff Management V1 — Phase 2A authentication boundary
 
-See [STAFF_MANAGEMENT.md](STAFF_MANAGEMENT.md) for the planned Staff
-Management contract. It is not implemented or runtime-verified.
+See [STAFF_MANAGEMENT.md](STAFF_MANAGEMENT.md) for the full Staff Management
+contract. Phase 2A does not change Django session creation, mobile JWT
+handling, password recovery, credential invalidation, or the authentication
+API. It establishes the backend Staff Management authorization boundary and
+reuses current authenticated User state at the authorization point.
+
+Eligible active Django Superusers with a non-archived linked Person may pass
+the Staff Management boundary without receiving a CRM role. `is_staff` alone,
+inactive accounts, revoked roles and missing Person linkage do not qualify.
+This exception does not create general CRM access or alter existing session
+semantics. Later account lifecycle stages must integrate session invalidation
+and account-state transitions explicitly.
+
+Phase 2B role replacement and revocation increment the affected User's
+`crm_session_version` within the role mutation transaction. This invalidates
+obsolete CRM sessions without revoking unrelated global account, Community or
+Mobile authentication. The new role is evaluated only after the transaction
+commits.
 
 The planned feature reuses Django CRM sessions, `auth_version`,
 `crm_session_version`, Django password validation, existing password-reset

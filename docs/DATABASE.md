@@ -1646,7 +1646,19 @@ behavior is documented in `AUTHORIZATION.md`, `API.md`, and `GDPR.md`.
 
 Status: **Implemented / source-inspected; database checks and tests unexecuted**.
 
-## Staff Management V1 planned schema impact
+## Staff Management V1 schema impact
+
+Phase 2B adds migration `staff_access.0009_role_family_integrity` (created,
+not applied to any persistent database). It adds nullable `family` metadata to
+`StaffRole` and matching `role_family` metadata to `StaffRoleAssignment`.
+Canonical CRM roles are backfilled to the explicit `CRM` family; historical
+assignments are preserved. A conditional unique constraint enforces at most
+one active, unrevoked assignment per User and non-null role family while
+allowing future complementary families.
+
+The migration is additive and has a reverse data operation, but role-family
+metadata introduced by future roles must be reviewed before rollback. No
+destructive reconciliation or persistent data preparation was performed.
 
 The approved architecture is documented in
 [STAFF_MANAGEMENT.md](STAFF_MANAGEMENT.md). No Staff Management migration has

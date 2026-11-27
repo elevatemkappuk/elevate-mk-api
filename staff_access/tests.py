@@ -386,10 +386,11 @@ class StaffRoleAssignmentModelTests(TestCase):
         with self.assertRaises(PermissionError):
             revoke_staff_role_assignments(assignments=[assignment], revoked_by=self.actor, audit=False)
 
-    def test_one_user_can_hold_multiple_different_roles(self):
+    def test_one_user_cannot_hold_multiple_active_crm_roles(self):
         StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role, assigned_by=self.actor)
-        StaffRoleAssignment.objects.assign_role(user=self.user, role=self.manager_role, assigned_by=self.actor)
-        self.assertEqual(self.user.staff_role_assignments.count(), 2)
+        with self.assertRaises(ValidationError):
+            StaffRoleAssignment.objects.assign_role(user=self.user, role=self.manager_role, assigned_by=self.actor)
+        self.assertEqual(self.user.staff_role_assignments.filter(is_active=True).count(), 1)
 
     def test_duplicate_user_role_assignment_is_prevented(self):
         StaffRoleAssignment.objects.assign_role(user=self.user, role=self.admin_role, assigned_by=self.actor)

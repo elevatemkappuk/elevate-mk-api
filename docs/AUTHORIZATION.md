@@ -1,6 +1,6 @@
 # Elevate MK Authorization
 Status: Living Documentation
-Last Updated: 2026-11-24
+Last Updated: 2026-11-27
 
 ## Scope
 This document describes the currently implemented staff authorization foundation for the Elevate MK Django API.
@@ -552,20 +552,62 @@ at its service boundary. No new scheduler is introduced; integrating a caller
 and its activation controls is a production prerequisite if future role-loss
 workflows require automatic reconciliation.
 
-## Staff Management V1 — approved planned authorization
+## Staff Management V1 — Phase 2A authorization foundation
 
-The authoritative planned contract is in
-[STAFF_MANAGEMENT.md](STAFF_MANAGEMENT.md). It is not an implemented endpoint
-or permission contract yet.
+The authoritative feature contract is in [STAFF_MANAGEMENT.md](STAFF_MANAGEMENT.md).
+Phase 2A implements the reusable backend policy in
+`staff_access.authorization` and routes the existing Staff Admin permission,
+supported invitation/lifecycle service authority checks, and Django Admin
+Staff role-assignment boundary through it.
 
-The approved design adds a narrowly scoped Staff Management exception for an
-authenticated, active Django Superuser with a valid linked Person. This does
-not grant general CRM access, assign an operational role, override
-self-management restrictions, bypass Administrator approval or alter Django
-privilege flags. Django `is_staff` alone remains insufficient.
+The policy recognizes either an active CRM Administrator with a canonical active
+assignment or an authenticated, active Django Superuser with a non-archived
+linked Person. The Superuser exception is Staff Management-specific: it does
+not grant general CRM, People, Marketing, Moderation or Privacy Administration
+authority, create a CRM role, or alter Django privilege flags. Django
+`is_staff` alone remains insufficient.
+
+Reusable predicates include `can_access_staff_management`,
+`is_eligible_staff_superuser`, `is_protected_staff_target`, `is_self_target`,
+and operation-specific `authorize_staff_operation`. Current User privilege
+flags classify technical targets; Person classification alone does not.
+Ordinary CRM administrators are denied self-targeted administrative operations
+and prohibited mutations against `is_staff` or `is_superuser` targets. Eligible
+Superusers remain subject to self-target restrictions and later governance
+checks.
+
+Authorization denials at the Phase 2A policy boundary record a safe,
+attributable `STAFF_AUTHORIZATION_DENIED` audit event. No passwords, tokens,
+emails, raw payloads or unnecessary personal data are recorded. Audit failure
+remains fail-closed. This is not complete lifecycle audit coverage.
+
+Phase 2A verification: the focused Staff Management authorization, staff
+lifecycle and invitation regression set passed **79/79**; the affected
+authentication, session-revocation, GDPR privacy-governance and audit set
+passed **39/39**. These results are local isolated test evidence only.
 
 The planned implementation must also enforce one active CRM-family role,
 two-person approval for CRM Administrator authority, protected technical
 accounts, final-Administrator continuity, independent staff/account lifecycles,
 and automatic suspension of individual privacy grants on staff deactivation.
-These are **Approved / Planned**, not current enforcement claims.
+These remain **Approved / Planned** for later phases, except where the
+foundational protected-target and self-target predicates are explicitly noted
+above. No incomplete Staff Management mutation workflow was added.
+
+Phase 2B adds explicit CRM role-family integrity. Canonical CRM roles carry
+the `CRM` family; supported role assignment, reactivation, revocation and
+replacement paths use the authoritative services and preserve historical
+assignments. One active, unrevoked assignment per User and non-null role family
+is database-constrained by `staff_access_one_active_role_family` after
+`staff_access.0009_role_family_integrity` is applied.
+
+Final Administrator continuity uses active User state, non-archived Person
+linkage, active canonical CRM_ADMIN role and active unrevoked assignment.
+Superuser status alone is not sufficient. CRM_ADMIN row locking serializes
+supported continuity decisions. This does not implement Administrator approval
+or account lifecycle workflows.
+
+Django Admin role assignment, reactivation and revocation actions invoke the
+same protected-target and self-target policy before calling the authoritative
+services. Direct unrestricted database administration remains outside the
+application trust boundary.

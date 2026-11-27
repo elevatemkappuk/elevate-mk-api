@@ -32,25 +32,18 @@ def _invitation_token_hash(token):
 
 
 def _require_staff_role_mutation_actor(actor_user):
-    """Require an active CRM administrator or the approved Django superuser."""
-    from staff_access.permissions import user_has_any_active_staff_role
+    from staff_access.authorization import authorize_staff_operation, StaffOperation
 
-    if actor_user is None or not getattr(actor_user, "is_active", False):
-        raise PermissionError("Staff role mutation requires an active authenticated actor.")
-    if getattr(actor_user, "is_superuser", False):
-        return
-    if not user_has_any_active_staff_role(actor_user, (StaffRole.CRM_ADMIN,)):
-        raise PermissionError("Staff role mutation requires an active CRM_ADMIN actor.")
+    authorize_staff_operation(actor=actor_user, operation=StaffOperation.ROLE_ASSIGNMENT)
 
 
 def create_staff_invitation(*, actor_user, email, first_name, last_name, role_codes, expiry_hours=72):
     """Create a pending Staff identity without creating a User yet."""
     from accounts.models import User
     from people.models import Person
-    from staff_access.permissions import user_has_any_active_staff_role
+    from staff_access.authorization import authorize_staff_operation, StaffOperation
 
-    if not user_has_any_active_staff_role(actor_user, (StaffRole.CRM_ADMIN,)):
-        raise PermissionError("Only an active CRM_ADMIN may invite Staff.")
+    authorize_staff_operation(actor=actor_user, operation=StaffOperation.ACCESS)
     email = _normalize_invitation_email(email)
     if not email:
         raise ValidationError({"email": "An email address is required."})
@@ -59,8 +52,8 @@ def create_staff_invitation(*, actor_user, email, first_name, last_name, role_co
         raise ValidationError({"email": "An active or non-Staff account already uses this email address."})
     allowed_codes = StaffRole.canonical_codes()
     role_codes = list(dict.fromkeys(role_codes or []))
-    if not role_codes or not set(role_codes).issubset(allowed_codes):
-        raise ValidationError({"role_codes": "Only canonical CRM roles may be invited."})
+    if len(role_codes) != 1 or not set(role_codes).issubset(allowed_codes):
+        raise ValidationError({"role_codes": "Exactly one canonical CRM role may be invited."})
     if Person.objects.filter(record_type=Person.RecordType.STAFF, primary_email__iexact=email, user__isnull=True).exists():
         raise ValidationError({"email": "A pending Staff identity already uses this email address."})
 
@@ -100,9 +93,8 @@ def _queue_staff_invitation_email(invitation):
 
 
 def resend_staff_invitation(*, invitation, actor_user):
-    from staff_access.permissions import user_has_any_active_staff_role
-    if not user_has_any_active_staff_role(actor_user, (StaffRole.CRM_ADMIN,)):
-        raise PermissionError("Only an active CRM_ADMIN may resend Staff invitations.")
+    from staff_access.authorization import authorize_staff_operation, StaffOperation
+    authorize_staff_operation(actor=actor_user, operation=StaffOperation.ACCESS)
     if invitation.accepted_at or invitation.revoked_at:
         raise ValidationError("Only a pending Staff invitation can be resent.")
     with transaction.atomic():
@@ -130,12 +122,11 @@ def resend_staff_invitation(*, invitation, actor_user):
 
 
 def update_pending_staff_invitation_roles(*, invitation, actor_user, role_codes):
-    from staff_access.permissions import user_has_any_active_staff_role
-    if not user_has_any_active_staff_role(actor_user, (StaffRole.CRM_ADMIN,)):
-        raise PermissionError("Only an active CRM_ADMIN may update pending Staff roles.")
+    from staff_access.authorization import authorize_staff_operation, StaffOperation
+    authorize_staff_operation(actor=actor_user, operation=StaffOperation.ACCESS)
     role_codes = list(dict.fromkeys(role_codes or []))
-    if not role_codes or not set(role_codes).issubset(StaffRole.canonical_codes()):
-        raise ValidationError({"role_codes": "Only canonical CRM roles may be assigned."})
+    if len(role_codes) != 1 or not set(role_codes).issubset(StaffRole.canonical_codes()):
+        raise ValidationError({"role_codes": "Exactly one canonical CRM role may be assigned."})
     if invitation.accepted_at or invitation.revoked_at or invitation.superseded_at:
         raise ValidationError("Only a current pending Staff invitation can be updated.")
     with transaction.atomic():
@@ -163,10 +154,14 @@ def update_pending_staff_invitation_roles(*, invitation, actor_user, role_codes)
 
 
 def offboard_staff_user(*, target_user, actor_user, request=None):
-    from staff_access.permissions import user_has_any_active_staff_role
+    from staff_access.authorization import authorize_staff_operation, StaffOperation
     from accounts.revocation import revoke_user_credentials
-    if not user_has_any_active_staff_role(actor_user, (StaffRole.CRM_ADMIN,)):
-        raise PermissionError("Only an active CRM_ADMIN may offboard Staff.")
+    authorize_staff_operation(
+        actor=actor_user,
+        target=target_user,
+        operation=StaffOperation.ACCESS_DEACTIVATION,
+        request=request,
+    )
     if target_user.person.record_type != "STAFF":
         raise ValidationError("Only STAFF accounts can be offboarded through Staff lifecycle operations.")
     assignments = StaffRoleAssignment.objects.active().filter(user=target_user)
@@ -195,7 +190,8 @@ def assign_staff_role(*, user, role, assigned_by=None, audit=True, return_detail
             singleton_key=1,
             key=CAPABILITY_POLICY_STATE_KEY,
         ).first()
-        locked_roles = list(StaffRole.objects.select_for_update().order_by("pk"))
+        role_ids = {role.pk, StaffRole.objects.get(code=StaffRole.CRM_ADMIN).pk}
+        locked_roles = list(StaffRole.objects.select_for_update().filter(pk__in=role_ids).order_by("pk"))
         locked_role = next(item for item in locked_roles if item.pk == role.pk)
 
         if locked_role.code not in StaffRole.canonical_codes() or not locked_role.is_active:
@@ -211,6 +207,21 @@ def assign_staff_role(*, user, role, assigned_by=None, audit=True, return_detail
         if not locked_user.is_active or (not eligible_person and not locked_user.is_superuser):
             raise ValidationError("Staff roles require an active STAFF user or the approved active superuser exception.")
 
+        if locked_role.family == StaffRole.CRM_ROLE_FAMILY:
+            active_family_assignment = next(
+                (
+                    item for item in existing_assignments
+                    if item.is_active and item.revoked_at is None
+                    and item.role_family == StaffRole.CRM_ROLE_FAMILY
+                    and item.role_id != locked_role.pk
+                ),
+                None,
+            )
+            if active_family_assignment is not None:
+                raise ValidationError(
+                    "A CRM role is already active; use replace_staff_role for an atomic role change."
+                )
+
         assignment = next(
             (item for item in existing_assignments if item.role_id == locked_role.pk),
             None,
@@ -221,6 +232,7 @@ def assign_staff_role(*, user, role, assigned_by=None, audit=True, return_detail
             assignment = StaffRoleAssignment.objects.create(
                 user=locked_user,
                 role=locked_role,
+                role_family=locked_role.family,
                 assigned_by=assigned_by,
             )
         elif reactivated:
@@ -264,6 +276,110 @@ def assign_staff_role(*, user, role, assigned_by=None, audit=True, return_detail
         return assignment
 
 
+def replace_staff_role(*, user, role, replaced_by, reason, request=None):
+    """Atomically replace the target's active CRM role and preserve history."""
+    from staff_access.authorization import authorize_staff_operation, StaffOperation
+
+    if not str(reason or "").strip():
+        raise ValidationError({"reason": "A reason is required for CRM role changes."})
+    if isinstance(role, str):
+        role = StaffRole.objects.get(code=role)
+    authorize_staff_operation(
+        actor=replaced_by,
+        target=user,
+        operation=StaffOperation.ROLE_CHANGE,
+        request=request,
+    )
+
+    with transaction.atomic():
+        crm_admin_role = StaffRole.objects.select_for_update().get(code=StaffRole.CRM_ADMIN)
+        requested_role = StaffRole.objects.select_for_update().get(pk=role.pk)
+        locked_user = User.objects.select_for_update().select_related("person").get(pk=user.pk)
+        if requested_role.family != StaffRole.CRM_ROLE_FAMILY or not requested_role.is_active:
+            raise ValidationError("Only active canonical CRM roles can be assigned.")
+        if locked_user.person.record_type != Person.RecordType.STAFF or not locked_user.is_active:
+            raise ValidationError("CRM role changes require an active STAFF user.")
+        if requested_role.code == StaffRole.CRM_ADMIN:
+            raise ValidationError("CRM_ADMIN appointments require the Phase 2C approval workflow.")
+
+        active_assignments = list(
+            StaffRoleAssignment.objects.select_for_update()
+            .select_related("role")
+            .filter(
+                user=locked_user,
+                role_family=StaffRole.CRM_ROLE_FAMILY,
+                is_active=True,
+                revoked_at__isnull=True,
+            )
+            .order_by("pk")
+        )
+        current = active_assignments[0] if active_assignments else None
+        if current is not None and current.role_id == requested_role.pk:
+            return current
+        if current is None:
+            raise ValidationError("CRM role replacement requires an existing active CRM role.")
+
+        from staff_access.authorization import usable_crm_admin_assignments
+        if (
+            current.role_id == crm_admin_role.pk
+            and not usable_crm_admin_assignments().exclude(pk=current.pk).exists()
+        ):
+            raise FinalCrmAdminProtectionError()
+
+        current._revoke_unchecked(revoked_by=replaced_by)
+        replacement = next(
+            (
+                assignment for assignment in StaffRoleAssignment.objects.select_for_update()
+                .filter(user=locked_user, role=requested_role)
+            ),
+            None,
+        )
+        replacement_created = replacement is None
+        if replacement_created:
+            replacement = StaffRoleAssignment.objects.create(
+                user=locked_user,
+                role=requested_role,
+                role_family=requested_role.family,
+                assigned_by=replaced_by,
+            )
+        else:
+            replacement._reactivate_unchecked(assigned_by=replaced_by)
+
+        locked_user.crm_session_version = F("crm_session_version") + 1
+        locked_user.save(update_fields=["crm_session_version"])
+        record_audit_event(
+            action=AuditEvent.Action.STAFF_ROLE_REVOKED,
+            actor_user=replaced_by,
+            entity_type="StaffRoleAssignment",
+            entity_id=current.pk,
+            changes={"is_active": {"from": True, "to": False}},
+            metadata={
+                "target_user_id": str(locked_user.pk),
+                "previous_role_code": current.role.code,
+                "new_role_code": requested_role.code,
+                "operation": "CRM_ROLE_REPLACED",
+                "reason": str(reason).strip(),
+                "crm_sessions_invalidated": True,
+            },
+        )
+        record_audit_event(
+            action=AuditEvent.Action.STAFF_ROLE_ASSIGNED,
+            actor_user=replaced_by,
+            entity_type="StaffRoleAssignment",
+            entity_id=replacement.pk,
+            changes={"is_active": {"from": None if replacement_created else False, "to": True}},
+            metadata={
+                "target_user_id": str(locked_user.pk),
+                "previous_role_code": current.role.code,
+                "new_role_code": requested_role.code,
+                "operation": "CRM_ROLE_REPLACED",
+                "reason": str(reason).strip(),
+                "crm_sessions_invalidated": True,
+            },
+        )
+        return replacement
+
+
 def activate_staff_role(role, *, actor_user=None):
     """Reactivate a role while preserving the shared policy lock contract."""
     if actor_user is None:
@@ -304,9 +420,8 @@ def activate_staff_role(role, *, actor_user=None):
 
 def reactivate_staff_user(*, target_user, actor_user):
     """Start a fresh invitation; never restores the old User or assignments."""
-    from staff_access.permissions import user_has_any_active_staff_role
-    if not user_has_any_active_staff_role(actor_user, (StaffRole.CRM_ADMIN,)):
-        raise PermissionError("Only an active CRM_ADMIN may reactivate Staff.")
+    from staff_access.authorization import authorize_staff_operation, StaffOperation
+    authorize_staff_operation(actor=actor_user, target=target_user, operation=StaffOperation.ACCESS_REACTIVATION)
     if target_user.person.record_type != "STAFF":
         raise ValidationError("Only STAFF accounts can be reactivated through Staff lifecycle operations.")
     roles = list(StaffRoleAssignment.objects.filter(user=target_user).values_list("role__code", flat=True))
@@ -320,10 +435,8 @@ def reactivate_staff_user(*, target_user, actor_user):
 
 
 def cancel_staff_invitation(*, invitation, actor_user):
-    from staff_access.permissions import user_has_any_active_staff_role
-
-    if not user_has_any_active_staff_role(actor_user, (StaffRole.CRM_ADMIN,)):
-        raise PermissionError("Only an active CRM_ADMIN may cancel Staff invitations.")
+    from staff_access.authorization import authorize_staff_operation, StaffOperation
+    authorize_staff_operation(actor=actor_user, operation=StaffOperation.ACCESS)
     from notifications.models import TransactionalEmailJob
     with transaction.atomic():
         invitation = StaffInvitation.objects.select_for_update().get(pk=invitation.pk)
@@ -340,12 +453,15 @@ def cancel_staff_invitation(*, invitation, actor_user):
 
 def request_staff_email_change(*, actor_user, user_id, requested_email, expiry_hours=24):
     from accounts.models import User
-    from staff_access.permissions import user_has_any_active_staff_role
+    from staff_access.authorization import authorize_staff_operation, StaffOperation
 
-    if not user_has_any_active_staff_role(actor_user, (StaffRole.CRM_ADMIN,)):
-        raise PermissionError("Only an active CRM_ADMIN may request Staff email changes.")
     requested_email = _normalize_invitation_email(requested_email)
     target = User.objects.select_related("person").get(pk=user_id)
+    authorize_staff_operation(
+        actor=actor_user,
+        target=target,
+        operation=StaffOperation.ADMIN_EMAIL_CHANGE,
+    )
     if target.person.record_type != "STAFF":
         raise ValidationError({"user": "Only STAFF accounts may use the Staff email workflow."})
     if User.objects.filter(email=requested_email).exclude(pk=target.pk).exists():
@@ -452,14 +568,15 @@ def redeem_staff_invitation(*, public_id, raw_token, password):
             user.auth_version += 1
             user.crm_session_version += 1
             user.save(update_fields=["password", "is_active", "auth_version", "crm_session_version"])
-        for role_code in invitation.pending_role_codes:
-            role = StaffRole.objects.get(code=role_code, is_active=True)
-            StaffRoleAssignment.objects.assign_role(
-                user=user,
-                role=role,
-                assigned_by=invitation.created_by,
-                audit=True,
-            )
+        if len(invitation.pending_role_codes) != 1:
+            raise ValidationError("Staff invitations must contain exactly one CRM role.")
+        role = StaffRole.objects.get(code=invitation.pending_role_codes[0], is_active=True)
+        StaffRoleAssignment.objects.assign_role(
+            user=user,
+            role=role,
+            assigned_by=invitation.created_by,
+            audit=True,
+        )
         invitation.accepted_at = timezone.now()
         invitation.token_hash = None
         invitation.save(update_fields=["accepted_at", "token_hash", "updated_at"])
@@ -557,8 +674,7 @@ def revoke_staff_role_assignments(*, assignments, revoked_by=None, revoked_at=No
             singleton_key=1,
             key=CAPABILITY_POLICY_STATE_KEY,
         ).first()
-        locked_roles = list(StaffRole.objects.select_for_update().order_by("pk"))
-        crm_admin_role = next(role for role in locked_roles if role.code == StaffRole.CRM_ADMIN)
+        crm_admin_role = StaffRole.objects.select_for_update().get(code=StaffRole.CRM_ADMIN)
         locked_assignments = list(
             StaffRoleAssignment.objects.select_for_update()
             .select_related("role")
@@ -577,7 +693,11 @@ def revoke_staff_role_assignments(*, assignments, revoked_by=None, revoked_at=No
         ]
 
         if effective_admin_revocations:
-            active_admin_count = StaffRoleAssignment.objects.active().filter(role=crm_admin_role).count()
+            active_admin_count = StaffRoleAssignment.objects.active().filter(
+                role=crm_admin_role,
+                user__is_active=True,
+                user__person__archived_at__isnull=True,
+            ).count()
             if active_admin_count <= len(effective_admin_revocations):
                 raise FinalCrmAdminProtectionError()
 

@@ -25,6 +25,7 @@ CAPABILITY_POLICY_STATE_KEY = "capability-governance"
 
 
 class StaffRole(models.Model):
+    CRM_ROLE_FAMILY = "CRM"
     CRM_ADMIN = "CRM_ADMIN"
     CRM_MANAGER = "CRM_MANAGER"
     CRM_VIEWER = "CRM_VIEWER"
@@ -37,6 +38,7 @@ class StaffRole(models.Model):
 
     code = models.CharField(max_length=100, unique=True)
     name = models.CharField(max_length=255)
+    family = models.CharField(max_length=100, null=True, blank=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -99,6 +101,7 @@ class StaffRoleAssignment(models.Model):
         on_delete=models.PROTECT,
         related_name="assignments",
     )
+    role_family = models.CharField(max_length=100, null=True, blank=True)
     is_active = models.BooleanField(default=True)
     assigned_at = models.DateTimeField(default=timezone.now)
     assigned_by = models.ForeignKey(
@@ -124,6 +127,11 @@ class StaffRoleAssignment(models.Model):
     def clean(self):
         if self.user_id and self.user.person.record_type == "COMMUNITY":
             raise ValidationError({"user": "Community Users cannot receive CRM roles."})
+        role_family = self.role.family if self.role_id and self.role else None
+        if self.role_family is None and role_family is not None:
+            self.role_family = role_family
+        elif role_family != self.role_family:
+            raise ValidationError({"role_family": "Role-family metadata must match the assigned role."})
 
     def save(self, *args, **kwargs):
         self.full_clean()
@@ -133,6 +141,15 @@ class StaffRoleAssignment(models.Model):
         ordering = ["user_id", "role__code", "id"]
         constraints = [
             models.UniqueConstraint(fields=["user", "role"], name="staff_access_user_role_unique"),
+            models.UniqueConstraint(
+                fields=["user", "role_family"],
+                condition=models.Q(
+                    is_active=True,
+                    revoked_at__isnull=True,
+                    role_family__isnull=False,
+                ),
+                name="staff_access_one_active_role_family",
+            ),
         ]
 
     def __str__(self):
