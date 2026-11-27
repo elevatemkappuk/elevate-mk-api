@@ -69,6 +69,11 @@ class UserManager(DjangoUserManager):
 
 
 class User(AbstractUser):
+    class AccountLifecycleState(models.TextChoices):
+        ACTIVE = "ACTIVE", "Active"
+        PENDING_ACTIVATION = "PENDING_ACTIVATION", "Pending activation"
+        DISABLED = "DISABLED", "Disabled"
+
     username = None
     first_name = None
     last_name = None
@@ -76,6 +81,11 @@ class User(AbstractUser):
     person = models.OneToOneField(Person, on_delete=models.PROTECT, related_name="user")
     auth_version = models.PositiveBigIntegerField(default=1)
     crm_session_version = models.PositiveBigIntegerField(default=1)
+    account_lifecycle_state = models.CharField(
+        max_length=24,
+        choices=AccountLifecycleState.choices,
+        default=AccountLifecycleState.ACTIVE,
+    )
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = []
@@ -91,6 +101,10 @@ class User(AbstractUser):
         previous_is_active = None
         if self.pk:
             previous_is_active = type(self).objects.filter(pk=self.pk).values_list("is_active", flat=True).first()
+        if previous_is_active is True and self.is_active is False and self.account_lifecycle_state == self.AccountLifecycleState.ACTIVE:
+            self.account_lifecycle_state = self.AccountLifecycleState.DISABLED
+            if kwargs.get("update_fields") is not None:
+                kwargs["update_fields"] = set(kwargs["update_fields"]) | {"account_lifecycle_state"}
         self.email = normalize_email_address(self.email)
         with transaction.atomic(using=kwargs.get("using")):
             super().save(*args, **kwargs)

@@ -50,6 +50,7 @@ class StaffEmailChangeConfirmSerializer(serializers.Serializer):
 
 class StaffLifecycleSerializer(serializers.Serializer):
     user_id = serializers.IntegerField(min_value=1)
+    reason = serializers.CharField(min_length=1, max_length=4000, trim_whitespace=True)
 
 
 class EffectiveAccessSerializer(serializers.Serializer):

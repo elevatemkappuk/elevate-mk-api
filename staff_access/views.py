@@ -868,7 +868,12 @@ class StaffOffboardView(generics.GenericAPIView):
         serializer.is_valid(raise_exception=True)
         try:
             target = User.objects.select_related("person").get(pk=serializer.validated_data["user_id"])
-            offboard_staff_user(target_user=target, actor_user=request.user, request=request)
+            offboard_staff_user(
+                target_user=target,
+                actor_user=request.user,
+                reason=serializer.validated_data["reason"],
+                request=request,
+            )
         except User.DoesNotExist:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except DjangoValidationError as error:
@@ -886,7 +891,11 @@ class StaffReactivateView(generics.GenericAPIView):
         serializer.is_valid(raise_exception=True)
         try:
             target = User.objects.select_related("person").get(pk=serializer.validated_data["user_id"])
-            invitation = reactivate_staff_user(target_user=target, actor_user=request.user)
+            invitation = reactivate_staff_user(
+                target_user=target,
+                actor_user=request.user,
+                reason=serializer.validated_data["reason"],
+            )
         except User.DoesNotExist:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except DjangoValidationError as error:

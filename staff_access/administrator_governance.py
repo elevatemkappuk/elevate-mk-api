@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Q
 from django.utils import timezone
 
 from accounts.models import User
@@ -273,3 +273,36 @@ def consume_administrator_proposal(*, proposal, actor_user, resulting_assignment
         proposal.resulting_assignment = assignment
         proposal.save(update_fields=["status", "effected_at", "resulting_assignment"])
         return proposal
+
+
+def invalidate_administrator_proposals_for_user(*, user_id, actor_user, reason, request=None):
+    """Invalidate pending or approved-but-unused authority for one User."""
+    reason = _reason(reason)
+    invalidated = []
+    proposals = StaffAdministratorProposal.objects.select_for_update().select_related(
+        "requested_role"
+    ).filter(
+        Q(target_user_id=user_id) | Q(proposed_by_id=user_id) | Q(approved_by_id=user_id),
+        status__in=(StaffAdministratorProposal.Status.PENDING, StaffAdministratorProposal.Status.APPROVED),
+    ).order_by("pk")
+    for proposal in proposals:
+        _audit(
+            proposal=proposal,
+            actor=actor_user,
+            event_type="STAFF_ADMIN_PROPOSAL_INVALIDATED",
+            reason=reason,
+            request=request,
+        )
+        proposal.status = StaffAdministratorProposal.Status.INVALIDATED
+        proposal.decided_at = proposal.decided_at or timezone.now()
+        proposal.invalidation_reason = reason
+        proposal.save(update_fields=["status", "decided_at", "invalidation_reason"])
+        if not hasattr(proposal, "decision"):
+            StaffAdministratorProposalDecision.objects.create(
+                proposal=proposal,
+                outcome=proposal.status,
+                decided_by=actor_user,
+                reason=reason,
+            )
+        invalidated.append(proposal)
+    return invalidated

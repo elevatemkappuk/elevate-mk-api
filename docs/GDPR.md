@@ -3,7 +3,7 @@
 Status: Living Documentation. Capability foundation, governance models,
 privacy-audit models, migrations, services and earlier focused tests are
 implemented, with evidence scoped to their named validation batches. Current
-Phase 1C evidence and limitations are recorded at the end of this guide.
+Final-hardening evidence and limitations are recorded at the end of this guide.
 Public activation, production/staging behavior and deployment remain
 unverified.
 
@@ -107,7 +107,7 @@ documentation update.
 
 Existing endpoint permission classes remain role-based. CRM and Mobile retain
 their existing authentication contracts, while Community uses its
-Community-specific session and projection contracts. Phase 1A.4A adds the
+Community-specific session and projection contracts. The effective-access contract adds the
 session-only `GET /api/v1/staff/access/me/` projection, but does not add a
 capability projection to `/auth/me/`, a frontend guard, Person field masking,
 search protection, campaign protection, or export enforcement. Runtime
@@ -127,8 +127,8 @@ validated in this stage.
 - **Verified — local migration and schema validation for the foundation:** a backup was created
   and verified locally before validation; the local PostgreSQL target was
   `localhost:5432/elevate`; migration state reported no pending operations;
-  the historical six-capability Phase 1A.2 baseline and approved defaults were
-  present; the current Phase 1A.3 catalogue contains seven capabilities; four
+  the historical six-capability capability-foundation baseline and approved defaults were
+  present; the current capability-and-audit catalogue contains seven capabilities; four
   capability tables, four explicit indexes, and three named constraints were
   present; `manage.py check --fail-level ERROR` passed; and
   `manage.py makemigrations --check --dry-run` reported no changes.
@@ -139,22 +139,22 @@ validated in this stage.
 - **Planned / Deferred:** public API/Admin exposure, projections, masking,
   search/export enforcement, CRM UI behavior, and capability-governance
   enforcement.
-- **Implemented / Source-inspected for Phase 1A.4A:** the exact
+- **Implemented / Source-inspected for the effective-access contract:** the exact
   `GET /api/v1/staff/access/me/` route and two-field response contract
   (`capability_codes`, `policy_version`), CRM-session and active-role admission,
   the then-empty CRM disclosure allowlist (superseded by the approved single
-  `STAFF_CAPABILITY_ADMIN` allowlist in the later Phase 1A.4C contract), superuser boundary, transactionally consistent
+  `STAFF_CAPABILITY_ADMIN` allowlist in the approved governance contract), superuser boundary, transactionally consistent
   policy-version read, and `Cache-Control: private, no-store` behavior were
   inspected in the Staff Access route, view, serializer, and permission source.
-- **Verified — focused API evidence for Phase 1A.4A:** 34/34 focused tests
+- **Verified — focused API evidence for the effective-access contract:** 34/34 focused tests
   passed against isolated PostgreSQL database
   `test_elevate_gdpr_phase1a4a_20261124`; `manage.py check` passed;
   `makemigrations --check --dry-run` reported `No changes detected`;
   `migrate --plan` reported no planned migration operations; and `git diff --check`
   was clean. No schema or migration files changed, and no migrations were
-  applied for Phase 1A.4A. Broader runtime, deployment, CRM tests/build/runtime,
+  applied for the effective-access contract. Broader runtime, deployment, CRM tests/build/runtime,
   and cross-repository consumption remain unverified.
-- **Implemented / source-inspected:** Phase 1A.4B CRM Staff Access lifecycle
+- **Implemented / source-inspected:** CRM Staff Access lifecycle
   integration and fail-closed projection handling. Capability-consuming CRM
   administration remains deferred, as does capability disclosure expansion.
 - **Historical runtime evidence (superseded):** governance migrations applied
@@ -191,7 +191,7 @@ GOV-005. GOV-003 and GOV-006 are reduced for the reviewed lifecycle paths but
 remain open for uncovered privileged writers until independent security review
 and broader activation evidence are complete.
 
-Historical Phase 1A.4C planning validation recorded 21/21 Admin, role-model, assignment and
+Historical governance validation recorded 21/21 Admin, role-model, assignment and
 concurrency tests and 34/34 governance and invitation tests passing, alongside
 a clean Django system check, no schema-affecting model changes, no planned
 migrations and a clean migration graph against the isolated database. The full
@@ -227,9 +227,9 @@ exceptional restricted-access workflows remain outside this stage. Ordinary
 individual changes are immediate where authorized; grant/restore/unrestrict of
 `STAFF_CAPABILITY_ADMIN` remains proposal-based. Duplicate pending proposals
 are returned as sanitized HTTP 409 conflicts. Focused governance API validation
-The historical Phase 1A.4C manual API validation passed 21/21 tests; the current
+The historical governance manual API validation passed 21/21 tests; the current
 governance remediation run passed 17/17 tests against isolated PostgreSQL. The
-isolated Phase 1A.4C manual
+isolated governance manual
 API runtime is verified, while deployment and operational activation remain
 unverified.
 
@@ -264,7 +264,7 @@ invocation condition is rejected by the service, while caller coverage and
 operational scheduling remain unverified. These remain activation gates, not
 resolved security findings.
 AUTH-001 and AUTH-002 remain open and are not resolved by this local validation
-or documentation update. The Phase 1A.2 foundation verification gate is
+or documentation update. The capability-foundation verification gate is
 complete for the isolated local scope; operational governance activation
 remains blocked by the documented activation gates.
 
@@ -351,10 +351,10 @@ a distinct approver through the dedicated `LegalHoldReleaseRequest` workflow;
 the approved active-superuser authority remains available. This dedicated
 model keeps hold-release invariants separate from capability proposals.
 
-**Historical evidence status:** isolated PostgreSQL upgrade from the Phase 1A.2 state
+**Historical evidence status:** isolated PostgreSQL upgrade from the capability-foundation state
 preserved synthetic assignments, restrictions, audit events, the seeded
 baseline, normalized Person associations, and governance records. The
-earlier Phase 1A.3 focused suite passed 19/19 and the affected broader suite passed
+earlier capability-and-audit focused suite passed 19/19 and the affected broader suite passed
 102/102. Operational database migration, disposal, production/staging
 behavior, CRM integration, and cross-repository runtime compatibility remain
 deferred or unverified.
@@ -376,7 +376,7 @@ Staff CRM session. The successful response contains exactly:
 
 The historical `capability_codes` value was projected from the then-current
 single CRM disclosure allowlist entry, `STAFF_CAPABILITY_ADMIN`; the later
-Phase 1A.4D rollout expands the coordinated allowlist as documented below.
+The coordinated allowlist rollout expands disclosure as documented below.
 The endpoint admits only authenticated
 sessions with an active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` role;
 anonymous callers receive `401`, non-CRM authenticated users receive `403`, and
@@ -391,7 +391,7 @@ transaction, without mutating policy state. Responses set
 
 An admitted Django superuser retains the existing audited superuser evaluator
 boundary, including transactional `PRIVACY_SUPERUSER_BYPASS` recording, without
-expanding the public response beyond the single allowlisted capability. Phase
+expanding the public response beyond the single allowlisted capability. The
 1A.4B is implemented. This contract is source-inspected from `staff_access/urls.py`,
 `views.py`, `serializers.py`, and `permissions.py`. The focused API suite passed
 34/34 against isolated PostgreSQL database
@@ -399,7 +399,7 @@ expanding the public response beyond the single allowlisted capability. Phase
 migration plan, and `git diff --check` were clean as recorded above. No schema
 or migration files changed or were applied. CRM tests/build/runtime, deployment,
 and cross-repository CRM consumption were unverified in the earlier 1A.4A
-evidence; the later isolated Phase 1A.4C manual environment verified the live
+evidence; the later isolated governance manual environment verified the live
 projection contract without using the operational database.
 
 ## Targeted remediation status
@@ -424,9 +424,9 @@ separate repository-owned integration.
 
 The focused validation command set was: `manage.py check --fail-level ERROR`,
 `manage.py makemigrations --check --dry-run`, isolated PostgreSQL migration
-verification from Phase 1A.2 through Phase 1A.3, the synthetic normalized
+verification from the capability foundation through the audit extension, the synthetic normalized
 subject migration test, focused privacy-audit projection tests, and the
-existing Phase 1A.3 regression suites. The remediation subset passed 9/9 and
+existing capability-and-audit regression suites. The remediation subset passed 9/9 and
 the broader authorized focused set passed 69/69 against isolated PostgreSQL
 test database `test_elevate`; no operational database was migrated. AUTH-002
 remains preserved with its scoped raw-admin resolution;
@@ -517,14 +517,14 @@ approval/rejection actions, allowing an independent authorized administrator
 to discover pending requests after login or refresh without manual request-ID
 entry. No retention
 automation, deletion, anonymisation, or GDPR-FUTURE-001 implementation is part
-of this stage. The isolated Phase 1A.4D manual UAT was accepted for the
+of this implementation. The isolated release-governance manual UAT was accepted for the
 API/CRM workflow, including direct superuser release and cancellation
 retention behavior. The focused backend cancellation/concurrency validation
 passed 26/26; operational/staging deployment, cross-repository
 compatibility, and final-hardening security evidence remain unverified.
 Minor UX polish is deferred as non-blocking backlog work.
 
-Phase 1A.4D.4 remediation was exercised and accepted in the isolated UAT database with an
+Release-governance remediation was exercised and accepted in the isolated UAT database with an
 audited restoration of the Synthetic Manager `LEGAL_HOLD_ADMIN` capability. It
 also adds safe actor and Person projections and a duplicate pending-release
 guard. Pending requests remove the ordinary `request_release`
@@ -534,7 +534,7 @@ no migration is required.
 
 ## Security implementation and activation readiness
 
-Status: **Implemented / source-inspected for the earlier Phase 1A.4E/1.6
+Status: **Implemented / source-inspected for the earlier authorization-integration closure
 closure batch; automated tests and final hardening execution were deferred.**
 API/CRM contracts continue to use Django session
 authentication for Staff CRM routes; mobile JWT authentication remains limited
@@ -542,7 +542,7 @@ to its documented mobile and Community surfaces. Capability evaluation,
 revocation, privacy governance, and safe projections remain backend-authoritative
 and compatible with the accepted CRM consumers.
 
-Phase 1A.5 legacy reconciliation is explicitly skipped because the current
+Legacy reconciliation is explicitly skipped because the current
 dataset is test data. No reconciliation tooling, management command, dashboard,
 record reclassification, deletion, or operational data remediation was added.
 New role assignments now require an active STAFF user, or the approved active
@@ -554,9 +554,9 @@ rows; new inactive or non-STAFF role assignments are rejected; and untrusted
 system audit callers cannot persist caller-supplied request identifiers or IP
 addresses. The CRM session logout route now explicitly rejects mobile JWT
 authentication; the approved superuser exception remains available. Added
-regression tests were **Implemented / Unverified for this earlier Phase
+regression tests were **Implemented / Unverified for this earlier authorization-integration
 1A.4E/1.6 closure batch** because execution was deferred to final GDPR
-hardening. The later Phase 1C targeted results are recorded below and do not
+hardening. The later targeted results are recorded below and do not
 retroactively make the broader closure batch or full repository suite verified.
 
 AUTH-002 remains resolved within its reviewed raw AuditEvent Admin scope.
@@ -567,12 +567,12 @@ approval remain final-hardening or activation dependencies. They are not
 silently risk-accepted. Automatic disposal, anonymisation, Person masking,
 export enforcement, and GDPR-FUTURE-001 remain deferred.
 
-These obligations are carried into the consolidated GDPR Phase 1C final
+These obligations are carried into consolidated GDPR final
 hardening stage. The implementation-stage specialist acceptance gate was not
 completed for every specialist because the active agent-thread limit prevented
 delegation; no independent acceptance is claimed. All regression tests added
-in this stage were **Implemented / Unexecuted at the pre-Phase 1C cutoff**.
-Later Phase 1C reruns cover only the named focused subsets and do not establish
+in this implementation were **Implemented / Unexecuted at the final-hardening cutoff**.
+Later reruns cover only the named focused subsets and do not establish
 a green full suite.
 Production activation requires final security, QA, architecture and
 documentation acceptance, runtime/deployment verification, and any required
@@ -581,7 +581,7 @@ legal or privacy approvals.
 ## People privacy and protected disclosure
 
 Status: **Implemented / source-inspected; verification was unexecuted at the
-Phase 1B.1 cutoff**.
+privacy-projection validation cutoff**.
 
 The API now enforces the approved `PERSON_CONTACT_READ` and
 `PERSON_DEMOGRAPHIC_READ` boundaries on People response projections, nested
@@ -625,7 +625,7 @@ failure contract; and comprehensive Person access auditing remains
 
 The choice migration `audit.0024_alter_auditevent_action.py` is generated but
 not applied. The new regression tests were **Implemented / Unexecuted at the
-Phase 1B.1 cutoff**. Current Phase 1C evidence covers named focused subsets
+privacy-projection validation cutoff**. Current final-hardening evidence covers named focused subsets
 only; runtime migration, disclosure, failure-rollback and Privacy Audit
 verification remain limited or deferred as described below.
 
@@ -637,7 +637,7 @@ privacy scope.
 
 Tests covering masked projections, restricted demographics, contact-search
 suppression, protected writes, safe malformed values, and the superuser
-exception were **Implemented / Unexecuted at the Phase 1B.1 cutoff** under the
+exception were **Implemented / Unexecuted at the privacy-projection validation cutoff** under the
 approved deferred-test policy. Independent specialist acceptance was unavailable because
 the active agent-thread limit prevented delegation; no independent acceptance
 is claimed. Final hardening still requires the approved lightweight checks and
@@ -654,7 +654,7 @@ auditing (`GDPR-FUTURE-001`), and later privacy workflows remain deferred.
 ## Marketing consent and provider privacy
 
 Status: **Implemented / source-inspected; automated tests and runtime/provider
-verification were deferred at the Phase 1B.2 cutoff**.
+verification were deferred at the marketing-privacy validation cutoff**.
 
 Marketing audience preview and Campaign V1 retain their existing CRM-role
 authorization and consent rules. Privacy capabilities do not grant campaign
@@ -676,15 +676,15 @@ No new marketing capability, campaign permission, blanket campaign/recipient
 audit, export enforcement, or provider workflow was introduced. Deliberate
 protected Person disclosure auditing remains limited to the approved existing
 workflow; comprehensive Person access auditing remains `GDPR-FUTURE-001`.
-The added regression tests were **Implemented / Unexecuted at the Phase 1B.2
+The added regression tests were **Implemented / Unexecuted at the marketing-privacy
 cutoff** under the deferred test policy. No model changes or migration is
-required for this stage; current Phase 1C evidence remains subset-specific.
+required for this implementation; current evidence remains subset-specific.
 
 ## Exports and bulk operations
 
 Status: **Implemented / source-inspected; automated tests, migration
 application, runtime downloads, and final security verification were deferred
-for the Phase 1B.3 closure batch**.
+for the People-export closure batch**.
 
 People exports use `GET /api/v1/people/export/?format=csv|xlsx` and the existing
 People directory scope. The backend requires CRM session authentication,
@@ -712,7 +712,7 @@ migration exists in repository history, so the historical numbering gap is
 intentionally retained.
 
 Backend and CRM regression tests were **Implemented / Unexecuted for the
-Phase 1B.3 closure batch**. Migration application and drift validation remain
+People-export closure batch**. Migration application and drift validation remain
 pending. CSV/XLSX runtime downloads,
 Microsoft Excel compatibility, formula-injection behavior, export
 authorization and capability-revocation behavior, export-audit visibility,
@@ -721,20 +721,20 @@ Independent specialist acceptance for this closure stage was unavailable under
 the active agent-thread limit. The UI polishing and final UAT backlog includes
 People export format selection, denied/revoked export feedback, safe download
 handling, restricted-column verification, and the existing Angular warnings.
-GDPR Phase 1C must carry these obligations together with Marketing capability
+Final GDPR hardening must carry these obligations together with Marketing capability
 revocation and privileged-disclosure verification; no item is risk-accepted by
 this development closure.
 
-The consolidated GDPR Phase 1 manual UAT is **Verified** for 15 scenarios.
+The consolidated GDPR manual UAT is **Verified** for 15 scenarios.
 One historical-campaign scenario was explicitly waived for manual verification
 and remains subject to automated regression coverage. This result does not
-replace Phase 1C automated hardening, migration/runtime verification,
+replace automated hardening, migration/runtime verification,
 independent specialist acceptance, or production-activation requirements.
 
 ## API documentation exposure
 
 Status: **Implemented / source-inspected; automated tests and environment
-runtime verification were deferred for the Phase 1B.4 closure batch**.
+runtime verification were deferred for the API-documentation closure batch**.
 
 The OpenAPI schema, Swagger UI, and ReDoc routes now share an explicit
 environment-aware backend boundary. Local development uses
@@ -753,7 +753,7 @@ post-migration permission verification remain pending. CI smoke expectations
 now assert protected staging routes and disabled-by-default production routes.
 
 The added access-control regression tests were **Implemented / Unexecuted for
-the Phase 1B.4 closure batch**. Django system checks and migration drift checks
+the API-documentation closure batch**. Django system checks and migration drift checks
 are **Verified** locally in the current targeted evidence, but this does not
 establish full-suite or deployment verification.
 Runtime environment checks, direct schema and alternate route verification,
@@ -762,14 +762,14 @@ was inspected but still reports existing unrelated serializer/authenticator
 warnings and errors; no broad schema cleanup was included. No new privacy
 capability, application API contract, migration execution, personal-data
 workflow, or comprehensive Person access auditing was introduced. Existing
-Phase 1C obligations remain open, including pending
+Final-hardening obligations remain open, including pending
 migrations, targeted security remediation, authentication and governance findings,
 authorization concurrency and revocation, People and Marketing disclosure
 auditing, provider verification, CSV/XLSX and Excel verification, export audit
 verification, the waived historical-campaign UAT scenario, independent specialist acceptance, and legal/privacy
 and production activation approvals.
 
-All planned GDPR Phase 1 functional development stages are marked complete for
+All planned GDPR functional development work is marked complete for
 development purposes only. This does not constitute final security acceptance,
 runtime verification, legal/privacy approval, or production readiness.
 
@@ -814,7 +814,7 @@ behavior, or cross-repository runtime compatibility. The earlier 1,458/1,458
 result remains historical pre-remediation evidence.
 
 OpenAPI generation was inspected and emitted existing serializer/authenticator
-diagnostics. Those diagnostics are classified as **nonblocking for this Phase
+diagnostics. Those diagnostics are classified as **nonblocking for this documentation
 1C documentation update only** because they are unrelated to the privacy/logout
 corrections under review; schema generation is not claimed clean, and no broad
 schema cleanup was performed. Remaining final-hardening obligations include
@@ -842,10 +842,10 @@ production activation prerequisite rather than a new scheduling subsystem.
 ## Future privacy enhancements and deferred scope
 
 This section is the authoritative forward-looking register for GDPR work that
-is not part of the completed Phase 1 engineering scope. It distinguishes
+is not part of the completed GDPR engineering scope. It distinguishes
 approved deferred requirements from proposed enhancements that still require
 requirements elicitation and approval. None of the proposed items below is
-implemented by this roadmap update.
+implemented by this documentation update.
 
 ### Privacy and access-control enhancements
 
@@ -872,7 +872,7 @@ They do not pre-approve the future capabilities in this table.
 Existing legal-hold capability and retention-protection behavior is not a
 substitute for a formally approved disposal or anonymisation policy. No
 automatic disposal, deletion, anonymisation, or retention scheduler is
-authorized by this roadmap.
+authorized by this documentation.
 
 ### Data subject rights
 
@@ -908,7 +908,7 @@ relevant subject-based documentation before implementation acceptance.
 
 ### Development sequencing and readiness
 
-- GDPR Phase 1 engineering is complete for local development progression.
+- GDPR engineering is complete for local development progression.
 - Events V1 is the next development priority.
 - The future enhancements in this section remain deferred until explicitly
   authorized; they do not currently block Events V1 development.
@@ -945,14 +945,15 @@ existing capability evaluator and will not become a second privacy-permission
 administration surface.
 
 When operational staff access is deactivated, active individual capability
-grants are planned to move to the existing `SUSPENDED` state atomically with
-role revocation and CRM-session invalidation. Explicit restrictions remain in
-force. Reactivation must not restore suspended grants; explicit restoration
-remains owned by Privacy Administration and requires its existing authorization,
-reason and audit controls.
+grants move to the existing `SUSPENDED` state atomically with CRM-family role
+revocation and CRM-session invalidation. Explicit restrictions remain in force.
+Reactivation and account enablement do not restore suspended grants; explicit
+restoration remains owned by Privacy Administration and requires its existing
+authorization, reason and audit controls. Runtime lifecycle verification is
+deferred.
 
-Phase 2A verified that Staff Management authorization remains separate from
-the GDPR capability evaluator; no capability, grant, restriction or privacy
-precedence rule was changed. Privacy-grant suspension and restoration remain
-later lifecycle work. This integration is therefore **Approved / Planned**
-except for the verified authorization-independence boundary.
+The Staff lifecycle foundation preserves the separation between Staff Management authority and
+discretionary Privacy Administration. Automatic protective suspension is the
+only privacy mutation performed by staff deactivation; it does not grant
+arbitrary grant restoration or restriction-management authority. This
+integration is **Implemented / Unverified at runtime** pending final hardening.

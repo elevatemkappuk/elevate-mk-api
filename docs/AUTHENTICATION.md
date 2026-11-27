@@ -491,11 +491,11 @@ Staff CRM authorization is implemented separately from authentication.
 - `GET /api/v1/staff/access/me/` is admitted only through a Django CRM session
   and an active operational CRM role; mobile JWT authentication is not accepted
   for that endpoint.
-- The Phase 1A.4A effective-access response is intentionally limited to the
+- The effective-access response is intentionally limited to the
   exact `capability_codes` and `policy_version` fields. Its CRM capability
   disclosure allowlist is currently empty.
 
-Evidence status: the authorization boundary and Phase 1A.4A route contract are
+Evidence status: the authorization boundary and effective-access route contract are
 source-inspected. The focused API suite passed 34/34 against isolated
 PostgreSQL database `test_elevate_gdpr_phase1a4a_20261124`; `manage.py check`
 passed; `makemigrations --check --dry-run` reported `No changes detected`;
@@ -503,19 +503,19 @@ passed; `makemigrations --check --dry-run` reported `No changes detected`;
 was clean. No schema or migration files changed or were applied. Broader
 runtime, deployment, CRM, and cross-repository behavior remain unverified.
 
-## Phase 1A.3 audit provenance
+## Audit provenance
 
-Implemented and locally verified in the isolated Phase 1A.3 tests. HTTP audit
+Implemented and locally verified in the isolated audit-provenance tests. HTTP audit
 provenance is generated server-side by the audit
 middleware; caller-supplied request identifiers and IP values cannot replace
 the trusted request context. Background, system, migration, and legacy events
 retain explicit provenance classifications. This does not change login,
 session, JWT, credential, or authentication-revocation contracts.
 
-## Staff Management V1 — Phase 2A authentication boundary
+## Staff Management V1 — Authentication boundary
 
 See [STAFF_MANAGEMENT.md](STAFF_MANAGEMENT.md) for the full Staff Management
-contract. Phase 2A does not change Django session creation, mobile JWT
+contract. The authorization foundation does not change Django session creation, mobile JWT
 handling, password recovery, credential invalidation, or the authentication
 API. It establishes the backend Staff Management authorization boundary and
 reuses current authenticated User state at the authorization point.
@@ -527,7 +527,7 @@ This exception does not create general CRM access or alter existing session
 semantics. Later account lifecycle stages must integrate session invalidation
 and account-state transitions explicitly.
 
-Phase 2B role replacement and revocation increment the affected User's
+Role replacement and revocation increment the affected User's
 `crm_session_version` within the role mutation transaction. This invalidates
 obsolete CRM sessions without revoking unrelated global account, Community or
 Mobile authentication. The new role is evaluated only after the transaction
@@ -541,7 +541,9 @@ authentication with the existing account and verification at the new address;
 `User.email` remains independent from `Person.primary_email`.
 
 Account disablement, password reset, email change and exceptional recovery must
-invalidate the appropriate sessions and outstanding tokens. Account enablement
-must not resurrect invalidated sessions, revoked staff assignments or suspended
-privacy grants. These statements are **Approved / Planned**, not claims of
-current Staff Management implementation.
+invalidate the appropriate sessions and outstanding tokens. The lifecycle foundation now
+provides internal account disablement/enablement foundations: disablement
+retains role history while revoking global and CRM credentials, and enablement
+requires a disabled lifecycle state plus fresh authentication. Enablement does
+not resurrect invalidated sessions, revoked staff assignments or suspended
+privacy grants. Runtime verification remains deferred.

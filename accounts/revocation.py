@@ -64,7 +64,10 @@ def revoke_user_credentials(*, user, reason, actor_user=None, request=None):
     from audit.services import record_audit_event
 
     now = timezone.now()
-    User.objects.filter(pk=user.pk).update(auth_version=F("auth_version") + 1)
+    User.objects.filter(pk=user.pk).update(
+        auth_version=F("auth_version") + 1,
+        crm_session_version=F("crm_session_version") + 1,
+    )
     revoked_sessions = MobileAuthSession.objects.filter(
         user_id=user.pk,
         revoked_at__isnull=True,
@@ -83,6 +86,7 @@ def revoke_user_credentials(*, user, reason, actor_user=None, request=None):
             "reason": reason,
             "mobile_sessions_revoked": revoked_count,
             "authentication": "all_credentials",
+            "crm_sessions_invalidated": True,
         },
         **_request_audit_context(request),
     )

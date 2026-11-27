@@ -1,6 +1,6 @@
 # Staff Management V1
 
-Status: **Approved architecture / Phase 2C administrator approval foundation implemented; later implementation planned**
+Status: **Approved architecture / lifecycle and privacy foundations implemented; runtime verification pending**
 
 This document is the API repository's authoritative living guide for Staff
 Management V1. It records approved requirements and architecture, existing
@@ -25,7 +25,7 @@ invalidation. See [Authentication](AUTHENTICATION.md),
 The historical GDPR baseline of 1,474/1,474 API tests is not new Staff
 Management verification.
 
-Phase 2A implemented the centralized authorization foundation in
+The centralized authorization foundation is implemented in
 `staff_access.authorization`. Active CRM Administrators and eligible active
 Django Superusers with a non-archived linked Person can access the Staff
 Management boundary. The Superuser exception is scoped to Staff Management and
@@ -36,7 +36,7 @@ denied, including for Superusers. Denials at the policy boundary are recorded
 with safe actor, target, operation and reason metadata through the centralized
 audit service.
 
-Phase 2A evidence: focused Staff Management authorization, staff lifecycle and
+Historical authorization-foundation evidence: focused Staff Management authorization, staff lifecycle and
 invitation tests passed **79/79**; affected authentication, session-revocation,
 GDPR privacy-governance and audit tests passed **39/39**. This is local
 isolated verification, not full-suite or deployment evidence.
@@ -47,7 +47,7 @@ coverage, and other Staff Management workflows remain planned for later
 approved stages. `STAFF-001`, `STAFF-002` and `STAFF-003` remain unresolved
 according to their documented scope.
 
-## Phase 2B role integrity and continuity
+## CRM role integrity and Administrator continuity
 
 The canonical CRM roles have explicit `StaffRole.family = "CRM"` metadata.
 `StaffRoleAssignment.role_family` mirrors the assigned role family and is
@@ -70,28 +70,28 @@ revocation and replacement continuity decisions; affected User rows and role
 assignments are locked within the same transaction. Mandatory audit failures
 roll back the mutation.
 
-Phase 2B focused verification passed **83/83** role-integrity, authorization,
+Historical role-integrity verification passed **83/83** role-integrity, authorization,
 staff lifecycle and invitation tests, including PostgreSQL row-locking
 concurrency coverage. The directly affected authentication, session, privacy
 and audit groups passed **79/79**. The combined focused command passed
 **163/163** tests in **11.010 seconds** with no skips. Django checks and
-migration-drift checks passed. Full API/CRM regression remains reserved for
-Phase 8.
+migration-drift checks passed. Full API/CRM regression remains deferred until
+final hardening.
 
 The Django Admin assignment add, reactivation and revocation paths now invoke
 the centralized target policy before the role services. Direct database
 administration remains an explicit trusted boundary; no application-level
-supported writer identified in this phase is intended to bypass the service
+supported writer identified in this implementation is intended to bypass the service
 or Admin safeguards.
 
 Remaining limitations: direct trusted database administration remains outside
 application controls; invitation-backed Administrator effecting remains in
-later phases; account
+future feature work; account
 disablement, deactivation privacy suspension and complete lifecycle audit
 coverage remain later stages. `STAFF-001` is materially reduced for supported
 role mutation paths but is not globally resolved.
 
-## Phase 2C administrator approval foundation
+## Administrator approval governance
 
 `StaffAdministratorProposal` and `StaffAdministratorProposalDecision` provide
 a dedicated operational governance boundary separate from GDPR capability
@@ -110,7 +110,7 @@ cannot be the target. Existing active Manager/Viewer promotion is approved and
 effected atomically, preserving the prior assignment, invalidating the target
 CRM session generation and recording mandatory audit events. New onboarding
 and former-staff reactivation can be approved but are not effected until their
-Phase 4/5 invitation workflows consume the approval.
+onboarding and reactivation invitation workflows consume the approval.
 
 Target state and policy-version checks invalidate stale proposals. Approval,
 effecting, rejection, cancellation and invalidation are transactionally
@@ -119,13 +119,44 @@ Migration `staff_access.0010_staff_administrator_proposals` is additive,
 validated in isolated test databases and not applied to the persistent
 database.
 
-Phase 2C focused verification passed **169/169** tests in **10.281 seconds**
+Historical administrator-governance verification passed **169/169** tests in **10.281 seconds**
 with no skips. This included the six dedicated administrator-governance tests,
-Phase 2A/2B authorization and role-integrity coverage, invitation/lifecycle
+authorization and role-integrity coverage, invitation/lifecycle
 coverage, session-revocation coverage and affected privacy/audit groups. A
 dedicated rerun passed **6/6** in **0.449 seconds**. Django system checks,
 migration-drift checks and `git diff --check` passed. Full API, CRM, Community
-and Mobile regression remains reserved for Phase 8 final hardening.
+and Mobile regression remains deferred until final hardening.
+
+## Staff lifecycle and privacy foundation
+
+`deactivate_staff_access` is the authoritative staff-access operation. It
+requires a reason and centralized Staff Management authorization, revokes only
+active CRM-family assignments, suspends active individual privacy grants,
+preserves grant history and explicit restrictions, cancels compatible pending
+invitations, invalidates pending or approved-but-unused Administrator
+proposals, increments `crm_session_version`, and records transactional audit
+evidence. It does not change `User.is_active`, passwords, Person, Membership
+or Community eligibility. Future complementary role families are outside this
+CRM-family operation.
+
+`disable_user_account` and `enable_user_account` are separate internal service
+foundations. Disablement retains role-assignment history, sets
+`User.account_lifecycle_state` to `DISABLED`, revokes global and CRM
+credentials, cancels incompatible lifecycle state and preserves the final
+Administrator invariant. Enablement accepts only an explicitly disabled
+account, requires a reason and does not restore roles, grants, restrictions,
+sessions, tokens, invitations or proposals. Fresh authentication is required.
+
+The new account lifecycle state distinguishes `ACTIVE`, `PENDING_ACTIVATION`
+and `DISABLED`; existing inactive accounts are classified as disabled because
+`is_active` alone cannot distinguish those states. The existing reactivation
+entry point is restricted rather than used as a temporary bypass; complete
+invitation-backed reactivation, including CRM_ADMIN approval consumption,
+remains planned for the invitation-backed reactivation workflow.
+
+Lifecycle tests were added but not executed during implementation, per the
+final-hardening-only testing policy. Django checks, migration-drift checks and
+diff checks passed. Full verification remains outstanding.
 
 ## Scope and boundaries
 
@@ -314,17 +345,17 @@ The following approved refinements remain explicit implementation requirements:
 - login-email confirmation requires token verification and authentication with the existing account;
 - `User.email` and `Person.primary_email` remain independent;
 - account enablement must not restore invalidated sessions, revoked assignments or suspended grants;
-- retained role-assignment behavior during global account disablement must be finalized before implementation;
+- global account disablement retains role assignments but prevents effective access through inactive authentication;
 - approved but unused Administrator proposals remain subject to expiry and invalidation;
 - provider acceptance is not confirmed inbox delivery;
-- exceptional recovery is included in the account-security implementation phase;
+- exceptional recovery is included in the account-security implementation work;
 - Community and Mobile compatibility must be checked for global authentication changes;
 - Administrator approval queue list/detail contracts are required;
 - login-email change cancellation is required;
 - existing operational mutation paths must not bypass new governance.
 
-Where implementation evidence does not yet settle a detail, the detail remains
-an explicit Phase 2 design requirement rather than an invented contract.
+Where runtime implementation evidence is not yet available, behavior is
+classified **Implemented / Unverified** rather than treated as verified.
 
 ## Audit requirements
 
@@ -363,8 +394,9 @@ GET  /api/v1/staff/{id}/audit-history/
 GET  /api/v1/staff/{id}/privacy-summary/
 ```
 
-Exact routes, DTOs, error contracts and OpenAPI definitions require Phase 2
-implementation design. No listed endpoint should be interpreted as deployed.
+Exact routes, DTOs, error contracts and OpenAPI definitions require the
+approved implementation design. No listed endpoint should be interpreted as
+deployed.
 
 ## Verification and deferred work
 

@@ -104,7 +104,7 @@ class StaffInvitationTests(TestCase):
         self.assertEqual(replacement.pending_role_codes, [StaffRole.CRM_MANAGER])
         self.assertEqual(StaffInvitation.objects.filter(intended_email="roles@example.com").count(), 2)
 
-    def test_reactivation_uses_fresh_password_and_reuses_inactive_staff_identity(self):
+    def test_reactivation_does_not_use_a_temporary_direct_path(self):
         target = User.objects.create_user(
             email="reactivate@example.com", password="Old-password-123!",
             person=Person.objects.create(first_name="Re", last_name="Activate", primary_email="reactivate@example.com", record_type=Person.RecordType.STAFF),
@@ -114,15 +114,17 @@ class StaffInvitationTests(TestCase):
             role=StaffRole.objects.get(code=StaffRole.CRM_VIEWER),
             assigned_by=self.actor,
         )
-        offboard_staff_user(target_user=target, actor_user=self.actor)
-        invitation = reactivate_staff_user(target_user=target, actor_user=self.actor)
-        with patch("notifications.jobs.send_transactional_email", return_value=SimpleNamespace(provider_message_id="test-id")) as send:
-            process_next_transactional_email_job()
-        token = urlparse(send.call_args.kwargs["template_params"]["activation_url"]).path.rstrip("/").split("/")[-1]
-        redeemed = redeem_staff_invitation(public_id=invitation.public_id, raw_token=token, password="New-password-123!")
-        self.assertEqual(redeemed.pk, target.pk)
-        self.assertTrue(redeemed.check_password("New-password-123!"))
-        self.assertTrue(StaffRoleAssignment.objects.active().filter(user=target, role__code=StaffRole.CRM_VIEWER).exists())
+        offboard_staff_user(
+            target_user=target,
+            actor_user=self.actor,
+            reason="Remove operational staff access before reactivation review.",
+        )
+        with self.assertRaises(ValidationError):
+            reactivate_staff_user(
+                target_user=target,
+                actor_user=self.actor,
+                reason="Reactivation requires current role review.",
+            )
 
     def test_invitation_rejects_passwords_that_fail_configured_validators(self):
         invitation = create_staff_invitation(

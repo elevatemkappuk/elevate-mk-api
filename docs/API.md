@@ -26,7 +26,7 @@ explicitly configured, after which the same technical authorization applies.
 Invalid or missing environment configuration fails closed at startup. The
 schema route is protected independently of the HTML documentation interfaces.
 
-### Phase 1B.2 marketing privacy projections
+### Marketing privacy projections
 
 `POST /api/v1/marketing/audiences/preview/` retains its existing audience
 selection, consent classification, count, pagination, and CRM-role contract.
@@ -44,7 +44,7 @@ payloads and credentials are not part of the API contract. These controls are
 **Implemented / source-inspected**; added tests and runtime/provider
 verification are **Unexecuted / Unverified** under the deferred-test policy.
 
-### Phase 1B.3 People export
+### People export
 
 `GET /api/v1/people/export/?format=csv|xlsx` returns an authenticated direct
 download using the existing People directory filters and record scope. The
@@ -58,7 +58,7 @@ successful export response. Downloads are marked private and no-store. The
 `format` query parameter is handled explicitly by the endpoint and does not
 alter DRF renderer negotiation. No public download URL or asynchronous export
 storage is used. CSV/XLSX runtime behavior, Excel compatibility, export audit
-visibility, and capability-revocation behavior remain unverified pending Phase
+visibility, and capability-revocation behavior remain unverified pending final
 1C hardening.
 Current base path and versioning convention:
 
@@ -447,7 +447,7 @@ complete new email address.
 
 ### Staff governance API
 
-The Phase 1A.4C.2B governance routes are CRM-session-only. Governance reads
+The governance routes are CRM-session-only. Governance reads
 require either an active effective `STAFF_CAPABILITY_ADMIN` capability or an
 active Django superuser with an operational CRM role. Ordinary mutation routes
 retain their existing eligibility and two-person rules; the dedicated audited
@@ -828,6 +828,18 @@ Staff access lifecycle note:
 - the canonical `CRM_ADMIN` StaffRole cannot be deactivated
 - `/api/v1/auth/me/` response shape is unchanged
 
+Lifecycle foundation:
+
+- the existing Staff offboard operation now means staff-access deactivation
+  only and requires a reason; it preserves global User authentication
+  eligibility while revoking CRM-family roles, suspending individual grants,
+  cancelling incompatible invitations and invalidating applicable proposals
+- the existing reactivation operation is restricted until the complete
+  invitation-backed reactivation workflow is implemented; it cannot be used as a
+  temporary direct reactivation path or to appoint a CRM Administrator
+- global account disablement/enablement are internal service foundations only;
+  no new public lifecycle endpoints were added in this foundation
+
 ## Endpoint: `GET /api/v1/staff/access/me/`
 
 Purpose:
@@ -855,7 +867,7 @@ Successful response:
 }
 ```
 
-- `capability_codes` is the effective capability-code projection after the backend evaluator is applied. The coordinated Phase 1A.4D allowlist contains `STAFF_CAPABILITY_ADMIN`, `PRIVACY_AUDIT_READ`, and `LEGAL_HOLD_ADMIN`; all other capability codes remain excluded.
+- `capability_codes` is the effective capability-code projection after the backend evaluator is applied. The coordinated allowlist contains `STAFF_CAPABILITY_ADMIN`, `PRIVACY_AUDIT_READ`, and `LEGAL_HOLD_ADMIN`; all other capability codes remain excluded.
 - `policy_version` is the current capability-policy version read for this evaluation; `2` is the verified current example value, not a fixed contract value. It is informational for the client; it is not a capability grant, authorization token, mutation precondition, or client-controlled version.
 - The view locks the singleton capability-policy state and evaluates the requested disclosure set in one database transaction, so the returned policy version and projection are from the same transactionally consistent evaluation. The endpoint does not mutate policy state.
 - The response sets `Cache-Control: private, no-store` and must not be retained as shared or stored client state.
@@ -868,8 +880,8 @@ Superuser boundary:
 Evidence status:
 
 - **Implemented / Source-inspected:** route, view, serializer, CRM-session authentication, active-role permission, three-capability disclosure allowlist, transactional policy-state read, superuser boundary, and `private, no-store` response header were inspected in `staff_access/urls.py`, `staff_access/views.py`, `staff_access/serializers.py`, and `staff_access/permissions.py`.
-- **Verified / isolated local runtime (historical Phase 1A.4A evidence):** `http://localhost:8000` served the API against `elevate_gdpr_phase1a4c_manual`; synthetic admin and delegated manager sessions received the then-current `STAFF_CAPABILITY_ADMIN` projection, while an explicitly restricted account received no capability projection. The later three-capability allowlist rollout remains source-inspected and requires current isolated validation. The operational `elevate` database was not used.
-- **Verified — focused API evidence:** 34/34 Phase 1A.4A focused tests passed against isolated PostgreSQL database `test_elevate_gdpr_phase1a4a_20261124`; `manage.py check` passed; `makemigrations --check --dry-run` reported `No changes detected`; `migrate --plan` reported no planned migration operations; and `git diff --check` was clean. No schema or migration files changed, and no migrations were applied for Phase 1A.4A.
+- **Verified / isolated local runtime (historical effective-access evidence):** `http://localhost:8000` served the API against `elevate_gdpr_phase1a4c_manual`; synthetic admin and delegated manager sessions received the then-current `STAFF_CAPABILITY_ADMIN` projection, while an explicitly restricted account received no capability projection. The later three-capability allowlist rollout remains source-inspected and requires current isolated validation. The operational `elevate` database was not used.
+- **Verified — focused API evidence:** 34/34 effective-access focused tests passed against isolated PostgreSQL database `test_elevate_gdpr_phase1a4a_20261124`; `manage.py check` passed; `makemigrations --check --dry-run` reported `No changes detected`; `migrate --plan` reported no planned migration operations; and `git diff --check` was clean. No schema or migration files changed, and no migrations were applied for the effective-access contract.
 - **Unverified:** broader runtime behavior, deployment behavior, CRM tests/build/runtime, and cross-repository CRM consumption.
 
 ## Endpoint: `GET /api/v1/people/`
@@ -2591,7 +2603,7 @@ Planned, not yet implemented:
 
 - broader people/domain APIs around the `Person` model beyond the current read-only list endpoint
 - additional first-party authenticated application endpoints under the `/api/v1/` convention
-- broader capability-aware Staff CRM consumers and enforcement beyond the Phase 1A.4A projection
+- broader capability-aware Staff CRM consumers and enforcement beyond the effective-access projection
 
 
 ## Staff CRM Dashboard
@@ -3130,7 +3142,7 @@ approval workflow. Anonymous Join remains generic; an existing-record member
 is prompted to review the composed canonical profile after authentication.
 Review Profile followed by explicit acknowledgement and the My Profile
 Looks Good action both use this acknowledgement behavior.
-## Phase 1A.4D backend privacy contracts
+## Backend privacy contracts
 
 Implemented / isolated UAT runtime verified: the API now defines separate CRM-session
 routes for privacy audit history and legal-hold administration. Privacy audit
@@ -3176,7 +3188,7 @@ authorized decision-maker; the approved audited Django-superuser exception
 may perform direct self-approval or self-rejection. The direct release route
 is superuser-only and remains CRM-admitted and audited.
 
-### Phase 1B.1 People privacy projections
+### People privacy projections
 
 People list, detail, overview, create, update, archive, restore, and related
 Person response paths use the backend-authoritative privacy projection. The
@@ -3198,7 +3210,7 @@ rejected on writes without the corresponding capability, while unrelated
 permitted fields remain writable.
 
 Status: **Implemented / source-inspected; automated tests and runtime
-verification deferred to GDPR Phase 1C hardening**. The API and CRM must be
+verification deferred to final GDPR hardening**. The API and CRM must be
 released together for the expanded effective-capability disclosure contract;
 older strict CRM clients may not understand the two new capability codes.
 
@@ -3215,7 +3227,7 @@ unprotected reads do not generate blanket disclosure events. No new reveal
 workflow was introduced. Denial auditing remains on the existing
 authorization-failure contract, and comprehensive Person access auditing
 remains `GDPR-FUTURE-001`. The required audit-choice migration is generated but
-not applied; automated and runtime verification remain deferred to GDPR Phase 1C
+not applied; automated and runtime verification remain deferred to final GDPR hardening
 hardening.
 
 ## Staff Management V1 planned API

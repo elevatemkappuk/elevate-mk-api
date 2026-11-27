@@ -643,7 +643,11 @@ class CapabilityGovernanceTests(TransactionTestCase):
             close_old_connections()
             try:
                 barrier.wait(timeout=10)
-                offboard_staff_user(target_user=self.target, actor_user=self.actor)
+                offboard_staff_user(
+                    target_user=self.target,
+                    actor_user=self.actor,
+                    reason="Remove operational staff access.",
+                )
                 outcomes.append(("offboarding", "completed"))
             except (ValidationError, PermissionError) as exc:
                 outcomes.append(("offboarding", type(exc).__name__))

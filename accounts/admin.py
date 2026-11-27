@@ -13,7 +13,7 @@ class UserAdmin(DjangoUserAdmin):
     search_fields = ("email", "person__first_name", "person__last_name", "person__primary_email")
     fieldsets = (
         (None, {"fields": ("email", "password", "person")}),
-        ("Permissions", {"fields": ("is_active", "is_staff", "is_superuser", "groups", "user_permissions")}),
+        ("Permissions", {"fields": ("is_active", "account_lifecycle_state", "is_staff", "is_superuser", "groups", "user_permissions")}),
         ("Important dates", {"fields": ("last_login", "date_joined")}),
     )
     add_fieldsets = (
@@ -40,7 +40,7 @@ class UserAdmin(DjangoUserAdmin):
     def get_readonly_fields(self, request, obj=None):
         readonly_fields = list(super().get_readonly_fields(request, obj))
         if obj is not None:
-            readonly_fields.extend(["email", "person"])
+            readonly_fields.extend(["email", "person", "is_active", "account_lifecycle_state"])
         if not request.user.is_superuser:
             readonly_fields.extend(["is_superuser", "is_staff", "groups", "user_permissions"])
         return tuple(dict.fromkeys(readonly_fields))
@@ -48,6 +48,8 @@ class UserAdmin(DjangoUserAdmin):
     def save_model(self, request, obj, form, change):
         if change and obj.pk:
             previous = type(obj).objects.select_related("person").get(pk=obj.pk)
+            if previous.is_active != obj.is_active:
+                raise ValidationError("User account lifecycle changes must use the Staff Management lifecycle services.")
             # Authentication email and identity linkage are changed only by
             # their verified lifecycle workflows, never by direct Admin POST.
             obj.email = previous.email

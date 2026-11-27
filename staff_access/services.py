@@ -5,7 +5,7 @@ from datetime import timedelta
 from django.core.exceptions import ValidationError
 from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Q
 from django.utils import timezone
 
 from accounts.models import User
@@ -18,8 +18,10 @@ from staff_access.models import (
     CapabilityPolicyState,
     StaffEmailChangeRequest,
     StaffInvitation,
+    StaffCapabilityAssignment,
     StaffRole,
     StaffRoleAssignment,
+    StaffAdministratorProposal,
 )
 
 
@@ -153,26 +155,304 @@ def update_pending_staff_invitation_roles(*, invitation, actor_user, role_codes)
     return replacement
 
 
-def offboard_staff_user(*, target_user, actor_user, request=None):
+def _lifecycle_audit(*, action, actor_user, target_user, event_type, reason, metadata=None, request=None):
+    request_id = None
+    ip_address = None
+    if request is not None:
+        request_id = request.headers.get("X-Request-ID") or request.META.get("HTTP_X_REQUEST_ID")
+        ip_address = request.META.get("REMOTE_ADDR")
+    return record_audit_event(
+        action=action,
+        actor_user=actor_user,
+        entity_type="User",
+        entity_id=target_user.pk,
+        metadata={
+            "event_type": event_type,
+            "target_user_id": str(target_user.pk),
+            "reason": reason,
+            **(metadata or {}),
+        },
+        request_id=request_id,
+        ip_address=ip_address,
+    )
+
+
+def _cancel_incompatible_invitations(*, target_user, actor_user, reason, request=None):
+    from notifications.models import TransactionalEmailJob
+
+    cancelled = []
+    invitations = StaffInvitation.objects.select_for_update().filter(
+        intended_email=target_user.email,
+        accepted_at__isnull=True,
+        revoked_at__isnull=True,
+        superseded_at__isnull=True,
+    ).order_by("pk")
+    for invitation in invitations:
+        job = TransactionalEmailJob.objects.select_for_update().filter(staff_invitation=invitation).first()
+        if job and job.status in (TransactionalEmailJob.Status.PENDING, TransactionalEmailJob.Status.PROCESSING):
+            job.status = TransactionalEmailJob.Status.CANCELLED
+            job.completed_at = timezone.now()
+            job.last_error_code = "INVITATION_CANCELLED_LIFECYCLE"
+            job.save(update_fields=["status", "completed_at", "last_error_code", "updated_at"])
+        invitation.revoked_at = timezone.now()
+        invitation.save(update_fields=["revoked_at", "updated_at"])
+        _lifecycle_audit(
+            action=AuditEvent.Action.CAPABILITY_PERMISSION_MUTATED,
+            actor_user=actor_user,
+            target_user=target_user,
+            event_type="STAFF_INVITATION_CANCELLED_LIFECYCLE",
+            reason=reason,
+            metadata={"invitation_id": str(invitation.public_id)},
+            request=request,
+        )
+        cancelled.append(invitation)
+    return cancelled
+
+
+def deactivate_staff_access(*, target_user, actor_user, reason, request=None):
+    """Remove CRM staff authority without disabling global authentication."""
     from staff_access.authorization import authorize_staff_operation, StaffOperation
-    from accounts.revocation import revoke_user_credentials
     authorize_staff_operation(
         actor=actor_user,
         target=target_user,
         operation=StaffOperation.ACCESS_DEACTIVATION,
         request=request,
     )
-    if target_user.person.record_type != "STAFF":
-        raise ValidationError("Only STAFF accounts can be offboarded through Staff lifecycle operations.")
-    assignments = StaffRoleAssignment.objects.active().filter(user=target_user)
+    reason = str(reason or "").strip()
+    if not reason:
+        raise ValidationError({"reason": "A reason is required for staff-access deactivation."})
     with transaction.atomic():
-        revoke_staff_role_assignments(assignments=assignments, revoked_by=actor_user, request=request)
-        locked = User.objects.select_for_update().get(pk=target_user.pk)
+        policy_state = CapabilityPolicyState.objects.select_for_update().filter(
+            singleton_key=1, key=CAPABILITY_POLICY_STATE_KEY,
+        ).first()
+        crm_admin_role = StaffRole.objects.select_for_update().get(code=StaffRole.CRM_ADMIN)
+        from staff_access.administrator_governance import invalidate_administrator_proposals_for_user
+        invalidated_proposals = invalidate_administrator_proposals_for_user(
+            user_id=target_user.pk,
+            actor_user=actor_user,
+            reason="Staff access was deactivated before the appointment was effected.",
+            request=request,
+        )
+        locked = User.objects.select_for_update().select_related("person").get(pk=target_user.pk)
+        if locked.person.record_type != Person.RecordType.STAFF:
+            raise ValidationError("Only STAFF accounts may have operational staff access deactivated.")
+        assignments = list(
+            StaffRoleAssignment.objects.select_for_update().select_related("role").filter(
+                user=locked,
+                role_family=StaffRole.CRM_ROLE_FAMILY,
+                is_active=True,
+                revoked_at__isnull=True,
+            ).order_by("pk")
+        )
+        admin_assignments = [item for item in assignments if item.role_id == crm_admin_role.pk]
+        if admin_assignments:
+            active_admin_count = StaffRoleAssignment.objects.active().filter(
+                role=crm_admin_role,
+                user__is_active=True,
+                user__person__archived_at__isnull=True,
+            ).count()
+            if active_admin_count <= len(admin_assignments):
+                raise FinalCrmAdminProtectionError()
+        for assignment in assignments:
+            assignment._revoke_unchecked(revoked_by=actor_user)
+            _lifecycle_audit(
+                action=AuditEvent.Action.STAFF_ROLE_REVOKED,
+                actor_user=actor_user,
+                target_user=locked,
+                event_type="STAFF_ACCESS_ROLE_REVOKED",
+                reason=reason,
+                metadata={"assignment_id": assignment.pk, "staff_role_code": assignment.role.code},
+                request=request,
+            )
+        grants = list(
+            StaffCapabilityAssignment.objects.select_for_update().filter(
+                user=locked, state=StaffCapabilityAssignment.State.ACTIVE,
+            ).order_by("pk")
+        )
+        for grant in grants:
+            grant.state = StaffCapabilityAssignment.State.SUSPENDED
+            grant.suspended_at = timezone.now()
+            grant.suspended_by = actor_user
+            grant.save(update_fields=["state", "suspended_at", "suspended_by", "updated_at"])
+            _lifecycle_audit(
+                action=AuditEvent.Action.CAPABILITY_PERMISSION_MUTATED,
+                actor_user=actor_user,
+                target_user=locked,
+                event_type="STAFF_PRIVACY_GRANT_AUTO_SUSPENDED",
+                reason=reason,
+                metadata={"capability_id": grant.capability_id, "grant_id": grant.pk},
+                request=request,
+            )
+        if assignments or grants:
+            locked.crm_session_version = F("crm_session_version") + 1
+            locked.save(update_fields=["crm_session_version"])
+        cancelled_invitations = _cancel_incompatible_invitations(
+            target_user=locked,
+            actor_user=actor_user,
+            reason=reason,
+            request=request,
+        )
+        if not (assignments or grants or cancelled_invitations or invalidated_proposals):
+            return locked
+        _lifecycle_audit(
+            action=AuditEvent.Action.CAPABILITY_PERMISSION_MUTATED,
+            actor_user=actor_user,
+            target_user=locked,
+            event_type="STAFF_ACCESS_DEACTIVATED",
+            reason=reason,
+            metadata={
+                "crm_role_assignments_revoked": len(assignments),
+                "privacy_grants_suspended": len(grants),
+                "user_is_active_preserved": bool(locked.is_active),
+                "person_preserved": True,
+                "administrator_proposals_invalidated": len(invalidated_proposals),
+                "invitations_cancelled": len(cancelled_invitations),
+            },
+            request=request,
+        )
+        return locked
+
+
+def offboard_staff_user(*, target_user, actor_user, reason, request=None):
+    """Compatibility wrapper retaining the old name with independent semantics."""
+    return deactivate_staff_access(
+        target_user=target_user,
+        actor_user=actor_user,
+        reason=reason,
+        request=request,
+    )
+
+
+def _cancel_incompatible_email_changes(*, target_user, actor_user, reason, request=None):
+    from notifications.models import TransactionalEmailJob
+
+    changes = StaffEmailChangeRequest.objects.select_for_update().filter(
+        user=target_user, verified_at__isnull=True, superseded_at__isnull=True,
+    ).order_by("pk")
+    cancelled = []
+    for change in changes:
+        job = TransactionalEmailJob.objects.select_for_update().filter(
+            staff_email_change_request=change,
+        ).first()
+        if job and job.status in (TransactionalEmailJob.Status.PENDING, TransactionalEmailJob.Status.PROCESSING):
+            job.status = TransactionalEmailJob.Status.CANCELLED
+            job.completed_at = timezone.now()
+            job.last_error_code = "EMAIL_CHANGE_CANCELLED_LIFECYCLE"
+            job.save(update_fields=["status", "completed_at", "last_error_code", "updated_at"])
+        change.superseded_at = timezone.now()
+        change.save(update_fields=["superseded_at", "updated_at"])
+        cancelled.append(change)
+    return cancelled
+
+
+def disable_user_account(*, target_user, actor_user, reason, request=None):
+    """Disable global authentication without revoking staff assignments."""
+    from staff_access.authorization import authorize_staff_operation, StaffOperation
+    from accounts.revocation import revoke_user_credentials
+
+    reason = str(reason or "").strip()
+    if not reason:
+        raise ValidationError({"reason": "A reason is required for account disablement."})
+    authorize_staff_operation(
+        actor=actor_user,
+        target=target_user,
+        operation=StaffOperation.ACCOUNT_DISABLE,
+        request=request,
+    )
+    with transaction.atomic():
+        policy_state = CapabilityPolicyState.objects.select_for_update().filter(
+            singleton_key=1, key=CAPABILITY_POLICY_STATE_KEY,
+        ).first()
+        crm_admin_role = StaffRole.objects.select_for_update().get(code=StaffRole.CRM_ADMIN)
+        admin_assignments = list(
+            StaffRoleAssignment.objects.select_for_update().select_related("user__person").filter(
+                role=crm_admin_role, is_active=True, revoked_at__isnull=True,
+            ).order_by("pk")
+        )
+        from staff_access.administrator_governance import invalidate_administrator_proposals_for_user
+        invalidated_proposals = invalidate_administrator_proposals_for_user(
+            user_id=target_user.pk,
+            actor_user=actor_user,
+            reason="The account was globally disabled before the appointment was effected.",
+            request=request,
+        )
+        locked = User.objects.select_for_update().select_related("person").get(pk=target_user.pk)
+        if locked.person.record_type != Person.RecordType.STAFF:
+            raise ValidationError("Only STAFF accounts may be disabled through Staff Management.")
+        if not locked.is_active:
+            if locked.account_lifecycle_state == User.AccountLifecycleState.PENDING_ACTIVATION:
+                raise ValidationError("A pending-activation account is not an existing disabled account.")
+            return locked
+        usable_admins = [item for item in admin_assignments if item.user.is_active and item.user.person.archived_at is None]
+        if any(item.user_id == locked.pk for item in admin_assignments) and len(usable_admins) <= 1:
+            raise FinalCrmAdminProtectionError()
+        User.objects.filter(pk=locked.pk).update(
+            is_active=False,
+            account_lifecycle_state=User.AccountLifecycleState.DISABLED,
+            # Django's password-reset token includes last_login; changing it
+            # invalidates tokens issued before this security transition.
+            last_login=timezone.now(),
+        )
+        locked.refresh_from_db()
+        revoke_user_credentials(user=locked, reason="account_disabled", actor_user=actor_user, request=request)
+        _cancel_incompatible_invitations(target_user=locked, actor_user=actor_user, reason=reason, request=request)
+        _cancel_incompatible_email_changes(target_user=locked, actor_user=actor_user, reason=reason, request=request)
+        _lifecycle_audit(
+            action=AuditEvent.Action.ACCOUNT_DISABLED,
+            actor_user=actor_user,
+            target_user=locked,
+            event_type="ACCOUNT_DISABLED_LIFECYCLE",
+            reason=reason,
+            metadata={
+                "staff_roles_retained": True,
+                "credentials_revoked": True,
+                "crm_sessions_invalidated": True,
+                "administrator_proposals_invalidated": len(invalidated_proposals),
+                "policy_version": None if policy_state is None else policy_state.version,
+            },
+            request=request,
+        )
+        return locked
+
+
+def enable_user_account(*, target_user, actor_user, reason, request=None):
+    """Enable an explicitly disabled account without restoring other authority."""
+    from staff_access.authorization import authorize_staff_operation, StaffOperation
+
+    reason = str(reason or "").strip()
+    if not reason:
+        raise ValidationError({"reason": "A reason is required for account enablement."})
+    authorize_staff_operation(
+        actor=actor_user,
+        target=target_user,
+        operation=StaffOperation.ACCOUNT_ENABLE,
+        request=request,
+    )
+    with transaction.atomic():
+        locked = User.objects.select_for_update().select_related("person").get(pk=target_user.pk)
+        if locked.person.record_type != Person.RecordType.STAFF:
+            raise ValidationError("Only STAFF accounts may be enabled through Staff Management.")
         if locked.is_active:
-            locked.is_active = False
-            locked.save(update_fields=["is_active"])
-            revoke_user_credentials(user=locked, reason="staff_offboarded", actor_user=actor_user, request=request)
-    return target_user
+            if locked.account_lifecycle_state != User.AccountLifecycleState.ACTIVE:
+                raise ValidationError("The active account has an incompatible lifecycle state.")
+            return locked
+        if locked.account_lifecycle_state != User.AccountLifecycleState.DISABLED:
+            raise ValidationError("Only an explicitly disabled account may be enabled.")
+        User.objects.filter(pk=locked.pk).update(
+            is_active=True,
+            account_lifecycle_state=User.AccountLifecycleState.ACTIVE,
+        )
+        locked.refresh_from_db()
+        _lifecycle_audit(
+            action=AuditEvent.Action.ACCOUNT_REENABLED,
+            actor_user=actor_user,
+            target_user=locked,
+            event_type="ACCOUNT_ENABLED_LIFECYCLE",
+            reason=reason,
+            metadata={"fresh_authentication_required": True},
+            request=request,
+        )
+        return locked
 
 
 def assign_staff_role(*, user, role, assigned_by=None, audit=True, return_details=False):
@@ -418,19 +698,28 @@ def activate_staff_role(role, *, actor_user=None):
         return locked_role
 
 
-def reactivate_staff_user(*, target_user, actor_user):
+def reactivate_staff_user(*, target_user, actor_user, reason):
     """Start a fresh invitation; never restores the old User or assignments."""
     from staff_access.authorization import authorize_staff_operation, StaffOperation
     authorize_staff_operation(actor=actor_user, target=target_user, operation=StaffOperation.ACCESS_REACTIVATION)
+    reason = str(reason or "").strip()
+    if not reason:
+        raise ValidationError({"reason": "A reason is required for staff reactivation."})
     if target_user.person.record_type != "STAFF":
         raise ValidationError("Only STAFF accounts can be reactivated through Staff lifecycle operations.")
+    if target_user.is_active:
+        raise ValidationError("The complete invitation-backed staff reactivation workflow remains deferred.")
+    if target_user.account_lifecycle_state == User.AccountLifecycleState.DISABLED:
+        raise ValidationError("Globally disabled accounts require separate account enablement before reactivation.")
     roles = list(StaffRoleAssignment.objects.filter(user=target_user).values_list("role__code", flat=True))
+    if StaffRole.CRM_ADMIN in roles:
+        raise ValidationError("CRM Administrator reactivation requires the approved Administrator workflow.")
     return create_staff_invitation(
         actor_user=actor_user,
         email=target_user.email,
         first_name=target_user.person.first_name,
         last_name=target_user.person.last_name,
-        role_codes=[code for code in roles if code in StaffRole.canonical_codes()],
+        role_codes=[code for code in roles if code in {StaffRole.CRM_MANAGER, StaffRole.CRM_VIEWER}],
     )
 
 
@@ -563,14 +852,19 @@ def redeem_staff_invitation(*, public_id, raw_token, password):
             user = existing_user
             person = user.person
             user = User.objects.select_for_update().get(pk=existing_user.pk)
+            if user.account_lifecycle_state == User.AccountLifecycleState.DISABLED:
+                raise ValidationError("A disabled account cannot be reactivated through invitation acceptance.")
             user.set_password(password)
             user.is_active = True
+            user.account_lifecycle_state = User.AccountLifecycleState.ACTIVE
             user.auth_version += 1
             user.crm_session_version += 1
-            user.save(update_fields=["password", "is_active", "auth_version", "crm_session_version"])
+            user.save(update_fields=["password", "is_active", "account_lifecycle_state", "auth_version", "crm_session_version"])
         if len(invitation.pending_role_codes) != 1:
             raise ValidationError("Staff invitations must contain exactly one CRM role.")
         role = StaffRole.objects.get(code=invitation.pending_role_codes[0], is_active=True)
+        if role.code == StaffRole.CRM_ADMIN:
+            raise ValidationError("CRM Administrator invitations require an approved Administrator proposal workflow.")
         StaffRoleAssignment.objects.assign_role(
             user=user,
             role=role,

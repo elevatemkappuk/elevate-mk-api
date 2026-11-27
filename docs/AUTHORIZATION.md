@@ -189,7 +189,7 @@ services are source-inspected, with focused PostgreSQL migration and runtime
 validation verified in isolation. Endpoint activation and field enforcement
 remain unverified or deferred.
 
-The original Phase 1A.2 baseline contained six capability codes:
+The original capability-foundation baseline contained six capability codes:
 
 - `PERSON_CONTACT_READ`
 - `PERSON_DEMOGRAPHIC_READ`
@@ -198,7 +198,7 @@ The original Phase 1A.2 baseline contained six capability codes:
 - `PRIVACY_AUDIT_READ`
 - `STAFF_CAPABILITY_ADMIN`
 
-The current Phase 1A.3 catalogue contains those six baseline capabilities plus
+The current capability-and-audit catalogue contains those six baseline capabilities plus
 `LEGAL_HOLD_ADMIN`. Migration `staff_access.0008_legal_hold_admin` advances the
 existing policy version and records one audited `CAPABILITY_CATALOG_EXTENDED`
 event with explicit migration provenance. It does not alter the original
@@ -333,7 +333,7 @@ establish public activation.
 
 ### Final validation status (authoritative)
 
-The final isolated Phase 1A.2 validation passed 41/41 tests, including revised
+The final isolated capability-foundation validation passed 41/41 tests, including revised
 superuser authority, governance, capability foundation, and concurrency
 coverage. Synthetic pre-`0007` migration verification also passed. Earlier
 intermediate validation counts are historical and superseded. Operational
@@ -378,7 +378,7 @@ one of those roles receive `403`. A mobile JWT, Django `is_staff`, or Django
 Historically, the CRM capability disclosure allowlist was intentionally empty
 at this stage. The endpoint therefore returned `capability_codes: []` for every
 admitted caller. This historical contract is superseded by the coordinated
-Phase 1A.4D disclosure described below.
+The coordinated capability disclosure described below.
 
 `policy_version` is the current capability-policy version observed for the
 evaluation. It is informational only: it is not a grant, token, client-controlled
@@ -447,7 +447,7 @@ Privacy audit history denies admitted CRM users without
 projection. Legal-hold list/detail responses expose only safe release-request
 summaries and backend-calculated approval/rejection actions; self-approval is
 denied for ordinary governed administrators, while the approved audited
-Django-superuser exception remains in force. Phase 1A.4D.4 also suppresses duplicate release-request
+Django-superuser exception remains in force. Release-request hardening also suppresses duplicate release-request
 actions while a request is pending and revalidates `LEGAL_HOLD_ADMIN` and
 target scope for contextual Person and event hold actions.
 
@@ -517,10 +517,10 @@ auditing remains the deferred `GDPR-FUTURE-001` enhancement.
 
 ### Security implementation and activation status
 
-The accepted Phase 1A.4E integration preserves the separation between Django
+The accepted authorization integration preserves the separation between Django
 Staff CRM sessions and mobile JWT authentication, with capability enforcement,
 revocation, privacy governance, and safe API projections remaining backend
-authoritative. Phase 1A.5 legacy reconciliation is explicitly skipped for the
+authoritative. Legacy reconciliation is explicitly skipped for the
 test-only dataset; new Staff role assignment is limited to active STAFF users,
 or the approved active Django superuser exception, and active canonical roles.
 
@@ -549,7 +549,7 @@ the audited service path. Trusted provenance now requires an internal
 server-bound authority marker; caller-constructed `trusted=True` provenance is
 rejected. Targeted endpoint coverage includes schema, Swagger, and ReDoc under
 the same session and technical-permission policy. These corrections have
-targeted evidence only; the complete Phase 1C security gate remains open for
+targeted evidence only; the complete GDPR security gate remains open for
 GOV-005 caller/scheduling verification, uncovered GOV-006 writers, and the
 remaining AUTH-001/AUTH-002 disposition work.
 
@@ -568,10 +568,10 @@ at its service boundary. No new scheduler is introduced; integrating a caller
 and its activation controls is a production prerequisite if future role-loss
 workflows require automatic reconciliation.
 
-## Staff Management V1 — Phase 2A authorization foundation
+## Staff Management V1 — Authorization foundation
 
 The authoritative feature contract is in [STAFF_MANAGEMENT.md](STAFF_MANAGEMENT.md).
-Phase 2A implements the reusable backend policy in
+The reusable backend policy is implemented in
 `staff_access.authorization` and routes the existing Staff Admin permission,
 supported invitation/lifecycle service authority checks, and Django Admin
 Staff role-assignment boundary through it.
@@ -592,12 +592,12 @@ and prohibited mutations against `is_staff` or `is_superuser` targets. Eligible
 Superusers remain subject to self-target restrictions and later governance
 checks.
 
-Authorization denials at the Phase 2A policy boundary record a safe,
+Authorization denials at the policy boundary record a safe,
 attributable `STAFF_AUTHORIZATION_DENIED` audit event. No passwords, tokens,
 emails, raw payloads or unnecessary personal data are recorded. Audit failure
 remains fail-closed. This is not complete lifecycle audit coverage.
 
-Phase 2A verification: the focused Staff Management authorization, staff
+Historical authorization-foundation verification: the focused Staff Management authorization, staff
 lifecycle and invitation regression set passed **79/79**; the affected
 authentication, session-revocation, GDPR privacy-governance and audit set
 passed **39/39**. These results are local isolated test evidence only.
@@ -606,11 +606,11 @@ The planned implementation must also enforce one active CRM-family role,
 two-person approval for CRM Administrator authority, protected technical
 accounts, final-Administrator continuity, independent staff/account lifecycles,
 and automatic suspension of individual privacy grants on staff deactivation.
-These remain **Approved / Planned** for later phases, except where the
+These remain **Approved / Planned** for future feature work, except where the
 foundational protected-target and self-target predicates are explicitly noted
 above. No incomplete Staff Management mutation workflow was added.
 
-Phase 2B adds explicit CRM role-family integrity. Canonical CRM roles carry
+CRM role-family integrity adds explicit family metadata. Canonical CRM roles carry
 the `CRM` family; supported role assignment, reactivation, revocation and
 replacement paths use the authoritative services and preserve historical
 assignments. One active, unrevoked assignment per User and non-null role family

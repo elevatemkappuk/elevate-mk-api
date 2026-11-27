@@ -5,7 +5,7 @@ Last Updated: 2026-11-24
 ## Scope
 This document describes the Elevate-owned database/domain structures currently implemented in the Django API codebase.
 
-## Phase 1B.3 export persistence
+## People export persistence
 
 People exports use existing `Person`, role, capability, restriction, and audit
 tables. No export file, temporary storage, queue, or bulk-operation table was
@@ -17,7 +17,7 @@ The preceding `audit.0024_alter_auditevent_action` migration added the prior
 privacy-disclosure action. No `audit.0025` migration exists in repository
 history; the numbering gap is preserved and `0026` depends directly on `0024`
 rather than renumbering historical migrations. Migration application and
-runtime export verification remain pending for GDPR Phase 1C hardening.
+runtime export verification remain pending for final GDPR hardening.
 
 ## Current Domain Model
 The current Elevate-owned models are:
@@ -82,8 +82,8 @@ not change existing API endpoint authorization.
 ### Capability tables
 
 - `CapabilityDefinition` stores the seven current capability identifiers and
-  their descriptions. The original six-capability Phase 1A.2 catalogue remains
-  represented by its historical baseline event; the Phase 1A.3 extension is
+  their descriptions. The original six-capability capability-foundation catalogue remains
+  represented by its historical baseline event; the capability-and-audit extension is
   separately audited. References to definitions use `PROTECT`, and definitions
   may be deactivated without deleting historical references.
 - `RoleCapabilityDefault` maps a role to an enabled or disabled capability.
@@ -156,9 +156,9 @@ The generated `audit.0024_alter_auditevent_action` migration appends
 disclosures. It changes the action-choice metadata only; it creates no table,
 index or data rows and has not been applied. Disclosure events reuse the
 existing `AuditEventSubject` association and privacy audit service. Applying
-the migration and runtime verification remain deferred to GDPR Phase 1C.
+the migration and runtime verification remain deferred to final GDPR hardening.
 
-Phase 1A.3 extends the catalogue through
+The capability-and-audit extension extends the catalogue through
 `staff_access.0008_legal_hold_admin`, which depends on both
 `staff_access.0007_capability_governance` and
 `audit.0022_auditeventsubject_legalhold_legalholdreleaserequest_and_more`.
@@ -257,7 +257,7 @@ Target: local PostgreSQL at `localhost:5432`, database `elevate`. No
 credentials or personal data are recorded here.
 
 The following recorded evidence includes the previously implemented capability
-foundation and the Phase 1A.2 governance verification. It does not verify
+foundation and the capability-foundation governance verification. It does not verify
 production, staging, deployment or cross-repository runtime behavior.
 
 - **Source-inspected:** capability models and migration definitions were
@@ -273,9 +273,9 @@ production, staging, deployment or cross-repository runtime behavior.
 - **Migration-validated:** isolated PostgreSQL test database creation applied
   the complete migration graph, including `audit.0021` and
   `staff_access.0007`, without unexpected operations or migration errors.
-- **Historical Phase 1A.2 data validation:** the isolated foundation database
+- **Historical capability-foundation data validation:** the isolated foundation database
   contained exactly six baseline capability definitions and the approved
-  role-default matrix. The current Phase 1A.3 catalogue contains seven
+  role-default matrix. The current capability-and-audit catalogue contains seven
   definitions; its extension and policy-version audit evidence are verified by
   the current focused migration tests.
 - **Verified:** `manage.py check --fail-level ERROR` passed, and
@@ -293,7 +293,7 @@ production, staging, deployment or cross-repository runtime behavior.
   transactional audit rollback, proposal lifecycle, concurrency and the
   documented authorization boundaries.
 
-## Final Phase 1A.2 validation status (authoritative)
+## Final capability-foundation validation status (authoritative)
 
 This status supersedes earlier intermediate 21-test and 35-test evidence and
 the incomplete intermediate run.
@@ -319,7 +319,7 @@ Historical source -> ImportBatch -> ImportRecord staging -> normalization
 - `READY_FOR_REVIEW` means unresolved identity decisions need CRM_ADMIN action
 - `READY_FOR_IMPORT` means all identity decisions are resolved and the batch is eligible for the future authoritative import operation
 - `IMPORTED` is reserved for the future terminal success state after that authoritative import operation completes
-- matching, review decisions, and the future authoritative import are separate phases
+- matching, review decisions, and the future authoritative import are separate responsibilities
 - future operational API/UI access will require `CRM_ADMIN`; Django Admin remains technical administration
 - future commit actions, rather than staging, will explicitly write relevant audit history
 
@@ -1219,6 +1219,7 @@ Purpose:
 | `is_superuser` | `BooleanField` | not null | `False` | Django framework/admin flag |
 | `is_staff` | `BooleanField` | not null | `False` | Django admin access flag |
 | `is_active` | `BooleanField` | not null | `True` | Active/inactive account flag |
+| `account_lifecycle_state` | `CharField(max_length=24)` | not null | `ACTIVE` | Explicit `ACTIVE`, `PENDING_ACTIVATION` or `DISABLED` lifecycle state |
 | `date_joined` | `DateTimeField` | not null | `django.utils.timezone.now` | Managed by Django account model |
 | `person` | `OneToOneField(Person)` | not null, `blank=False` | none | Required link to `Person` |
 | `groups` | `ManyToManyField(auth.Group)` | `blank=True` | none | Django auth framework relationship |
@@ -1240,6 +1241,9 @@ Current implementation:
 - `save()` normalizes email before persisting
 - `get_full_name()` and `get_short_name()` read from the linked `Person`
 - `__str__()` returns the normalized email
+- `account_lifecycle_state` distinguishes pending activation from an existing
+  globally disabled account; it does not replace `is_active` as Django's
+  authentication eligibility flag
 
 ### Relationships
 | Related Model | Relationship | Direction | on_delete | Notes |
@@ -1602,9 +1606,9 @@ Purpose:
 - indexes support lookup by Event/reference type and Participation/reference type
 - future Eventbrite and Community adapters attach their source IDs here, leaving Event and EventParticipation provider-neutral
 
-## Phase 1A.3 audit, retention and legal-hold schema
+## Audit, retention and legal-hold schema
 
-Implemented and locally verified for the Phase 1A.3 migration chain.
+Implemented and locally verified for the audit, retention and legal-hold migration chain.
 `AuditEvent` carries immutable contract,
 provenance, audit-domain, retention-class, and retention-policy-version
 fields. `AuditEventSubject` normalizes zero-or-more Person associations per
@@ -1626,14 +1630,14 @@ No disposal or operational-database migration is enabled by this stage.
 Current targeted evidence: isolated PostgreSQL migration and schema checks
 passed, the remediation subset passed 9/9, and the broader authorized focused
 set passed 69/69. The configured operational database was not migrated.
-### Phase 1A.4D release rejection migration
+### Release rejection migration
 
 Migration `audit.0023_legalhold_release_rejection` adds the `REJECTED` release
 request state and immutable rejection actor, timestamp, and reason fields.
 Existing pending and approved records are preserved. The existing conditional
 unique constraint continues to allow one pending request per hold while
 permitting a new request after rejection. Migration application remains
-unverified in this implementation stage.
+unverified in this implementation.
 
 ### Legal-hold release-request cancellation
 
@@ -1649,9 +1653,9 @@ been applied to an operational database. Cancellation is available only to
 the original requester of a pending request while its hold remains active; it
 does not end retention protection and permits a later request.
 
-### Phase 1B.1 People privacy schema impact
+### People privacy schema impact
 
-Phase 1B.1 adds no model, index, or data constraint. Privacy capability
+The People privacy projection adds no model, index, or data constraint. Privacy capability
 evaluation is applied at the API projection, search, and write-validation
 boundaries over existing Person and related account data. No database values
 are rewritten or masked in storage. The two capability definitions and their
@@ -1664,7 +1668,7 @@ Status: **Implemented / source-inspected; database checks and tests unexecuted**
 
 ## Staff Management V1 schema impact
 
-Phase 2B adds migration `staff_access.0009_role_family_integrity` (created,
+Role-family integrity adds migration `staff_access.0009_role_family_integrity` (created,
 not applied to any persistent database). It adds nullable `family` metadata to
 `StaffRole` and matching `role_family` metadata to `StaffRoleAssignment`.
 Canonical CRM roles are backfilled to the explicit `CRM` family; historical
@@ -1681,6 +1685,12 @@ The approved architecture is documented in
 `0009_role_family_integrity` and `0010_staff_administrator_proposals` have
 been created and validated in isolated test databases, but have not been
 applied to the persistent database.
+
+Migration `accounts.0004_account_lifecycle_state` adds the explicit account
+lifecycle state and classifies existing inactive rows as `DISABLED`, because
+the previous schema could not distinguish pending activation from deliberate
+global disablement. The migration is additive, preserves User identity and is
+not applied to the persistent database.
 
 The remaining planned schema work may extend `StaffInvitation` with explicit
 Person/User linkage and approval dependency fields, and add indexes needed for
