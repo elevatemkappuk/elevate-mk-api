@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from django.core.exceptions import ValidationError
 from django.contrib.auth.password_validation import validate_password
+from django.conf import settings
 from django.db import transaction
 from django.db.models import F, Q
 from django.utils import timezone
@@ -39,7 +40,7 @@ def _require_staff_role_mutation_actor(actor_user):
     authorize_staff_operation(actor=actor_user, operation=StaffOperation.ROLE_ASSIGNMENT)
 
 
-def create_staff_invitation(*, actor_user, email, first_name, last_name, role_codes, expiry_hours=72):
+def create_staff_invitation(*, actor_user, email, first_name, last_name, role_codes, expiry_hours=None, target_user=None, reason=""):
     """Create a pending Staff identity without creating a User yet."""
     from accounts.models import User
     from people.models import Person
@@ -59,6 +60,10 @@ def create_staff_invitation(*, actor_user, email, first_name, last_name, role_co
     if Person.objects.filter(record_type=Person.RecordType.STAFF, primary_email__iexact=email, user__isnull=True).exists():
         raise ValidationError({"email": "A pending Staff identity already uses this email address."})
 
+    expiry_hours = settings.STAFF_INVITATION_EXPIRY_HOURS if expiry_hours is None else expiry_hours
+    reason = str(reason or "").strip()
+    if not reason:
+        raise ValidationError({"reason": "A reason is required for staff onboarding."})
     with transaction.atomic():
         StaffInvitation.objects.filter(
             intended_email=email,
@@ -71,6 +76,9 @@ def create_staff_invitation(*, actor_user, email, first_name, last_name, role_co
             first_name=first_name.strip(),
             last_name=last_name.strip(),
             pending_role_codes=role_codes,
+            target_user=target_user or existing_user,
+            reason=reason,
+            operation="ONBOARD",
             token_hash=None,
             expires_at=timezone.now() + timedelta(hours=expiry_hours),
             created_by=actor_user,
@@ -94,13 +102,17 @@ def _queue_staff_invitation_email(invitation):
     )
 
 
-def resend_staff_invitation(*, invitation, actor_user):
+def resend_staff_invitation(*, invitation, actor_user, reason=""):
     from staff_access.authorization import authorize_staff_operation, StaffOperation
     authorize_staff_operation(actor=actor_user, operation=StaffOperation.ACCESS)
+    if not str(reason or "").strip():
+        raise ValidationError({"reason": "A reason is required to resend an invitation."})
     if invitation.accepted_at or invitation.revoked_at:
         raise ValidationError("Only a pending Staff invitation can be resent.")
     with transaction.atomic():
         invitation = StaffInvitation.objects.select_for_update().get(pk=invitation.pk)
+        if invitation.target_user_id and (invitation.target_user_id == actor_user.pk or invitation.target_user.is_staff or invitation.target_user.is_superuser):
+            raise ValidationError("This invitation cannot be managed by the current administrator.")
         from notifications.models import TransactionalEmailJob
         old_job = TransactionalEmailJob.objects.select_for_update().filter(staff_invitation=invitation).first()
         if old_job and old_job.status in (TransactionalEmailJob.Status.PENDING, TransactionalEmailJob.Status.PROCESSING):
@@ -115,11 +127,23 @@ def resend_staff_invitation(*, invitation, actor_user):
             first_name=invitation.first_name,
             last_name=invitation.last_name,
             pending_role_codes=invitation.pending_role_codes,
+            target_user=invitation.target_user,
+            reason=invitation.reason,
+            operation=invitation.operation,
             token_hash=None,
-            expires_at=timezone.now() + timedelta(hours=72),
+            expires_at=timezone.now() + timedelta(hours=settings.STAFF_INVITATION_EXPIRY_HOURS),
             created_by=actor_user,
         )
         _queue_staff_invitation_email(replacement)
+        if replacement.target_user_id:
+            _lifecycle_audit(
+                action=AuditEvent.Action.CAPABILITY_PERMISSION_MUTATED,
+                actor_user=actor_user,
+                target_user=replacement.target_user,
+                event_type="STAFF_INVITATION_RESENT",
+                reason=str(reason).strip(),
+                metadata={"invitation_id": str(replacement.public_id)},
+            )
     return replacement
 
 
@@ -720,15 +744,20 @@ def reactivate_staff_user(*, target_user, actor_user, reason):
         first_name=target_user.person.first_name,
         last_name=target_user.person.last_name,
         role_codes=[code for code in roles if code in {StaffRole.CRM_MANAGER, StaffRole.CRM_VIEWER}],
+        reason=reason,
     )
 
 
-def cancel_staff_invitation(*, invitation, actor_user):
+def cancel_staff_invitation(*, invitation, actor_user, reason=""):
     from staff_access.authorization import authorize_staff_operation, StaffOperation
     authorize_staff_operation(actor=actor_user, operation=StaffOperation.ACCESS)
+    if not str(reason or "").strip():
+        raise ValidationError({"reason": "A reason is required to cancel an invitation."})
     from notifications.models import TransactionalEmailJob
     with transaction.atomic():
         invitation = StaffInvitation.objects.select_for_update().get(pk=invitation.pk)
+        if invitation.target_user_id and (invitation.target_user_id == actor_user.pk or invitation.target_user.is_staff or invitation.target_user.is_superuser):
+            raise ValidationError("This invitation cannot be managed by the current administrator.")
         job = TransactionalEmailJob.objects.select_for_update().filter(staff_invitation=invitation).first()
         if job and job.status in (TransactionalEmailJob.Status.PENDING, TransactionalEmailJob.Status.PROCESSING):
             job.status = TransactionalEmailJob.Status.CANCELLED
@@ -737,6 +766,16 @@ def cancel_staff_invitation(*, invitation, actor_user):
             job.save(update_fields=["status", "completed_at", "last_error_code", "updated_at"])
         invitation.revoked_at = timezone.now()
         invitation.save(update_fields=["revoked_at", "updated_at"])
+        target = invitation.target_user
+        if target is not None:
+            _lifecycle_audit(
+                action=AuditEvent.Action.CAPABILITY_PERMISSION_MUTATED,
+                actor_user=actor_user,
+                target_user=target,
+                event_type="STAFF_INVITATION_CANCELLED",
+                reason=str(reason).strip(),
+                metadata={"invitation_id": str(invitation.public_id)},
+            )
     return invitation
 
 
@@ -818,14 +857,29 @@ def confirm_staff_email_change(*, request_id, raw_token):
         return user
 
 
-def redeem_staff_invitation(*, public_id, raw_token, password):
+def inspect_staff_invitation(*, public_id, raw_token):
+    invitation = StaffInvitation.objects.select_related("target_user").filter(public_id=public_id).first()
+    if invitation is None or invitation.accepted_at or invitation.revoked_at or invitation.superseded_at or invitation.expires_at <= timezone.now() or not invitation.token_hash or not secrets.compare_digest(invitation.token_hash, _invitation_token_hash(raw_token)):
+        raise ValidationError("This Staff invitation is invalid or has expired.")
+    target = invitation.target_user
+    existing_account = bool(target and target.is_active)
+    return {
+        "usable": True,
+        "existing_account": existing_account,
+        "role_code": invitation.pending_role_codes[0] if len(invitation.pending_role_codes) == 1 else None,
+        "expires_at": invitation.expires_at,
+    }
+
+
+def redeem_staff_invitation(*, public_id, raw_token, password=None, authenticated_user=None):
     """Atomically consume an unexpired invitation and provision its User."""
     from accounts.models import User
     from audit.models import AuditEvent
     from audit.services import record_audit_event
     from people.models import Person
 
-    validate_password(password)
+    if password is not None:
+        validate_password(password)
     with transaction.atomic():
         invitation = StaffInvitation.objects.select_for_update().get(public_id=public_id)
         if (
@@ -837,9 +891,15 @@ def redeem_staff_invitation(*, public_id, raw_token, password):
             or not secrets.compare_digest(invitation.token_hash, _invitation_token_hash(raw_token))
         ):
             raise ValidationError("This Staff invitation is invalid or has expired.")
-        existing_user = User.objects.select_related("person").filter(email=invitation.intended_email).first()
-        if existing_user is not None and (existing_user.is_active or existing_user.person.record_type != Person.RecordType.STAFF):
+        existing_user = User.objects.select_related("person").filter(pk=invitation.target_user_id).first() if invitation.target_user_id else User.objects.select_related("person").filter(email=invitation.intended_email).first()
+        if existing_user is not None and existing_user.person.record_type != Person.RecordType.STAFF:
             raise ValidationError({"email": "An active or non-Staff account already uses this email address."})
+        if existing_user is not None and existing_user.is_active:
+            if authenticated_user is None or authenticated_user.pk != existing_user.pk or not authenticated_user.is_authenticated:
+                raise ValidationError("Sign in with the invited account before accepting this invitation.")
+            password = None
+        if existing_user is not None and not existing_user.is_active and password is None:
+            raise ValidationError({"password": "A new or pending account must establish a password."})
         if existing_user is None:
             person = Person.objects.create(
                 record_type=Person.RecordType.STAFF,
@@ -847,19 +907,25 @@ def redeem_staff_invitation(*, public_id, raw_token, password):
                 last_name=invitation.last_name,
                 primary_email=invitation.intended_email,
             )
-            user = User.objects.create_user(email=invitation.intended_email, password=password, person=person)
+            user = User.objects.create_user(email=invitation.intended_email, password=None, person=person, is_active=False, account_lifecycle_state=User.AccountLifecycleState.PENDING_ACTIVATION)
+            user.set_unusable_password()
+            user.save(update_fields=["password", "is_active", "account_lifecycle_state"])
         else:
             user = existing_user
             person = user.person
             user = User.objects.select_for_update().get(pk=existing_user.pk)
             if user.account_lifecycle_state == User.AccountLifecycleState.DISABLED:
                 raise ValidationError("A disabled account cannot be reactivated through invitation acceptance.")
-            user.set_password(password)
+            if password is not None:
+                user.set_password(password)
             user.is_active = True
             user.account_lifecycle_state = User.AccountLifecycleState.ACTIVE
             user.auth_version += 1
             user.crm_session_version += 1
-            user.save(update_fields=["password", "is_active", "account_lifecycle_state", "auth_version", "crm_session_version"])
+            update_fields = ["is_active", "account_lifecycle_state", "auth_version", "crm_session_version"]
+            if password is not None:
+                update_fields.append("password")
+            user.save(update_fields=update_fields)
         if len(invitation.pending_role_codes) != 1:
             raise ValidationError("Staff invitations must contain exactly one CRM role.")
         role = StaffRole.objects.get(code=invitation.pending_role_codes[0], is_active=True)

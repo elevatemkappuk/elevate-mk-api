@@ -790,6 +790,15 @@ class StaffInvitation(models.Model):
     first_name = models.CharField(max_length=150)
     last_name = models.CharField(max_length=150)
     pending_role_codes = models.JSONField(default=list)
+    target_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="staff_invitations_received",
+    )
+    operation = models.CharField(max_length=32, default="ONBOARD")
+    reason = models.TextField(blank=True)
     token_hash = models.CharField(max_length=64, null=True, blank=True, unique=True)
     expires_at = models.DateTimeField()
     accepted_at = models.DateTimeField(null=True, blank=True)

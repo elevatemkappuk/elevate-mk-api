@@ -48,6 +48,12 @@ Current implications:
 - Superuser creation also normalizes the email used for both `User.email` and the auto-created `Person.primary_email`.
 
 ## Password Handling
+
+Staff invitations do not store recipient passwords. New pending staff accounts
+have an unusable password until the recipient accepts a valid single-use
+invitation and supplies a password that passes Django validation. Existing
+active accounts retain their credentials and must authenticate as the exact
+invitation target before staff authority is activated.
 Current behavior:
 
 - Passwords are handled by Django's standard password system.

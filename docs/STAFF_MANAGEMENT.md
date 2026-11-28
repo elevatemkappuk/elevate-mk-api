@@ -1,6 +1,6 @@
 # Staff Management V1
 
-Status: **Read-only directory and detail contracts implemented; runtime verification pending**
+Status: **Directory, onboarding submission and secure invitation contracts implemented; runtime verification pending**
 
 This document is the API repository's authoritative living guide for Staff
 Management V1. It records approved requirements and architecture, existing
@@ -53,6 +53,84 @@ account lifecycle state, invitation state and Administrator proposal state. A
 disabled account may retain an active CRM role while its displayed access state
 is unavailable. Staff deactivation remains distinct from global account
 disablement.
+
+## Staff onboarding identity resolution
+
+Implementation status: **Implemented** for source-reviewed lookup and
+validation boundaries. Verification status: **Pending Verification**.
+
+The onboarding boundary is restricted to the same active CRM Administrator and
+eligible active Django Superuser policy as Staff Management. Managers, Viewers
+and ordinary People users cannot use it, and the narrow Superuser exception
+does not grant the general People directory.
+
+The implemented contracts are:
+
+- `GET /api/v1/staff/onboarding/roles/` — active canonical CRM role options;
+- `GET /api/v1/staff/onboarding/people/?q=<name-or-permitted-contact>` — a
+  bounded privacy-safe Person candidate lookup without a general People count;
+- `POST /api/v1/staff/onboarding/validate/` — validates an existing Person or
+  new identity, login-email collision, account state, staff relationship,
+  duplicate identity signals, requested role and mandatory reason.
+
+Validation is intentionally non-persistent. It reports whether an existing
+User can be reused or a new `PENDING_ACTIVATION` account would be appropriate,
+but `submission_available` is false. No Person, User, role assignment,
+invitation, email job or Administrator proposal is created by this stage.
+The authoritative submission is `POST /api/v1/staff/onboarding/`. It independently
+revalidates identity, account state, duplicate signals, role and reason, then
+atomically reuses or creates the Person/User, creates a pending invitation and
+durable `STAFF_INVITATION` email job, and records attribution. Manager and Viewer
+roles are supported; CRM Administrator submission remains restricted to the
+separate approved governance workflow.
+
+## Invitation lifecycle
+
+Implementation status: **Implemented**. Verification status: **Pending
+Verification**.
+
+`StaffInvitation` stores the stable identifier, target User where available,
+canonical requested role, operation, reason, expiry and SHA-256 token digest.
+Plaintext tokens are materialized only while the notification worker prepares a
+provider request. The default validity is 72 hours through
+`STAFF_INVITATION_EXPIRY_HOURS`. Inspection is non-mutating at
+`GET /api/v1/staff/invitations/inspect/`; acceptance is
+`POST /api/v1/staff/invitations/accept/` and is single-use, expiry-enforced and
+atomic. Active existing Users must authenticate as the exact target; new users
+select their own password and remain pending until acceptance. Disabled accounts
+cannot be silently enabled.
+
+Resend supersedes the prior invitation and cancels compatible queued work;
+cancellation revokes the invitation without deleting Person/User identity.
+Both require a reason and preserve historical records. Delivery status is kept
+separate from acceptance and is exposed only as safe queue/provider state.
+
+The Brevo template setting is `BREVO_STAFF_INVITATION_TEMPLATE_ID` (ID `36`).
+The worker maps exactly `first_name`, `role_name`, `invitation_url` and
+`expires_at`; the URL is generated from configured `CRM_FRONTEND_URL` at the
+public route `/staff/invitation/accept` and never from the request Host header.
+Public inspection and acceptance use explicit DRF scopes
+`staff_invitation_inspect` and `staff_invitation_accept`; issuance and resend
+use `staff_invitation_issue` and `staff_invitation_resend`.
+
+Migration note: the original invitation model is `staff_access.0003_staffinvitation`;
+the existing email-change model is `0004_staffemailchangerequest`, followed by
+the role-integrity and Administrator-proposal foundation migrations
+`0009_role_family_integrity` and `0010_staff_administrator_proposals`. The
+invitation lifecycle fields are added by `0011_staffinvitation_target_and_reason`,
+which depends on `0010` and therefore preserves the complete prior graph. No
+earlier migration was overwritten, removed or disconnected.
+
+## Invitation delivery integration boundary
+
+The existing transactional email infrastructure already supports
+`STAFF_INVITATION` jobs and uses the single configuration setting
+`BREVO_STAFF_INVITATION_TEMPLATE_ID`. The approved Brevo template is ID `36`
+(`Elevate MK — Staff Invitation`) with parameters `first_name`, `role_name`,
+`invitation_url` and `expires_at`; the default invitation validity remains 72
+hours and configurable. This stage does not create invitation jobs, render the
+template, send email or call Brevo. Those actions belong to the secure
+invitation lifecycle implementation.
 
 Account enablement follows the approved retained-authority rule: retained active
 roles and active privacy grants become effective again after fresh
@@ -406,13 +484,16 @@ payloads or unnecessary personal data.
 
 ## API surface
 
-The following read-only contracts are implemented; mutation contracts below
-remain planned:
+The following read-only and validation contracts are implemented; persisted
+mutation contracts below remain planned:
 
 ```text
 GET  /api/v1/staff/directory/
 GET  /api/v1/staff/directory/{user_id}/
 GET  /api/v1/staff/directory/{user_id}/activity/
+GET  /api/v1/staff/onboarding/roles/
+GET  /api/v1/staff/onboarding/people/?q={query}
+POST /api/v1/staff/onboarding/validate/
 ```
 
 The following mutation contracts remain planned:

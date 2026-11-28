@@ -2,7 +2,7 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase
 from types import SimpleNamespace
 from unittest.mock import patch
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 from rest_framework.test import APIClient
 
 from accounts.models import User
@@ -45,10 +45,11 @@ class StaffInvitationTests(TestCase):
             first_name="New",
             last_name="Staff",
             role_codes=[StaffRole.CRM_VIEWER],
+            reason="Operational staff invitation.",
         )
         with patch("notifications.jobs.send_transactional_email", return_value=SimpleNamespace(provider_message_id="test-id")) as send:
             process_next_transactional_email_job()
-        token = urlparse(send.call_args.kwargs["template_params"]["activation_url"]).path.rstrip("/").split("/")[-1]
+        token = parse_qs(urlparse(send.call_args.kwargs["template_params"]["invitation_url"]).query)["token"][0]
         invitation.refresh_from_db()
         self.assertNotEqual(invitation.token_hash, token)
         user = redeem_staff_invitation(
@@ -77,6 +78,7 @@ class StaffInvitationTests(TestCase):
             first_name="Same",
             last_name="Person",
             role_codes=[StaffRole.CRM_VIEWER],
+            reason="Replacement staff invitation.",
         )
         second = create_staff_invitation(
             actor_user=self.actor,
@@ -84,6 +86,7 @@ class StaffInvitationTests(TestCase):
             first_name="Same",
             last_name="Person",
             role_codes=[StaffRole.CRM_MANAGER],
+            reason="Replacement role invitation.",
         )
         first.refresh_from_db()
         self.assertIsNotNone(first.superseded_at)
@@ -93,6 +96,7 @@ class StaffInvitationTests(TestCase):
         invitation = create_staff_invitation(
             actor_user=self.actor, email="roles@example.com", first_name="Role", last_name="Change",
             role_codes=[StaffRole.CRM_VIEWER],
+            reason="Role update invitation.",
         )
         with patch("notifications.jobs.send_transactional_email", return_value=SimpleNamespace(provider_message_id="test-id")):
             process_next_transactional_email_job()
@@ -133,6 +137,7 @@ class StaffInvitationTests(TestCase):
             first_name="Weak",
             last_name="Password",
             role_codes=[StaffRole.CRM_VIEWER],
+            reason="Password setup invitation.",
         )
         with self.assertRaises(ValidationError):
             redeem_staff_invitation(
@@ -159,7 +164,7 @@ class StaffInvitationTests(TestCase):
         self.assertNotIn("activation_token", response.data)
         with patch("notifications.jobs.send_transactional_email", return_value=SimpleNamespace(provider_message_id="test-id")) as send:
             process_next_transactional_email_job()
-        token = urlparse(send.call_args.kwargs["template_params"]["activation_url"]).path.rstrip("/").split("/")[-1]
+        token = parse_qs(urlparse(send.call_args.kwargs["template_params"]["invitation_url"]).query)["token"][0]
         self.client.force_authenticate(None)
         redeemed = self.client.post(
             f"/api/v1/staff/invitations/{invitation.public_id}/{token}/redeem/",

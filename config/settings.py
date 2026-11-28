@@ -265,6 +265,10 @@ REST_FRAMEWORK = {
         "community_post_create": COMMUNITY_POST_CREATE_THROTTLE_RATE,
         "community_reply_create": COMMUNITY_REPLY_CREATE_THROTTLE_RATE,
         "community_content_report": COMMUNITY_CONTENT_REPORT_THROTTLE_RATE,
+        "staff_invitation_inspect": "30/hour",
+        "staff_invitation_accept": "10/hour",
+        "staff_invitation_issue": "30/hour",
+        "staff_invitation_resend": "10/hour",
     },
 }
 
@@ -307,6 +311,7 @@ BREVO_MARKETING_WEBHOOK_USERNAME = env("BREVO_MARKETING_WEBHOOK_USERNAME", defau
 BREVO_MARKETING_WEBHOOK_PASSWORD = env("BREVO_MARKETING_WEBHOOK_PASSWORD", default="")
 MARKETING_SYNC_PROVIDER = env("MARKETING_SYNC_PROVIDER", default="BREVO")
 CRM_FRONTEND_URL = env("CRM_FRONTEND_URL", default="http://localhost:4200")
+STAFF_INVITATION_EXPIRY_HOURS = env.int("STAFF_INVITATION_EXPIRY_HOURS", default=72)
 COMMUNITY_FRONTEND_URL = env("COMMUNITY_FRONTEND_URL", default="http://localhost:4201")
 BREVO_COMMUNITY_ACTIVATION_TEMPLATE_ID = env("BREVO_COMMUNITY_ACTIVATION_TEMPLATE_ID", default="")
 BREVO_STAFF_INVITATION_TEMPLATE_ID = env("BREVO_STAFF_INVITATION_TEMPLATE_ID", default="")

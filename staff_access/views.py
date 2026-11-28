@@ -7,6 +7,7 @@ from drf_spectacular.utils import extend_schema, OpenApiResponse
 from rest_framework import generics, serializers, status
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from audit.models import AuditEvent
@@ -50,11 +51,19 @@ from staff_access.serializers import (
     StaffDirectorySerializer,
     StaffDirectoryDetailSerializer,
     StaffActivitySerializer,
+    StaffOnboardingPersonLookupSerializer,
+    StaffOnboardingValidationSerializer,
+    StaffOnboardingSubmissionSerializer,
+    StaffInvitationInspectionSerializer,
+    StaffInvitationAcceptanceSerializer,
+    StaffInvitationReasonSerializer,
 )
+from staff_access.onboarding import search_onboarding_people, validate_onboarding_request, submit_onboarding_request
 from staff_access.services import (
     cancel_staff_invitation,
     create_staff_invitation,
     redeem_staff_invitation,
+    inspect_staff_invitation,
     confirm_staff_email_change,
     request_staff_email_change,
     resend_staff_invitation,
@@ -78,6 +87,101 @@ from accounts.models import User
 
 class StaffAdminPermission(HasStaffManagementAccess):
     pass
+
+
+class StaffOnboardingRoleOptionsView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [StaffAdminPermission]
+
+    def get(self, request):
+        roles = StaffRole.objects.filter(
+            code__in=StaffRole.canonical_codes(),
+            family=StaffRole.CRM_ROLE_FAMILY,
+            is_active=True,
+        ).order_by("code")
+        return Response({
+            "results": [
+                {
+                    "code": role.code,
+                    "name": role.name,
+                    "administrator_approval_required": role.code == StaffRole.CRM_ADMIN,
+                }
+                for role in roles
+            ],
+        })
+
+
+class StaffOnboardingPersonLookupView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [StaffAdminPermission]
+
+    def get(self, request):
+        serializer = StaffOnboardingPersonLookupSerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        return Response(search_onboarding_people(query=serializer.validated_data["q"], request=request))
+
+
+class StaffOnboardingValidationView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [StaffAdminPermission]
+
+    def post(self, request):
+        serializer = StaffOnboardingValidationSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        return Response(validate_onboarding_request(attrs=serializer.validated_data, request=request))
+
+
+class StaffOnboardingSubmissionView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [StaffAdminPermission]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "staff_invitation_issue"
+
+    def post(self, request):
+        serializer = StaffOnboardingSubmissionSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        try:
+            invitation = submit_onboarding_request(attrs=serializer.validated_data, actor_user=request.user, request=request)
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(error.message_dict if hasattr(error, "message_dict") else error.messages)
+        return Response(invitation_response(invitation), status=status.HTTP_201_CREATED)
+
+
+class StaffInvitationInspectView(APIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "staff_invitation_inspect"
+
+    def get(self, request):
+        serializer = StaffInvitationInspectionSerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        try:
+            return Response(inspect_staff_invitation(**serializer.validated_data))
+        except DjangoValidationError:
+            raise serializers.ValidationError({"detail": "This invitation is invalid or has expired."})
+
+
+class StaffInvitationAcceptView(generics.GenericAPIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "staff_invitation_accept"
+    serializer_class = StaffInvitationAcceptanceSerializer
+
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        invitation_id = request.data.get("invitation")
+        token = request.data.get("token")
+        try:
+            user = redeem_staff_invitation(
+                public_id=invitation_id,
+                raw_token=token,
+                password=serializer.validated_data.get("password"),
+                authenticated_user=request.user if request.user.is_authenticated else None,
+            )
+        except (StaffInvitation.DoesNotExist, DjangoValidationError):
+            raise serializers.ValidationError({"detail": "This invitation is invalid or cannot be accepted by this account."})
+        return Response({"detail": "Staff invitation accepted.", "user_id": user.pk})
 
 
 STAFF_ACTIVITY_ACTIONS = {
@@ -239,9 +343,23 @@ def _staff_detail(user, request):
     row["role_assignments"] = list(StaffRoleAssignment.objects.filter(user=user).select_related("role").order_by("-assigned_at").values(
         "id", "role__code", "role_family", "is_active", "assigned_at", "revoked_at",
     ))
-    row["invitations"] = list(StaffInvitation.objects.filter(intended_email=user.email).order_by("-created_at").values(
-        "public_id", "expires_at", "accepted_at", "revoked_at", "superseded_at", "created_at",
-    )[:20])
+    from notifications.models import TransactionalEmailJob
+    invitations = []
+    for invitation in StaffInvitation.objects.filter(intended_email=user.email).order_by("-created_at")[:20]:
+        job = TransactionalEmailJob.objects.filter(staff_invitation=invitation).first()
+        invitations.append({
+            "public_id": invitation.public_id,
+            "expires_at": invitation.expires_at,
+            "accepted_at": invitation.accepted_at,
+            "revoked_at": invitation.revoked_at,
+            "superseded_at": invitation.superseded_at,
+            "created_at": invitation.created_at,
+            "requested_role": (invitation.pending_role_codes or [None])[0],
+            "delivery_status": job.status if job else None,
+            "can_resend": not any((invitation.accepted_at, invitation.revoked_at, invitation.superseded_at)) and invitation.target_user_id != user.pk and not user.is_staff and not user.is_superuser,
+            "can_cancel": not any((invitation.accepted_at, invitation.revoked_at, invitation.superseded_at)) and invitation.target_user_id != user.pk and not user.is_staff and not user.is_superuser,
+        })
+    row["invitations"] = invitations
     row["administrator_proposals"] = list(StaffAdministratorProposal.objects.filter(target_user=user).order_by("-created_at").values(
         "public_id", "operation", "status", "expires_at", "created_at", "decided_at", "effected_at",
     )[:20])
@@ -979,11 +1097,16 @@ class StaffInvitationCreateView(generics.GenericAPIView):
 class StaffInvitationResendView(generics.GenericAPIView):
     authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, StaffAdminPermission]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "staff_invitation_resend"
+    serializer_class = StaffInvitationReasonSerializer
 
     def post(self, request, invitation_id):
+        input_serializer = self.get_serializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
         try:
             invitation = StaffInvitation.objects.get(public_id=invitation_id)
-            replacement = resend_staff_invitation(invitation=invitation, actor_user=request.user)
+            replacement = resend_staff_invitation(invitation=invitation, actor_user=request.user, **input_serializer.validated_data)
         except StaffInvitation.DoesNotExist:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except DjangoValidationError as error:
@@ -1012,11 +1135,14 @@ class StaffInvitationRoleUpdateView(generics.GenericAPIView):
 class StaffInvitationCancelView(generics.GenericAPIView):
     authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, StaffAdminPermission]
+    serializer_class = StaffInvitationReasonSerializer
 
     def post(self, request, invitation_id):
+        input_serializer = self.get_serializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
         try:
             invitation = StaffInvitation.objects.get(public_id=invitation_id)
-            cancel_staff_invitation(invitation=invitation, actor_user=request.user)
+            cancel_staff_invitation(invitation=invitation, actor_user=request.user, **input_serializer.validated_data)
         except StaffInvitation.DoesNotExist:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response({"detail": "Invitation cancelled."})
@@ -1034,6 +1160,7 @@ class StaffInvitationRedeemView(generics.GenericAPIView):
                 public_id=invitation_id,
                 raw_token=token,
                 password=input_serializer.validated_data["password"],
+                authenticated_user=request.user if request.user.is_authenticated else None,
             )
         except (StaffInvitation.DoesNotExist, DjangoValidationError):
             raise serializers.ValidationError({"detail": "This invitation is invalid or has expired."})

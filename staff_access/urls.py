@@ -22,6 +22,12 @@ from staff_access.views import (
     StaffDirectoryView,
     StaffDirectoryDetailView,
     StaffActivityHistoryView,
+    StaffOnboardingRoleOptionsView,
+    StaffOnboardingPersonLookupView,
+    StaffOnboardingValidationView,
+    StaffOnboardingSubmissionView,
+    StaffInvitationInspectView,
+    StaffInvitationAcceptView,
 )
 
 
@@ -30,6 +36,10 @@ urlpatterns = [
     path("staff/directory/", StaffDirectoryView.as_view(), name="staff-directory"),
     path("staff/directory/<int:user_id>/", StaffDirectoryDetailView.as_view(), name="staff-directory-detail"),
     path("staff/directory/<int:user_id>/activity/", StaffActivityHistoryView.as_view(), name="staff-directory-activity"),
+    path("staff/onboarding/roles/", StaffOnboardingRoleOptionsView.as_view(), name="staff-onboarding-roles"),
+    path("staff/onboarding/people/", StaffOnboardingPersonLookupView.as_view(), name="staff-onboarding-people"),
+    path("staff/onboarding/validate/", StaffOnboardingValidationView.as_view(), name="staff-onboarding-validate"),
+    path("staff/onboarding/", StaffOnboardingSubmissionView.as_view(), name="staff-onboarding-submit"),
     path("staff/governance/targets/<int:user_id>/", GovernanceTargetDetailView.as_view(), name="staff-governance-target-detail"),
     path("staff/governance/targets/", GovernanceStaffDirectoryView.as_view(), name="staff-governance-target-directory"),
     path("staff/governance/role-defaults/", GovernanceRoleDefaultsView.as_view(), name="staff-governance-role-defaults"),
@@ -43,6 +53,8 @@ urlpatterns = [
     path("staff/invitations/<uuid:invitation_id>/resend/", StaffInvitationResendView.as_view(), name="staff-invitation-resend"),
     path("staff/invitations/<uuid:invitation_id>/roles/", StaffInvitationRoleUpdateView.as_view(), name="staff-invitation-role-update"),
     path("staff/invitations/<uuid:invitation_id>/<str:token>/redeem/", StaffInvitationRedeemView.as_view(), name="staff-invitation-redeem"),
+    path("staff/invitations/inspect/", StaffInvitationInspectView.as_view(), name="staff-invitation-inspect"),
+    path("staff/invitations/accept/", StaffInvitationAcceptView.as_view(), name="staff-invitation-accept"),
     path("staff/email-change/", StaffEmailChangeRequestView.as_view(), name="staff-email-change-request"),
     path("staff/email-change/<int:request_id>/confirm/", StaffEmailChangeConfirmView.as_view(), name="staff-email-change-confirm"),
     path("staff/offboard/", StaffOffboardView.as_view(), name="staff-offboard"),

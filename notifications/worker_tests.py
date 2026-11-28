@@ -73,13 +73,13 @@ class TransactionalEmailWorkerTests(TestCase):
         self.assertEqual(kwargs["template_id"], "42")
         self.assertEqual(kwargs["recipient_email"], "amina@example.com")
         self.assertEqual(kwargs["recipient_name"], "Amina Zulu")
-        self.assertEqual(set(kwargs["template_params"]), {"first_name", "activation_url", "expires_in_hours"})
-        activation_url = kwargs["template_params"]["activation_url"]
-        self.assertTrue(activation_url.startswith("http://localhost:4201/activate/"))
+        self.assertEqual(set(kwargs["template_params"]), {"first_name", "role_name", "invitation_url", "expires_at"})
+        activation_url = kwargs["template_params"]["invitation_url"]
+        self.assertTrue(activation_url.startswith("http://localhost:4200/staff/invitation/accept"))
         self.assertNotIn("#", activation_url)
         self.assertNotIn(" ", activation_url)
         self.assertIsNotNone(invitation.token_hash)
-        self.assertNotIn(kwargs["template_params"]["activation_url"], str(invitation.__dict__))
+        self.assertNotIn(kwargs["template_params"]["invitation_url"], str(invitation.__dict__))
         self.assertEqual(job.provider_message_id, "brevo-id")
 
     @patch("notifications.jobs.send_transactional_email")

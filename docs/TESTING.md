@@ -6,6 +6,13 @@ workspace and API `AGENTS.md` files establish policy and authority boundaries;
 this guide records the operational details without changing application or
 production security settings.
 
+During the current Staff Management implementation, permanent tests may be
+created and maintained but automated tests, test-database creation, migration
+runtime validation, regression suites and provider calls are deferred until
+final hardening. Source compilation, Angular production builds, migration-plan
+inspection and diff checks remain permitted. Existing executed results remain
+historical evidence and are not current acceptance verification.
+
 ## Automatic test infrastructure
 
 `config/settings.py` sets `TEST_RUNNER` to

@@ -3230,11 +3230,11 @@ remains `GDPR-FUTURE-001`. The required audit-choice migration is generated but
 not applied; automated and runtime verification remain deferred to final GDPR hardening
 hardening.
 
-## Staff Management V1 planned API
+## Staff Management API status
 
-The planned Staff Management API is documented in
-[STAFF_MANAGEMENT.md](STAFF_MANAGEMENT.md). Directory, onboarding, invitation,
-Administrator approval, role, lifecycle, account-security, audit and privacy
-summary routes described there are **Approved / Planned** and are not currently
-available. Proposed routes must not be presented to clients as deployed
-contracts until implementation and OpenAPI verification are complete.
+The Staff Management API is documented in [STAFF_MANAGEMENT.md](STAFF_MANAGEMENT.md).
+Directory/detail routes and the bounded onboarding role, Person lookup and
+validation contracts are implemented in source but remain **Pending
+Verification**. Persisted onboarding submission, invitation, Administrator
+approval, role, lifecycle, account-security and public token routes remain
+planned and must not be presented as available contracts.

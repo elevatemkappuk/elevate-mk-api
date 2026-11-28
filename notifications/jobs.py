@@ -233,14 +233,17 @@ def _prepare_staff_invitation_send(job):
     raw_token = secrets.token_urlsafe(32)
     invitation.token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
     invitation.save(update_fields=["token_hash", "updated_at"])
+    from staff_access.models import StaffRole
+    role = StaffRole.objects.filter(code=(invitation.pending_role_codes or [None])[0]).first()
     return {
         "recipient_email": job.recipient_email,
         "recipient_name": job.recipient_name,
         "template_id": job.template_id,
         "template_params": {
             "first_name": job.first_name,
-            "activation_url": f"{settings.CRM_FRONTEND_URL.rstrip('/')}/staff/activate/{invitation.public_id}/{raw_token}",
-            "expires_in_hours": job.expires_in_hours,
+            "role_name": role.name if role else "Elevate MK staff",
+            "invitation_url": f"{settings.CRM_FRONTEND_URL.rstrip('/')}/staff/invitation/accept?invitation={invitation.public_id}&token={raw_token}",
+            "expires_at": invitation.expires_at.isoformat(),
         },
     }
 
