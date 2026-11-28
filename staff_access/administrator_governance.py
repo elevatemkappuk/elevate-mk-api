@@ -248,11 +248,11 @@ def resolve_administrator_proposal(*, proposal, actor_user, outcome, reason, req
         return proposal
 
 
-def consume_administrator_proposal(*, proposal, actor_user, resulting_assignment, request=None):
+def consume_administrator_proposal(*, proposal, actor_user, resulting_assignment, expected_operation, request=None):
     """Consume approved onboarding/reactivation authority after invitation acceptance.
 
-    Phase 4/5 invitation services will supply the resulting assignment. This
-    function is deliberately separate from approval so approved authority
+    Invitation services supply the resulting assignment and the operation they
+    are effecting. This function is deliberately separate from approval so approved authority
     cannot be mistaken for effective CRM Administrator access.
     """
     with transaction.atomic():
@@ -260,6 +260,8 @@ def consume_administrator_proposal(*, proposal, actor_user, resulting_assignment
         _authorized(actor_user)
         if proposal.status != StaffAdministratorProposal.Status.APPROVED:
             raise ValidationError("Only an approved Administrator proposal can be consumed.")
+        if expected_operation != proposal.operation:
+            raise ValidationError("The approved Administrator operation does not match the consuming workflow.")
         if proposal.operation == StaffAdministratorProposal.Operation.PROMOTE_EXISTING:
             raise ValidationError("Existing-staff promotions are consumed during approval.")
         if proposal.expires_at <= timezone.now():

@@ -46,9 +46,10 @@ class AuthenticatedUserSerializer(serializers.ModelSerializer):
 class CurrentUserSerializer(AuthenticatedUserSerializer):
     staff_roles = serializers.SerializerMethodField()
     membership = serializers.SerializerMethodField()
+    access = serializers.SerializerMethodField()
 
     class Meta(AuthenticatedUserSerializer.Meta):
-        fields = ("id", "email", "person", "staff_roles", "membership")
+        fields = ("id", "email", "person", "staff_roles", "membership", "access")
 
     @extend_schema_field(serializers.ListField(child=serializers.CharField()))
     def get_staff_roles(self, obj):
@@ -60,6 +61,12 @@ class CurrentUserSerializer(AuthenticatedUserSerializer):
         if membership is None:
             return None
         return MembershipSerializer(membership).data
+
+    @extend_schema_field(serializers.DictField())
+    def get_access(self, obj):
+        from staff_access.authorization import can_access_staff_management
+
+        return {"staff_management": can_access_staff_management(obj)}
 
 
 class LoginSerializer(serializers.Serializer):

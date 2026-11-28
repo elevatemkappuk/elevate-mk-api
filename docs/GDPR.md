@@ -906,7 +906,7 @@ Future features that introduce personal data or new processing activities must
 complete a proportionate privacy and access-control assessment and update the
 relevant subject-based documentation before implementation acceptance.
 
-### Development sequencing and readiness
+### feature readiness and readiness
 
 - GDPR engineering is complete for local development progression.
 - Events V1 is the next development priority.

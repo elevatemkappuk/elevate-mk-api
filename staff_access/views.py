@@ -1,9 +1,11 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Q
+from django.utils import timezone
 import hashlib
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 from rest_framework import generics, serializers, status
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -22,6 +24,8 @@ from staff_access.models import (
     StaffEmailChangeRequest,
     StaffInvitation,
     StaffRole,
+    StaffRoleAssignment,
+    StaffAdministratorProposal,
 )
 from staff_access.permissions import (
     CRM_EFFECTIVE_ACCESS_DISCLOSURE_ALLOWLIST,
@@ -42,6 +46,10 @@ from staff_access.serializers import (
     EffectiveAccessSerializer,
     CapabilityGovernanceMutationSerializer,
     CapabilityProposalDecisionSerializer,
+    StaffDirectoryQuerySerializer,
+    StaffDirectorySerializer,
+    StaffDirectoryDetailSerializer,
+    StaffActivitySerializer,
 )
 from staff_access.services import (
     cancel_staff_invitation,
@@ -70,6 +78,215 @@ from accounts.models import User
 
 class StaffAdminPermission(HasStaffManagementAccess):
     pass
+
+
+STAFF_ACTIVITY_ACTIONS = {
+    AuditEvent.Action.STAFF_ROLE_ASSIGNED,
+    AuditEvent.Action.STAFF_ROLE_REACTIVATED,
+    AuditEvent.Action.STAFF_ROLE_REVOKED,
+    AuditEvent.Action.ACCOUNT_DISABLED,
+    AuditEvent.Action.ACCOUNT_REENABLED,
+    AuditEvent.Action.CREDENTIALS_REVOKED,
+    AuditEvent.Action.CAPABILITY_PERMISSION_MUTATED,
+}
+
+
+def _staff_email(user, request):
+    from staff_access.permissions import user_has_capability
+
+    if getattr(request.user, "is_superuser", False) or user_has_capability(
+        request.user, CapabilityDefinition.PERSON_CONTACT_READ, request=request,
+    ):
+        return user.email
+    return _mask_email(user.email)
+
+
+def _mask_email(email):
+    local, _, domain = email.partition("@")
+    return f"{(local[:1] or '*')}***@{domain[:1] or '*'}***"
+
+
+def _staff_users_queryset():
+    return User.objects.select_related("person").filter(
+        Q(person__record_type=Person.RecordType.STAFF)
+        | Q(staff_role_assignments__isnull=False)
+        | Q(staff_administrator_proposals_targeted__isnull=False)
+    ).distinct()
+
+
+def _staff_row(user, request):
+    assignments = list(
+        StaffRoleAssignment.objects.active().select_related("role").filter(user=user).order_by("role__code")
+    )
+    current_role = assignments[0].role.code if assignments else None
+    invitation = StaffInvitation.objects.filter(
+        intended_email=user.email, accepted_at__isnull=True, revoked_at__isnull=True, superseded_at__isnull=True,
+    ).order_by("-created_at").first()
+    proposal = StaffAdministratorProposal.objects.filter(
+        target_user=user, status__in=(StaffAdministratorProposal.Status.PENDING, StaffAdministratorProposal.Status.APPROVED),
+    ).order_by("-created_at").first()
+    if user.account_lifecycle_state == User.AccountLifecycleState.DISABLED:
+        staff_state = "DISABLED"
+    elif current_role:
+        staff_state = "ACTIVE"
+    elif invitation:
+        staff_state = "PENDING"
+    else:
+        staff_state = "FORMER"
+    return {
+        "user_id": user.pk,
+        "person_id": getattr(user, "person_id", None),
+        "display_name": f"{user.person.first_name} {user.person.last_name}".strip(),
+        "login_email": _staff_email(user, request),
+        "crm_role": current_role,
+        "staff_access_state": staff_state,
+        "account_state": user.account_lifecycle_state,
+        "invitation_state": ("EXPIRED" if invitation and invitation.expires_at <= timezone.now() else "PENDING") if invitation else None,
+        "administrator_approval_state": proposal.status if proposal else None,
+        "protected_account": bool(user.is_staff or user.is_superuser),
+        "updated_at": getattr(user.person, "updated_at", user.date_joined),
+    }
+
+
+class StaffDirectoryPagination(PageNumberPagination):
+    page_size = 25
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
+class StaffDirectoryView(generics.ListAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [StaffAdminPermission]
+    pagination_class = StaffDirectoryPagination
+
+    def get_queryset(self):
+        params = StaffDirectoryQuerySerializer(data=self.request.query_params)
+        params.is_valid(raise_exception=True)
+        self.query = params.validated_data
+        queryset = _staff_users_queryset()
+        q = self.query.get("q", "").strip()
+        if q:
+            name_query = Q(person__first_name__icontains=q) | Q(person__last_name__icontains=q)
+            from staff_access.permissions import user_has_capability
+            if user_has_capability(self.request.user, CapabilityDefinition.PERSON_CONTACT_READ, request=self.request):
+                name_query |= Q(email__icontains=q)
+            queryset = queryset.filter(name_query)
+        if self.query.get("role"):
+            queryset = queryset.filter(staff_role_assignments__role__code=self.query["role"], staff_role_assignments__is_active=True, staff_role_assignments__revoked_at__isnull=True)
+        ordering = self.query.get("ordering", "name")
+        if ordering in ("name", "-name"):
+            queryset = queryset.order_by(f"{'' if ordering == 'name' else '-'}person__last_name", f"{'' if ordering == 'name' else '-'}person__first_name", "pk")
+        else:
+            queryset = queryset.order_by(ordering, "pk")
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        users = list(self.filter_queryset(self.get_queryset()))
+        rows = [_staff_row(user, request) for user in users]
+        known_emails = {user.email for user in users}
+        from staff_access.permissions import user_has_capability
+        email_search_allowed = bool(request.user.is_superuser) or user_has_capability(
+            request.user, CapabilityDefinition.PERSON_CONTACT_READ, request=request,
+        )
+        for invitation in StaffInvitation.objects.filter(
+            accepted_at__isnull=True, revoked_at__isnull=True, superseded_at__isnull=True,
+        ).order_by("-created_at"):
+            if invitation.intended_email in known_emails:
+                continue
+            rows.append({
+                "user_id": None,
+                "person_id": None,
+                "display_name": f"{invitation.first_name} {invitation.last_name}".strip(),
+                "login_email": invitation.intended_email if email_search_allowed else _mask_email(invitation.intended_email),
+                "crm_role": (invitation.pending_role_codes or [None])[0],
+                "staff_access_state": "PENDING",
+                "account_state": None,
+                "invitation_state": "EXPIRED" if invitation.expires_at <= timezone.now() else "PENDING",
+                "administrator_approval_state": None,
+                "protected_account": False,
+                "updated_at": invitation.updated_at,
+            })
+        q = self.query.get("q", "").strip().lower()
+        if q:
+            rows = [row for row in rows if q in row["display_name"].lower() or (email_search_allowed and row["login_email"] and q in row["login_email"].lower())]
+        if self.query.get("role"):
+            rows = [row for row in rows if row["crm_role"] == self.query["role"]]
+        staff_state = self.query.get("staff_state")
+        account_state = self.query.get("account_state")
+        if staff_state:
+            rows = [row for row in rows if row["staff_access_state"] == staff_state]
+        if account_state:
+            rows = [row for row in rows if row["account_state"] == account_state]
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(rows, request, view=self)
+        serializer = StaffDirectorySerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
+
+
+def _staff_detail(user, request):
+    row = _staff_row(user, request)
+    row["person"] = {
+        "id": user.person_id,
+        "first_name": user.person.first_name,
+        "last_name": user.person.last_name,
+        "primary_email": (
+            user.person.primary_email
+            if getattr(request.user, "is_superuser", False)
+            or user_has_capability(request.user, CapabilityDefinition.PERSON_CONTACT_READ, request=request)
+            else _mask_email(user.person.primary_email)
+        ) if user.person.primary_email else None,
+    }
+    row["role_assignments"] = list(StaffRoleAssignment.objects.filter(user=user).select_related("role").order_by("-assigned_at").values(
+        "id", "role__code", "role_family", "is_active", "assigned_at", "revoked_at",
+    ))
+    row["invitations"] = list(StaffInvitation.objects.filter(intended_email=user.email).order_by("-created_at").values(
+        "public_id", "expires_at", "accepted_at", "revoked_at", "superseded_at", "created_at",
+    )[:20])
+    row["administrator_proposals"] = list(StaffAdministratorProposal.objects.filter(target_user=user).order_by("-created_at").values(
+        "public_id", "operation", "status", "expires_at", "created_at", "decided_at", "effected_at",
+    )[:20])
+    return row
+
+
+class StaffDirectoryDetailView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [StaffAdminPermission]
+
+    def get(self, request, user_id):
+        user = _staff_users_queryset().filter(pk=user_id).first()
+        if user is None:
+            return Response({"detail": "Staff record not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(StaffDirectoryDetailSerializer(_staff_detail(user, request)).data)
+
+
+class StaffActivityHistoryView(generics.ListAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [StaffAdminPermission]
+    pagination_class = StaffDirectoryPagination
+
+    def get_queryset(self):
+        user = _staff_users_queryset().filter(pk=self.kwargs["user_id"]).first()
+        if user is None:
+            from rest_framework.exceptions import NotFound
+            raise NotFound("Staff record not found.")
+        staff_actions = STAFF_ACTIVITY_ACTIONS - {AuditEvent.Action.CAPABILITY_PERMISSION_MUTATED}
+        return AuditEvent.objects.filter(
+            (Q(action__in=staff_actions) | Q(action=AuditEvent.Action.CAPABILITY_PERMISSION_MUTATED, metadata__event_type__startswith="STAFF_")),
+        ).filter(Q(entity_id=str(user.pk)) | Q(metadata__target_user_id=str(user.pk))).select_related("actor_user").order_by("-occurred_at", "-pk")
+
+    def list(self, request, *args, **kwargs):
+        events = self.filter_queryset(self.get_queryset())
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(events, request, view=self)
+        data = [{
+            "id": event.pk,
+            "event_type": event.action,
+            "occurred_at": event.occurred_at,
+            "actor": {"id": event.actor_user_id, "email": event.actor_user.email} if event.actor_user else None,
+            "outcome": event.metadata.get("outcome") if isinstance(event.metadata, dict) else None,
+            "reason": event.metadata.get("reason") if isinstance(event.metadata, dict) else None,
+        } for event in page]
+        return paginator.get_paginated_response(StaffActivitySerializer(data, many=True).data)
 
 
 class OrdinaryGovernancePermission(IsAuthenticated):

@@ -4,6 +4,47 @@ from rest_framework import serializers
 from staff_access.models import CapabilityDefinition, CapabilityProposal, StaffRole
 
 
+class StaffDirectoryQuerySerializer(serializers.Serializer):
+    q = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    role = serializers.ChoiceField(required=False, choices=StaffRole.CANONICAL_ROLES)
+    staff_state = serializers.ChoiceField(required=False, choices=[
+        ("ACTIVE", "Active"), ("FORMER", "Former"), ("PENDING", "Pending"), ("DISABLED", "Disabled"),
+    ])
+    account_state = serializers.ChoiceField(required=False, choices=[("ACTIVE", "Active"), ("DISABLED", "Disabled"), ("PENDING_ACTIVATION", "Pending activation")])
+    ordering = serializers.ChoiceField(required=False, choices=[("name", "Name"), ("-name", "Name descending"), ("updated_at", "Updated"), ("-updated_at", "Updated descending")])
+    page_size = serializers.IntegerField(required=False, min_value=1, max_value=100)
+
+
+class StaffDirectorySerializer(serializers.Serializer):
+    user_id = serializers.IntegerField(allow_null=True)
+    person_id = serializers.IntegerField(allow_null=True)
+    display_name = serializers.CharField()
+    login_email = serializers.CharField(allow_null=True)
+    crm_role = serializers.CharField(allow_null=True)
+    staff_access_state = serializers.CharField()
+    account_state = serializers.CharField(allow_null=True)
+    invitation_state = serializers.CharField(allow_null=True)
+    administrator_approval_state = serializers.CharField(allow_null=True)
+    protected_account = serializers.BooleanField()
+    updated_at = serializers.DateTimeField(allow_null=True)
+
+
+class StaffDirectoryDetailSerializer(StaffDirectorySerializer):
+    person = serializers.DictField(allow_null=True)
+    role_assignments = serializers.ListField()
+    invitations = serializers.ListField()
+    administrator_proposals = serializers.ListField()
+
+
+class StaffActivitySerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    event_type = serializers.CharField()
+    occurred_at = serializers.DateTimeField()
+    actor = serializers.DictField(allow_null=True)
+    outcome = serializers.CharField(allow_null=True)
+    reason = serializers.CharField(allow_null=True)
+
+
 class StaffInvitationCreateSerializer(serializers.Serializer):
     email = serializers.EmailField()
     first_name = serializers.CharField(max_length=150)

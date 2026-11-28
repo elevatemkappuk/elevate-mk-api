@@ -19,11 +19,17 @@ from staff_access.views import (
     GovernanceProposalActionView,
     GovernanceHistoryView,
     GovernanceSuperuserActionView,
+    StaffDirectoryView,
+    StaffDirectoryDetailView,
+    StaffActivityHistoryView,
 )
 
 
 urlpatterns = [
     path("staff/access/me/", StaffEffectiveAccessView.as_view(), name="staff-effective-access-me"),
+    path("staff/directory/", StaffDirectoryView.as_view(), name="staff-directory"),
+    path("staff/directory/<int:user_id>/", StaffDirectoryDetailView.as_view(), name="staff-directory-detail"),
+    path("staff/directory/<int:user_id>/activity/", StaffActivityHistoryView.as_view(), name="staff-directory-activity"),
     path("staff/governance/targets/<int:user_id>/", GovernanceTargetDetailView.as_view(), name="staff-governance-target-detail"),
     path("staff/governance/targets/", GovernanceStaffDirectoryView.as_view(), name="staff-governance-target-directory"),
     path("staff/governance/role-defaults/", GovernanceRoleDefaultsView.as_view(), name="staff-governance-role-defaults"),

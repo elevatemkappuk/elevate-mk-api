@@ -118,6 +118,24 @@ class StaffLifecycleFoundationTests(TestCase):
             StaffCapabilityAssignment.State.ACTIVE,
         )
 
+    def test_enablement_resumes_retained_active_roles_and_grants(self):
+        disable_user_account(
+            target_user=self.target,
+            actor_user=self.actor,
+            reason="Disable the account while retaining operational authority.",
+        )
+        enable_user_account(
+            target_user=self.target,
+            actor_user=self.actor,
+            reason="Restore authentication after review.",
+        )
+        self.target.refresh_from_db()
+        self.assertTrue(StaffRoleAssignment.objects.active().filter(user=self.target).exists())
+        self.assertEqual(
+            StaffCapabilityAssignment.objects.get(user=self.target, capability=self.capability).state,
+            StaffCapabilityAssignment.State.ACTIVE,
+        )
+
     def test_final_administrator_cannot_be_deactivated_or_disabled(self):
         manager_assignment = StaffRoleAssignment.objects.get(user=self.target, role__code=StaffRole.CRM_MANAGER)
         manager_assignment._revoke_unchecked(revoked_by=self.actor)

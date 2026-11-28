@@ -1,6 +1,6 @@
 # Staff Management V1
 
-Status: **Approved architecture / lifecycle and privacy foundations implemented; runtime verification pending**
+Status: **Read-only directory and detail contracts implemented; runtime verification pending**
 
 This document is the API repository's authoritative living guide for Staff
 Management V1. It records approved requirements and architecture, existing
@@ -25,6 +25,40 @@ invalidation. See [Authentication](AUTHENTICATION.md),
 The historical GDPR baseline of 1,474/1,474 API tests is not new Staff
 Management verification.
 
+## Staff directory and detail
+
+Implementation status: **Implemented**. Verification status: **Pending
+Verification**; automated tests and runtime compatibility checks remain deferred
+until final hardening.
+
+The backend-authoritative authenticated-user contract now includes
+`access.staff_management`. It is calculated by the centralized Staff Management
+policy and does not grant general CRM, People, Marketing, Moderation or Privacy
+Administration access.
+
+The read-only contracts are:
+
+- `GET /api/v1/staff/directory/`
+- `GET /api/v1/staff/directory/{user_id}/`
+- `GET /api/v1/staff/directory/{user_id}/activity/`
+
+They are restricted to active operational CRM Administrators and eligible active
+Django Superusers. Directory search, role/state filters, deterministic ordering
+and server pagination are backend-owned. Email values are projected through the
+existing contact capability boundary. Raw credentials, tokens, session
+generations and unrestricted audit metadata are not returned.
+
+Directory state is derived from authoritative records: active role assignment,
+account lifecycle state, invitation state and Administrator proposal state. A
+disabled account may retain an active CRM role while its displayed access state
+is unavailable. Staff deactivation remains distinct from global account
+disablement.
+
+Account enablement follows the approved retained-authority rule: retained active
+roles and active privacy grants become effective again after fresh
+authentication; revoked assignments, suspended grants, invalidated credentials,
+cancelled invitations and invalidated proposals are not restored.
+
 The centralized authorization foundation is implemented in
 `staff_access.authorization`. Active CRM Administrators and eligible active
 Django Superusers with a non-archived linked Person can access the Staff
@@ -41,11 +75,10 @@ invitation tests passed **79/79**; affected authentication, session-revocation,
 GDPR privacy-governance and audit tests passed **39/39**. This is local
 isolated verification, not full-suite or deployment evidence.
 
-The policy is a reusable foundation. Role-family integrity, administrator
-approval, final-administrator continuity integration, complete lifecycle audit
-coverage, and other Staff Management workflows remain planned for later
-approved stages. `STAFF-001`, `STAFF-002` and `STAFF-003` remain unresolved
-according to their documented scope.
+The policy is a reusable foundation. Final-administrator continuity integration,
+complete lifecycle audit coverage, and mutation workflows remain planned.
+`STAFF-001`, `STAFF-002` and `STAFF-003` remain unresolved according to their
+documented scope.
 
 ## CRM role integrity and Administrator continuity
 
@@ -144,8 +177,10 @@ foundations. Disablement retains role-assignment history, sets
 `User.account_lifecycle_state` to `DISABLED`, revokes global and CRM
 credentials, cancels incompatible lifecycle state and preserves the final
 Administrator invariant. Enablement accepts only an explicitly disabled
-account, requires a reason and does not restore roles, grants, restrictions,
-sessions, tokens, invitations or proposals. Fresh authentication is required.
+account, requires a reason and resumes retained active CRM roles and active
+privacy grants. It does not restore revoked roles, suspended grants,
+restrictions, sessions, tokens, invitations or proposals. Fresh authentication
+is required.
 
 The new account lifecycle state distinguishes `ACTIVE`, `PENDING_ACTIVATION`
 and `DISABLED`; existing inactive accounts are classified as disabled because
@@ -369,13 +404,20 @@ automatic grant suspension and explicit grant restoration.
 Do not record passwords, raw tokens, invitation URLs, email bodies, provider
 payloads or unnecessary personal data.
 
-## Planned API surface
+## API surface
 
-The following are planned, not currently available contracts:
+The following read-only contracts are implemented; mutation contracts below
+remain planned:
 
 ```text
 GET  /api/v1/staff/directory/
 GET  /api/v1/staff/directory/{user_id}/
+GET  /api/v1/staff/directory/{user_id}/activity/
+```
+
+The following mutation contracts remain planned:
+
+```text
 POST /api/v1/staff/onboarding/
 POST /api/v1/staff/invitations/{id}/resend/
 POST /api/v1/staff/invitations/{id}/cancel/

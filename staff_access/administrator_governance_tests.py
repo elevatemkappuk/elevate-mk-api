@@ -13,6 +13,7 @@ from staff_access.administrator_governance import (
     approve_administrator_proposal,
     create_administrator_proposal,
     resolve_administrator_proposal,
+    consume_administrator_proposal,
 )
 from staff_access.models import (
     StaffAdministratorProposal,
@@ -93,6 +94,28 @@ class AdministratorProposalTests(TestCase):
         proposal.refresh_from_db()
         self.assertEqual(proposal.status, StaffAdministratorProposal.Status.APPROVED)
         self.assertFalse(StaffRoleAssignment.objects.filter(user=self.onboard_target).exists())
+
+    def test_consumption_requires_exact_approved_operation(self):
+        proposal = create_administrator_proposal(
+            actor_user=self.proposer,
+            operation=StaffAdministratorProposal.Operation.ONBOARD,
+            target_user=self.onboard_target,
+            reason="Operation binding test.",
+        )
+        approve_administrator_proposal(proposal=proposal, actor_user=self.approver)
+        assignment = StaffRoleAssignment.objects.create(
+            user=self.onboard_target,
+            role=StaffRole.objects.get(code=StaffRole.CRM_ADMIN),
+            role_family=StaffRole.CRM_ROLE_FAMILY,
+            assigned_by=self.approver,
+        )
+        with self.assertRaises(ValidationError):
+            consume_administrator_proposal(
+                proposal=proposal,
+                actor_user=self.approver,
+                resulting_assignment=assignment,
+                expected_operation=StaffAdministratorProposal.Operation.REACTIVATE,
+            )
 
     def test_expired_proposal_is_not_approvable(self):
         proposal = create_administrator_proposal(
