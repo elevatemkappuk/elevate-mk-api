@@ -134,6 +134,15 @@ def resend_staff_invitation(*, invitation, actor_user, reason=""):
             expires_at=timezone.now() + timedelta(hours=settings.STAFF_INVITATION_EXPIRY_HOURS),
             created_by=actor_user,
         )
+        if invitation.operation == "ONBOARD" and invitation.pending_role_codes == [StaffRole.CRM_ADMIN]:
+            from staff_access.models import StaffAdministratorProposal
+            proposal = StaffAdministratorProposal.objects.select_for_update().filter(resulting_invitation=invitation).first()
+            if proposal is None or proposal.status != StaffAdministratorProposal.Status.APPROVED or proposal.expires_at <= timezone.now():
+                raise ValidationError("The Administrator approval is no longer valid for resend.")
+            replacement.expires_at = min(replacement.expires_at, proposal.expires_at)
+            replacement.save(update_fields=["expires_at", "updated_at"])
+            proposal.resulting_invitation = replacement
+            proposal.save(update_fields=["resulting_invitation"])
         _queue_staff_invitation_email(replacement)
         if replacement.target_user_id:
             _lifecycle_audit(
@@ -929,14 +938,34 @@ def redeem_staff_invitation(*, public_id, raw_token, password=None, authenticate
         if len(invitation.pending_role_codes) != 1:
             raise ValidationError("Staff invitations must contain exactly one CRM role.")
         role = StaffRole.objects.get(code=invitation.pending_role_codes[0], is_active=True)
+        administrator_proposal = None
         if role.code == StaffRole.CRM_ADMIN:
-            raise ValidationError("CRM Administrator invitations require an approved Administrator proposal workflow.")
+            from staff_access.models import StaffAdministratorProposal
+            from staff_access.authorization import can_access_staff_management
+            administrator_proposal = StaffAdministratorProposal.objects.select_for_update().filter(
+                target_user=user,
+                operation=StaffAdministratorProposal.Operation.ONBOARD,
+                status=StaffAdministratorProposal.Status.APPROVED,
+                resulting_invitation=invitation,
+            ).first()
+            if administrator_proposal is None or administrator_proposal.expires_at <= timezone.now():
+                raise ValidationError("This Administrator invitation is not backed by a valid approved proposal.")
+            if not can_access_staff_management(administrator_proposal.proposed_by) or not can_access_staff_management(administrator_proposal.approved_by):
+                raise ValidationError("The Administrator proposal no longer has eligible proposer and approver authority.")
         StaffRoleAssignment.objects.assign_role(
             user=user,
             role=role,
             assigned_by=invitation.created_by,
             audit=True,
         )
+        if administrator_proposal is not None:
+            from staff_access.administrator_governance import consume_administrator_proposal
+            consume_administrator_proposal(
+                proposal=administrator_proposal,
+                actor_user=user,
+                resulting_assignment=StaffRoleAssignment.objects.get(user=user, role=role),
+                expected_operation=StaffAdministratorProposal.Operation.ONBOARD,
+            )
         invitation.accepted_at = timezone.now()
         invitation.token_hash = None
         invitation.save(update_fields=["accepted_at", "token_hash", "updated_at"])

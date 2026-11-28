@@ -8,7 +8,7 @@ from accounts.models import User
 from people.models import Person
 from people.privacy import mask_email, person_privacy_capabilities, project_person_privacy
 from people.services import evaluate_create_new_identity
-from staff_access.models import CapabilityDefinition, StaffInvitation, StaffRole, StaffRoleAssignment
+from staff_access.models import CapabilityDefinition, StaffInvitation, StaffRole, StaffRoleAssignment, StaffAdministratorProposal
 from staff_access.permissions import user_has_capability
 from audit.models import AuditEvent
 from audit.services import record_audit_event
@@ -200,8 +200,6 @@ def submit_onboarding_request(*, attrs, actor_user, request=None):
 
     authorize_staff_operation(actor=actor_user, operation=StaffOperation.ACCESS, request=request)
     role_code = attrs["role_code"]
-    if role_code == StaffRole.CRM_ADMIN:
-        raise ValidationError({"role_code": "Administrator onboarding requires the separately approved governance workflow."})
     reason = str(attrs.get("reason") or "").strip()
     if not reason:
         raise ValidationError({"reason": "A reason is required for staff onboarding."})
@@ -244,6 +242,23 @@ def submit_onboarding_request(*, attrs, actor_user, request=None):
             )
             user.set_unusable_password()
             user.save(update_fields=["password", "is_active", "account_lifecycle_state"])
+        if role_code == StaffRole.CRM_ADMIN:
+            from staff_access.administrator_governance import create_administrator_proposal
+            pending = StaffAdministratorProposal.objects.filter(
+                target_user=user,
+                operation=StaffAdministratorProposal.Operation.ONBOARD,
+                status=StaffAdministratorProposal.Status.PENDING,
+            ).exists()
+            if pending:
+                raise ValidationError({"proposal": "An actionable Administrator onboarding proposal already exists."})
+            proposal = create_administrator_proposal(
+                actor_user=actor_user,
+                operation=StaffAdministratorProposal.Operation.ONBOARD,
+                target_user=user,
+                reason=reason,
+                request=request,
+            )
+            return proposal
         current = StaffInvitation.objects.select_for_update().filter(
             target_user=user, accepted_at__isnull=True, revoked_at__isnull=True, superseded_at__isnull=True,
         ).first()

@@ -4,7 +4,7 @@ from django.test import TestCase
 
 from accounts.models import User
 from people.models import Person
-from staff_access.models import StaffInvitation, StaffRole, StaffRoleAssignment
+from staff_access.models import StaffAdministratorProposal, StaffInvitation, StaffRole, StaffRoleAssignment
 from notifications.models import TransactionalEmailJob
 from staff_access.onboarding import search_onboarding_people, submit_onboarding_request, validate_onboarding_request
 from staff_access.services import inspect_staff_invitation, _invitation_token_hash, redeem_staff_invitation
@@ -82,13 +82,16 @@ class StaffOnboardingValidationTests(TestCase):
         self.assertEqual(TransactionalEmailJob.objects.get(staff_invitation=invitation).status, TransactionalEmailJob.Status.PENDING)
         self.assertEqual(StaffInvitation.objects.filter(target_user=invitation.target_user, accepted_at__isnull=True, revoked_at__isnull=True, superseded_at__isnull=True).count(), 1)
 
-    def test_administrator_submission_is_restricted_to_governance(self):
-        with self.assertRaisesMessage(Exception, "Administrator onboarding"):
-            submit_onboarding_request(
-                attrs={"first_name": "Admin", "last_name": "Candidate", "primary_email": "admin-candidate@example.com", "login_email": "admin-candidate@example.com", "role_code": StaffRole.CRM_ADMIN, "reason": "Admin staffing"},
-                actor_user=self.actor,
-                request=self.request,
-            )
+    def test_administrator_submission_creates_pending_governance_proposal_without_invitation(self):
+        proposal = submit_onboarding_request(
+            attrs={"first_name": "Admin", "last_name": "Candidate", "primary_email": "admin-candidate@example.com", "login_email": "admin-candidate@example.com", "role_code": StaffRole.CRM_ADMIN, "reason": "Admin staffing"},
+            actor_user=self.actor,
+            request=self.request,
+        )
+        self.assertIsInstance(proposal, StaffAdministratorProposal)
+        self.assertEqual(proposal.status, StaffAdministratorProposal.Status.PENDING)
+        self.assertFalse(StaffInvitation.objects.filter(target_user=proposal.target_user).exists())
+        self.assertFalse(TransactionalEmailJob.objects.filter(staff_invitation__target_user=proposal.target_user).exists())
 
     def test_invitation_inspection_does_not_consume_digest(self):
         invitation = submit_onboarding_request(

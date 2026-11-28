@@ -28,6 +28,10 @@ from staff_access.views import (
     StaffOnboardingSubmissionView,
     StaffInvitationInspectView,
     StaffInvitationAcceptView,
+    AdministratorProposalListView,
+    AdministratorProposalDetailView,
+    AdministratorProposalCreateView,
+    AdministratorProposalActionView,
 )
 
 
@@ -40,6 +44,10 @@ urlpatterns = [
     path("staff/onboarding/people/", StaffOnboardingPersonLookupView.as_view(), name="staff-onboarding-people"),
     path("staff/onboarding/validate/", StaffOnboardingValidationView.as_view(), name="staff-onboarding-validate"),
     path("staff/onboarding/", StaffOnboardingSubmissionView.as_view(), name="staff-onboarding-submit"),
+    path("staff/administrator-proposals/", AdministratorProposalListView.as_view(), name="staff-administrator-proposal-list"),
+    path("staff/administrator-proposals/create/", AdministratorProposalCreateView.as_view(), name="staff-administrator-proposal-create"),
+    path("staff/administrator-proposals/<uuid:proposal_id>/", AdministratorProposalDetailView.as_view(), name="staff-administrator-proposal-detail"),
+    path("staff/administrator-proposals/<uuid:proposal_id>/<str:action>/", AdministratorProposalActionView.as_view(), name="staff-administrator-proposal-action"),
     path("staff/governance/targets/<int:user_id>/", GovernanceTargetDetailView.as_view(), name="staff-governance-target-detail"),
     path("staff/governance/targets/", GovernanceStaffDirectoryView.as_view(), name="staff-governance-target-directory"),
     path("staff/governance/role-defaults/", GovernanceRoleDefaultsView.as_view(), name="staff-governance-role-defaults"),

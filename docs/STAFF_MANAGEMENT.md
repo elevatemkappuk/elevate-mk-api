@@ -121,6 +121,37 @@ invitation lifecycle fields are added by `0011_staffinvitation_target_and_reason
 which depends on `0010` and therefore preserves the complete prior graph. No
 earlier migration was overwritten, removed or disconnected.
 
+## Administrator governance
+
+Implementation status: **Implemented**. Verification status: **Pending
+Verification**.
+
+Administrator onboarding through `POST /api/v1/staff/onboarding/` creates an
+`ONBOARD` proposal when `CRM_ADMIN` is selected. It creates or reuses the
+Person/User transactionally but does not grant the role or issue an invitation.
+Existing active staff promotion is submitted through
+`POST /api/v1/staff/administrator-proposals/create/` with `PROMOTE_EXISTING`;
+the current Manager/Viewer role remains effective while pending.
+
+Operational governance routes are:
+
+- `GET /api/v1/staff/administrator-proposals/` — permission-aware paginated queue;
+- `GET /api/v1/staff/administrator-proposals/{id}/` — safe proposal detail;
+- `POST /api/v1/staff/administrator-proposals/{id}/approve/`;
+- `POST /api/v1/staff/administrator-proposals/{id}/reject/`;
+- `POST /api/v1/staff/administrator-proposals/{id}/cancel/`.
+
+Approval independently revalidates proposer, approver, target, operation,
+expiry, expected state and protected-account rules. PROMOTE atomically replaces
+the existing CRM role and invalidates sessions. ONBOARD remains approved but
+not effective, creates a CRM_ADMIN invitation whose expiration is the earlier
+of 72 hours and the proposal's 30-day expiration, and queues the existing
+transactional email job. Invitation acceptance consumes the exact approved
+ONBOARD proposal once before Administrator authority becomes effective.
+Rejection, cancellation, stale-state invalidation and approval replay are
+preserved in immutable decision history. GDPR capability governance remains a
+separate domain.
+
 ## Invitation delivery integration boundary
 
 The existing transactional email infrastructure already supports

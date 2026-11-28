@@ -9,6 +9,7 @@ from accounts.models import User
 from audit.models import AuditEvent
 from config.test_utils import test_actor
 from people.models import Person
+from notifications.models import TransactionalEmailJob
 from staff_access.administrator_governance import (
     approve_administrator_proposal,
     create_administrator_proposal,
@@ -17,6 +18,7 @@ from staff_access.administrator_governance import (
 )
 from staff_access.models import (
     StaffAdministratorProposal,
+    StaffInvitation,
     StaffRole,
     StaffRoleAssignment,
 )
@@ -83,7 +85,7 @@ class AdministratorProposalTests(TestCase):
         with self.assertRaises(ValidationError):
             approve_administrator_proposal(proposal=proposal, actor_user=self.approver)
 
-    def test_onboarding_approval_does_not_effect_authority_before_future_invitation(self):
+    def test_onboarding_approval_issues_invitation_without_effecting_authority(self):
         proposal = create_administrator_proposal(
             actor_user=self.proposer,
             operation=StaffAdministratorProposal.Operation.ONBOARD,
@@ -94,6 +96,12 @@ class AdministratorProposalTests(TestCase):
         proposal.refresh_from_db()
         self.assertEqual(proposal.status, StaffAdministratorProposal.Status.APPROVED)
         self.assertFalse(StaffRoleAssignment.objects.filter(user=self.onboard_target).exists())
+        invitation = StaffInvitation.objects.get(target_user=self.onboard_target)
+        self.assertEqual(invitation.operation, StaffAdministratorProposal.Operation.ONBOARD)
+        self.assertEqual(invitation.pending_role_codes, [StaffRole.CRM_ADMIN])
+        self.assertLessEqual(invitation.expires_at, proposal.expires_at)
+        self.assertEqual(proposal.resulting_invitation_id, invitation.pk)
+        self.assertEqual(TransactionalEmailJob.objects.get(staff_invitation=invitation).status, TransactionalEmailJob.Status.PENDING)
 
     def test_consumption_requires_exact_approved_operation(self):
         proposal = create_administrator_proposal(

@@ -94,8 +94,8 @@ def _validate_target(*, operation, target):
         if StaffRoleAssignment.objects.active().filter(user=target, role__code=_CRM_ADMIN).exists():
             raise ValidationError("The target already has CRM Administrator authority.")
     elif operation == StaffAdministratorProposal.Operation.ONBOARD:
-        if target.is_active:
-            raise ValidationError("Onboarding requires an inactive, established Staff target.")
+        if target.is_active and StaffRoleAssignment.objects.active().filter(user=target, role__family=StaffRole.CRM_ROLE_FAMILY).exists():
+            raise ValidationError("Administrator onboarding cannot replace an existing active CRM role; use promotion.")
     elif operation == StaffAdministratorProposal.Operation.REACTIVATE:
         if target.is_active:
             raise ValidationError("Reactivation requires an inactive Staff target.")
@@ -191,6 +191,30 @@ def approve_administrator_proposal(*, proposal, actor_user, request=None):
         StaffAdministratorProposalDecision.objects.create(
             proposal=proposal, outcome=proposal.status, decided_by=actor_user, reason=proposal.reason
         )
+        if proposal.operation == StaffAdministratorProposal.Operation.ONBOARD:
+            from django.conf import settings
+            from staff_access.models import StaffInvitation
+            from staff_access.services import _queue_staff_invitation_email
+            target = User.objects.select_for_update().select_related("person").get(pk=proposal.target_user_id)
+            invitation_expiry = min(
+                now + timedelta(hours=settings.STAFF_INVITATION_EXPIRY_HOURS),
+                proposal.expires_at,
+            )
+            invitation = StaffInvitation.objects.create(
+                intended_email=target.email,
+                first_name=target.person.first_name,
+                last_name=target.person.last_name,
+                pending_role_codes=[_CRM_ADMIN],
+                target_user=target,
+                operation=StaffAdministratorProposal.Operation.ONBOARD,
+                reason=proposal.reason,
+                expires_at=invitation_expiry,
+                created_by=actor_user,
+            )
+            _queue_staff_invitation_email(invitation)
+            proposal.resulting_invitation = invitation
+            proposal.save(update_fields=["resulting_invitation"])
+            _audit(proposal=proposal, actor=actor_user, event_type="STAFF_ADMIN_INVITATION_ISSUED", reason=proposal.reason, request=request)
         if proposal.operation == StaffAdministratorProposal.Operation.PROMOTE_EXISTING:
             _effect_existing_promotion(proposal=proposal, actor=actor_user, request=request)
         return proposal
@@ -257,7 +281,8 @@ def consume_administrator_proposal(*, proposal, actor_user, resulting_assignment
     """
     with transaction.atomic():
         proposal = _lock_proposal(proposal)
-        _authorized(actor_user)
+        if actor_user.pk != proposal.target_user_id:
+            _authorized(actor_user)
         if proposal.status != StaffAdministratorProposal.Status.APPROVED:
             raise ValidationError("Only an approved Administrator proposal can be consumed.")
         if expected_operation != proposal.operation:

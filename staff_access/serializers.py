@@ -1,7 +1,7 @@
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 
-from staff_access.models import CapabilityDefinition, CapabilityProposal, StaffRole
+from staff_access.models import CapabilityDefinition, CapabilityProposal, StaffRole, StaffAdministratorProposal
 
 
 class StaffOnboardingPersonLookupSerializer(serializers.Serializer):
@@ -90,6 +90,7 @@ class StaffDirectoryDetailSerializer(StaffDirectorySerializer):
     role_assignments = serializers.ListField()
     invitations = serializers.ListField()
     administrator_proposals = serializers.ListField()
+    can_propose_administrator_promotion = serializers.BooleanField()
 
 
 class StaffActivitySerializer(serializers.Serializer):
@@ -140,6 +141,19 @@ class StaffInvitationRoleUpdateSerializer(serializers.Serializer):
 
 class StaffInvitationReasonSerializer(serializers.Serializer):
     reason = serializers.CharField(min_length=1, max_length=4000, trim_whitespace=True)
+
+
+class StaffAdministratorProposalSerializer(serializers.Serializer):
+    operation = serializers.ChoiceField(choices=[
+        (StaffAdministratorProposal.Operation.ONBOARD, "Onboard Administrator"),
+        (StaffAdministratorProposal.Operation.PROMOTE_EXISTING, "Promote existing staff"),
+    ])
+    target_user_id = serializers.IntegerField(min_value=1)
+    reason = serializers.CharField(min_length=1, max_length=4000, trim_whitespace=True)
+
+
+class StaffAdministratorDecisionSerializer(serializers.Serializer):
+    reason = serializers.CharField(required=False, max_length=4000, trim_whitespace=True)
 
 
 class StaffEmailChangeRequestSerializer(serializers.Serializer):

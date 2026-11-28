@@ -57,8 +57,15 @@ from staff_access.serializers import (
     StaffInvitationInspectionSerializer,
     StaffInvitationAcceptanceSerializer,
     StaffInvitationReasonSerializer,
+    StaffAdministratorProposalSerializer,
+    StaffAdministratorDecisionSerializer,
 )
 from staff_access.onboarding import search_onboarding_people, validate_onboarding_request, submit_onboarding_request
+from staff_access.administrator_governance import (
+    create_administrator_proposal,
+    approve_administrator_proposal,
+    resolve_administrator_proposal,
+)
 from staff_access.services import (
     cancel_staff_invitation,
     create_staff_invitation,
@@ -144,7 +151,106 @@ class StaffOnboardingSubmissionView(APIView):
             invitation = submit_onboarding_request(attrs=serializer.validated_data, actor_user=request.user, request=request)
         except DjangoValidationError as error:
             raise serializers.ValidationError(error.message_dict if hasattr(error, "message_dict") else error.messages)
+        if isinstance(invitation, StaffAdministratorProposal):
+            return Response(administrator_proposal_response(invitation, request.user), status=status.HTTP_201_CREATED)
         return Response(invitation_response(invitation), status=status.HTTP_201_CREATED)
+
+
+def administrator_proposal_response(proposal, actor=None):
+    decision = getattr(proposal, "decision", None)
+    actions = []
+    if proposal.status == StaffAdministratorProposal.Status.PENDING and actor is not None:
+        if proposal.proposed_by_id == actor.pk:
+            actions.append("cancel")
+        else:
+            actions.extend(["approve", "reject"])
+    invitation = getattr(proposal, "resulting_invitation", None)
+    return {
+        "public_id": str(proposal.public_id),
+        "operation": proposal.operation,
+        "status": proposal.status,
+        "requested_role": proposal.requested_role.code,
+        "target_user_id": proposal.target_user_id,
+        "target_name": proposal.target_user.get_full_name(),
+        "proposed_by_id": proposal.proposed_by_id,
+        "approved_by_id": proposal.approved_by_id,
+        "reason": proposal.reason,
+        "created_at": proposal.created_at,
+        "expires_at": proposal.expires_at,
+        "decided_at": proposal.decided_at,
+        "effected_at": proposal.effected_at,
+        "permitted_actions": actions,
+        "decision": None if decision is None else {"outcome": decision.outcome, "decided_by_id": decision.decided_by_id, "reason": decision.reason, "created_at": decision.created_at},
+        "invitation": None if invitation is None else {"public_id": str(invitation.public_id), "expires_at": invitation.expires_at, "accepted_at": invitation.accepted_at, "revoked_at": invitation.revoked_at},
+    }
+
+
+class StaffDirectoryPagination(PageNumberPagination):
+    page_size = 25
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
+class AdministratorProposalListView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [StaffAdminPermission]
+    pagination_class = StaffDirectoryPagination
+
+    def get(self, request):
+        queryset = StaffAdministratorProposal.objects.select_related("requested_role", "target_user__person", "proposed_by", "approved_by").order_by("-created_at", "-pk")
+        status_filter = request.query_params.get("status")
+        operation = request.query_params.get("operation")
+        search = request.query_params.get("q", "").strip()
+        if status_filter in dict(StaffAdministratorProposal.Status.choices): queryset = queryset.filter(status=status_filter)
+        if operation in dict(StaffAdministratorProposal.Operation.choices): queryset = queryset.filter(operation=operation)
+        if search: queryset = queryset.filter(Q(target_user__person__first_name__icontains=search) | Q(target_user__person__last_name__icontains=search))
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+        return paginator.get_paginated_response([administrator_proposal_response(item, request.user) for item in page])
+
+
+class AdministratorProposalDetailView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [StaffAdminPermission]
+
+    def get(self, request, proposal_id):
+        proposal = StaffAdministratorProposal.objects.select_related("requested_role", "target_user__person", "proposed_by", "approved_by").filter(public_id=proposal_id).first()
+        if proposal is None: return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(administrator_proposal_response(proposal, request.user))
+
+
+class AdministratorProposalCreateView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [StaffAdminPermission]
+
+    def post(self, request):
+        serializer = StaffAdministratorProposalSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            target = User.objects.select_related("person").get(pk=serializer.validated_data["target_user_id"])
+            proposal = create_administrator_proposal(actor_user=request.user, target_user=target, request=request, **{key: serializer.validated_data[key] for key in ("operation", "reason")})
+        except (DjangoValidationError, PermissionError) as error:
+            raise serializers.ValidationError(error.message_dict if hasattr(error, "message_dict") else str(error))
+        except User.DoesNotExist: return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(administrator_proposal_response(proposal, request.user), status=status.HTTP_201_CREATED)
+
+
+class AdministratorProposalActionView(APIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [StaffAdminPermission]
+
+    def post(self, request, proposal_id, action):
+        proposal = StaffAdministratorProposal.objects.filter(public_id=proposal_id).first()
+        if proposal is None: return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        serializer = StaffAdministratorDecisionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            if action == "approve": result = approve_administrator_proposal(proposal=proposal, actor_user=request.user, request=request)
+            elif action in ("reject", "cancel"): result = resolve_administrator_proposal(proposal=proposal, actor_user=request.user, outcome=action.upper(), reason=serializer.validated_data.get("reason"), request=request)
+            else: return Response({"detail": "Unknown proposal action."}, status=status.HTTP_404_NOT_FOUND)
+        except (DjangoValidationError, PermissionError) as error:
+            raise serializers.ValidationError(error.message_dict if hasattr(error, "message_dict") else str(error))
+        return Response(administrator_proposal_response(result, request.user))
 
 
 class StaffInvitationInspectView(APIView):
@@ -250,12 +356,6 @@ def _staff_row(user, request):
         "protected_account": bool(user.is_staff or user.is_superuser),
         "updated_at": getattr(user.person, "updated_at", user.date_joined),
     }
-
-
-class StaffDirectoryPagination(PageNumberPagination):
-    page_size = 25
-    page_size_query_param = "page_size"
-    max_page_size = 100
 
 
 class StaffDirectoryView(generics.ListAPIView):
@@ -506,6 +606,19 @@ def _is_security_relevant_validation(error):
         "acting user", "active staff", "canonical crm role", "eligible",
         "restricted", "self-approval", "self administration",
     ))
+    active_role_codes = set(StaffRoleAssignment.objects.active().filter(user=user, role__family=StaffRole.CRM_ROLE_FAMILY).values_list("role__code", flat=True))
+    row["can_propose_administrator_promotion"] = bool(
+        user.is_active
+        and active_role_codes.intersection({StaffRole.CRM_MANAGER, StaffRole.CRM_VIEWER})
+        and user.pk != request.user.pk
+        and not user.is_staff
+        and not user.is_superuser
+        and not StaffAdministratorProposal.objects.filter(
+            target_user=user,
+            operation=StaffAdministratorProposal.Operation.PROMOTE_EXISTING,
+            status__in=(StaffAdministratorProposal.Status.PENDING, StaffAdministratorProposal.Status.APPROVED),
+        ).exists()
+    )
 
 
 def _pending_proposal_conflict(*, target_user=None, role=None, capability=None):
