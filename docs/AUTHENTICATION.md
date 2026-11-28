@@ -75,6 +75,7 @@ Password recovery uses Django's standard stateless password-reset token generato
 - a successful recovery writes `PASSWORD_RESET` audit history without passwords, tokens, URLs, email payloads, or provider responses
 - recovery does not log the user in; existing sessions naturally fail Django's password session-hash validation after the password changes
 - token expiry uses Django's `PASSWORD_RESET_TIMEOUT` setting and its framework default when not configured here
+- Staff Management administrative reset requests use the same token and confirmation flow, queue a durable `ADMIN_PASSWORD_RESET` job, and bind delivery to the current registered `User.email`; the endpoint never returns a token or URL
 
 ## Transactional Email Infrastructure
 
@@ -89,7 +90,7 @@ The backend uses the Brevo Transactional Email API for server-to-server transact
 - `BREVO_MARKETING_WEBHOOK_USERNAME` and `BREVO_MARKETING_WEBHOOK_PASSWORD` authenticate inbound Brevo marketing webhooks; they are separate from `BREVO_API_KEY` and must remain backend-only
 - feature code supplies the Brevo template ID and safe parameter names; template parameters may contain sensitive values and are not logged
 - Brevo credentials are backend-only environment configuration and must never be committed, returned by APIs, sent to the frontend, or stored in audit metadata
-- the generic notification service supports Brevo templates such as a future password-reset template receiving `params.reset_url`
+- administrative Staff password-reset jobs use the configured template with only the existing `params.reset_url` field; raw tokens are generated in memory by the worker and are never persisted
 
 The Brevo marketing integration reuses `BREVO_API_KEY` and `BREVO_MARKETING_LIST_ID`, but is intentionally separate from `notifications.providers.brevo.BrevoTransactionalEmailProvider`. The inspection command remains read-only; the manual one-Person sync command is the only current marketing mutation path and does not print credentials or raw provider responses.
 

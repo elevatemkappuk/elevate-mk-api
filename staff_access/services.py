@@ -488,6 +488,66 @@ def enable_user_account(*, target_user, actor_user, reason, request=None):
         return locked
 
 
+def request_administrative_password_reset(*, target_user, actor_user, reason, request=None):
+    """Queue a reset email without changing credentials or exposing a token."""
+    from staff_access.authorization import authorize_staff_operation, StaffOperation
+    from notifications.models import TransactionalEmailJob
+
+    reason = str(reason or "").strip()
+    if not reason:
+        raise ValidationError({"reason": "A reason is required for an administrative password reset."})
+    authorize_staff_operation(
+        actor=actor_user,
+        target=target_user,
+        operation=StaffOperation.ADMIN_PASSWORD_RESET,
+        request=request,
+    )
+    template_id = str(getattr(settings, "BREVO_PASSWORD_RESET_TEMPLATE_ID", "") or "").strip()
+    if not template_id:
+        raise ValidationError("Administrative password reset email is not configured.")
+    with transaction.atomic():
+        locked = User.objects.select_for_update().select_related("person").get(pk=target_user.pk)
+        if locked.person.record_type != Person.RecordType.STAFF:
+            raise ValidationError("Only STAFF accounts may receive administrative password resets.")
+        if not locked.is_active or locked.account_lifecycle_state != User.AccountLifecycleState.ACTIVE:
+            raise ValidationError("Only active Staff accounts may receive administrative password resets.")
+        if not locked.has_usable_password():
+            raise ValidationError("The target account does not have a usable password.")
+        recent_cutoff = timezone.now() - timedelta(hours=1)
+        if TransactionalEmailJob.objects.filter(
+            password_reset_user=locked,
+            job_type=TransactionalEmailJob.JobType.ADMIN_PASSWORD_RESET,
+            status=TransactionalEmailJob.Status.PENDING,
+            created_at__gte=recent_cutoff,
+        ).exists():
+            raise ValidationError("A password-reset email was recently queued for this account.")
+        job = TransactionalEmailJob.objects.create(
+            password_reset_user=locked,
+            template_id=template_id,
+            recipient_email=locked.email,
+            recipient_name=locked.get_full_name() or "",
+            first_name=locked.person.first_name,
+            expires_in_hours=72,
+            job_type=TransactionalEmailJob.JobType.ADMIN_PASSWORD_RESET,
+        )
+        _lifecycle_audit(
+            action=AuditEvent.Action.PASSWORD_RESET,
+            actor_user=actor_user,
+            target_user=locked,
+            event_type="ADMINISTRATIVE_PASSWORD_RESET_REQUESTED",
+            reason=reason,
+            metadata={
+                "operation": "ADMINISTRATIVE_PASSWORD_RESET",
+                "outcome": "QUEUED",
+                "password_unchanged": True,
+                "recipient_bound_to_registered_login": True,
+                "job_id": str(job.pk),
+            },
+            request=request,
+        )
+        return job
+
+
 def assign_staff_role(*, user, role, assigned_by=None, audit=True, return_details=False):
     """Assign or reactivate one Staff role under the shared lifecycle lock contract."""
     if assigned_by is None:
@@ -731,30 +791,65 @@ def activate_staff_role(role, *, actor_user=None):
         return locked_role
 
 
-def reactivate_staff_user(*, target_user, actor_user, reason):
-    """Start a fresh invitation; never restores the old User or assignments."""
+def reactivate_staff_user(*, target_user, actor_user, role_code, reason, request=None):
+    """Start a fresh role-bound invitation or Administrator proposal."""
     from staff_access.authorization import authorize_staff_operation, StaffOperation
-    authorize_staff_operation(actor=actor_user, target=target_user, operation=StaffOperation.ACCESS_REACTIVATION)
+    authorize_staff_operation(actor=actor_user, target=target_user, operation=StaffOperation.ACCESS_REACTIVATION, request=request)
     reason = str(reason or "").strip()
     if not reason:
         raise ValidationError({"reason": "A reason is required for staff reactivation."})
-    if target_user.person.record_type != "STAFF":
+    role_code = str(role_code or "")
+    if role_code not in {StaffRole.CRM_ADMIN, StaffRole.CRM_MANAGER, StaffRole.CRM_VIEWER}:
+        raise ValidationError({"role_code": "A canonical CRM role is required for reactivation."})
+    target_user = User.objects.select_related("person").get(pk=target_user.pk)
+    if target_user.person.record_type != Person.RecordType.STAFF:
         raise ValidationError("Only STAFF accounts can be reactivated through Staff lifecycle operations.")
-    if target_user.is_active:
-        raise ValidationError("The complete invitation-backed staff reactivation workflow remains deferred.")
     if target_user.account_lifecycle_state == User.AccountLifecycleState.DISABLED:
         raise ValidationError("Globally disabled accounts require separate account enablement before reactivation.")
-    roles = list(StaffRoleAssignment.objects.filter(user=target_user).values_list("role__code", flat=True))
-    if StaffRole.CRM_ADMIN in roles:
-        raise ValidationError("CRM Administrator reactivation requires the approved Administrator workflow.")
-    return create_staff_invitation(
-        actor_user=actor_user,
-        email=target_user.email,
-        first_name=target_user.person.first_name,
-        last_name=target_user.person.last_name,
-        role_codes=[code for code in roles if code in {StaffRole.CRM_MANAGER, StaffRole.CRM_VIEWER}],
-        reason=reason,
-    )
+    if StaffRoleAssignment.objects.active().filter(user=target_user, role__family=StaffRole.CRM_ROLE_FAMILY).exists():
+        raise ValidationError("The target already has active CRM staff access.")
+    with transaction.atomic():
+        if StaffInvitation.objects.select_for_update().filter(
+            target_user=target_user,
+            operation=StaffAdministratorProposal.Operation.REACTIVATE,
+            accepted_at__isnull=True,
+            revoked_at__isnull=True,
+            superseded_at__isnull=True,
+        ).exists():
+            raise ValidationError({"invitation": "A current reactivation invitation already exists."})
+        if role_code == StaffRole.CRM_ADMIN:
+            from staff_access.administrator_governance import create_administrator_proposal
+            return create_administrator_proposal(
+                actor_user=actor_user,
+                operation=StaffAdministratorProposal.Operation.REACTIVATE,
+                target_user=target_user,
+                reason=reason,
+                request=request,
+            )
+        role = StaffRole.objects.get(code=role_code, family=StaffRole.CRM_ROLE_FAMILY, is_active=True)
+        invitation = StaffInvitation.objects.create(
+            intended_email=target_user.email,
+            first_name=target_user.person.first_name,
+            last_name=target_user.person.last_name,
+            pending_role_codes=[role.code],
+            target_user=target_user,
+            operation=StaffAdministratorProposal.Operation.REACTIVATE,
+            reason=reason,
+            token_hash=None,
+            expires_at=timezone.now() + timedelta(hours=settings.STAFF_INVITATION_EXPIRY_HOURS),
+            created_by=actor_user,
+        )
+        _queue_staff_invitation_email(invitation)
+        _lifecycle_audit(
+            action=AuditEvent.Action.CAPABILITY_PERMISSION_MUTATED,
+            actor_user=actor_user,
+            target_user=target_user,
+            event_type="STAFF_REACTIVATION_INVITATION_ISSUED",
+            reason=reason,
+            metadata={"invitation_id": str(invitation.public_id), "requested_role": role.code},
+            request=request,
+        )
+        return invitation
 
 
 def cancel_staff_invitation(*, invitation, actor_user, reason=""):
@@ -944,7 +1039,7 @@ def redeem_staff_invitation(*, public_id, raw_token, password=None, authenticate
             from staff_access.authorization import can_access_staff_management
             administrator_proposal = StaffAdministratorProposal.objects.select_for_update().filter(
                 target_user=user,
-                operation=StaffAdministratorProposal.Operation.ONBOARD,
+                operation__in=(StaffAdministratorProposal.Operation.ONBOARD, StaffAdministratorProposal.Operation.REACTIVATE),
                 status=StaffAdministratorProposal.Status.APPROVED,
                 resulting_invitation=invitation,
             ).first()
@@ -964,7 +1059,7 @@ def redeem_staff_invitation(*, public_id, raw_token, password=None, authenticate
                 proposal=administrator_proposal,
                 actor_user=user,
                 resulting_assignment=StaffRoleAssignment.objects.get(user=user, role=role),
-                expected_operation=StaffAdministratorProposal.Operation.ONBOARD,
+                expected_operation=invitation.operation,
             )
         invitation.accepted_at = timezone.now()
         invitation.token_hash = None

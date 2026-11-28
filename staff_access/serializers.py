@@ -91,6 +91,12 @@ class StaffDirectoryDetailSerializer(StaffDirectorySerializer):
     invitations = serializers.ListField()
     administrator_proposals = serializers.ListField()
     can_propose_administrator_promotion = serializers.BooleanField()
+    can_change_role = serializers.BooleanField()
+    can_deactivate = serializers.BooleanField()
+    can_reactivate = serializers.BooleanField()
+    can_disable_account = serializers.BooleanField()
+    can_enable_account = serializers.BooleanField()
+    can_send_password_reset = serializers.BooleanField()
 
 
 class StaffActivitySerializer(serializers.Serializer):
@@ -168,6 +174,18 @@ class StaffEmailChangeConfirmSerializer(serializers.Serializer):
 class StaffLifecycleSerializer(serializers.Serializer):
     user_id = serializers.IntegerField(min_value=1)
     reason = serializers.CharField(min_length=1, max_length=4000, trim_whitespace=True)
+
+
+class StaffRoleChangeSerializer(StaffLifecycleSerializer):
+    role_code = serializers.ChoiceField(choices=StaffRole.CANONICAL_ROLES)
+
+
+class StaffReactivationSerializer(StaffLifecycleSerializer):
+    role_code = serializers.ChoiceField(choices=StaffRole.CANONICAL_ROLES)
+
+
+class StaffPasswordResetSerializer(StaffLifecycleSerializer):
+    pass
 
 
 class EffectiveAccessSerializer(serializers.Serializer):

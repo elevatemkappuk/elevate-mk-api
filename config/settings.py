@@ -269,6 +269,7 @@ REST_FRAMEWORK = {
         "staff_invitation_accept": "10/hour",
         "staff_invitation_issue": "30/hour",
         "staff_invitation_resend": "10/hour",
+        "staff_administrative_password_reset": "5/hour",
     },
 }
 

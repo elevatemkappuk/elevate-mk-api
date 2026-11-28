@@ -180,6 +180,7 @@ The following is the current route inventory under `/api/v1/`. Authentication la
 | `GET` | `/api/v1/staff/access/me/` | Authenticated CRM session with an active `CRM_ADMIN`, `CRM_MANAGER`, or `CRM_VIEWER` role |
 | `POST` | `/api/v1/auth/password-reset/` | Public; generic response |
 | `POST` | `/api/v1/auth/password-reset/confirm/` | Public; uid/token required |
+| `POST` | `/api/v1/staff/account/password-reset/` | CRM Staff Administrator; target user and mandatory reason |
 
 ### Dashboard
 

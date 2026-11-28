@@ -44,6 +44,9 @@ from staff_access.serializers import (
     StaffInvitationRedeemSerializer,
     StaffInvitationRoleUpdateSerializer,
     StaffLifecycleSerializer,
+    StaffRoleChangeSerializer,
+    StaffReactivationSerializer,
+    StaffPasswordResetSerializer,
     EffectiveAccessSerializer,
     CapabilityGovernanceMutationSerializer,
     CapabilityProposalDecisionSerializer,
@@ -76,7 +79,12 @@ from staff_access.services import (
     resend_staff_invitation,
     update_pending_staff_invitation_roles,
     offboard_staff_user,
+    deactivate_staff_access,
     reactivate_staff_user,
+    replace_staff_role,
+    disable_user_account,
+    enable_user_account,
+    request_administrative_password_reset,
 )
 from staff_access.governance import (
     apply_capability_proposal,
@@ -463,6 +471,19 @@ def _staff_detail(user, request):
     row["administrator_proposals"] = list(StaffAdministratorProposal.objects.filter(target_user=user).order_by("-created_at").values(
         "public_id", "operation", "status", "expires_at", "created_at", "decided_at", "effected_at",
     )[:20])
+    active_crm_role = bool(row["crm_role"])
+    safe_target = user.pk != request.user.pk and not user.is_staff and not user.is_superuser
+    row["can_change_role"] = active_crm_role and safe_target
+    row["can_deactivate"] = active_crm_role and safe_target
+    row["can_reactivate"] = not active_crm_role and safe_target and user.account_lifecycle_state != User.AccountLifecycleState.DISABLED
+    row["can_disable_account"] = safe_target and user.account_lifecycle_state == User.AccountLifecycleState.ACTIVE
+    row["can_enable_account"] = safe_target and user.account_lifecycle_state == User.AccountLifecycleState.DISABLED
+    row["can_send_password_reset"] = (
+        safe_target
+        and user.person.record_type == Person.RecordType.STAFF
+        and user.account_lifecycle_state == User.AccountLifecycleState.ACTIVE
+        and user.has_usable_password()
+    )
     return row
 
 
@@ -1338,10 +1359,44 @@ class StaffOffboardView(generics.GenericAPIView):
         return Response({"detail": "Staff account offboarded."})
 
 
+class StaffDeactivateView(StaffOffboardView):
+    """Explicit route for operational Staff access deactivation."""
+
+    def post(self, request):
+        response = super().post(request)
+        if response.status_code < 400:
+            response.data = {"detail": "Staff access deactivated."}
+        return response
+
+
+class StaffRoleChangeView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [IsAuthenticated, StaffAdminPermission]
+    serializer_class = StaffRoleChangeSerializer
+
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            target = User.objects.select_related("person").get(pk=serializer.validated_data["user_id"])
+            assignment = replace_staff_role(
+                user=target,
+                role=serializer.validated_data["role_code"],
+                replaced_by=request.user,
+                reason=serializer.validated_data["reason"],
+                request=request,
+            )
+        except User.DoesNotExist:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        except (DjangoValidationError, PermissionError) as error:
+            raise serializers.ValidationError(error.message_dict if hasattr(error, "message_dict") else str(error))
+        return Response({"detail": "CRM role changed.", "user_id": target.pk, "role_code": assignment.role.code})
+
+
 class StaffReactivateView(generics.GenericAPIView):
     authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated, StaffAdminPermission]
-    serializer_class = StaffLifecycleSerializer
+    serializer_class = StaffReactivationSerializer
 
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
@@ -1351,10 +1406,75 @@ class StaffReactivateView(generics.GenericAPIView):
             invitation = reactivate_staff_user(
                 target_user=target,
                 actor_user=request.user,
+                role_code=serializer.validated_data["role_code"],
                 reason=serializer.validated_data["reason"],
+                request=request,
             )
         except User.DoesNotExist:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except DjangoValidationError as error:
             raise serializers.ValidationError(error.message_dict if hasattr(error, "message_dict") else error.messages)
+        if isinstance(invitation, StaffAdministratorProposal):
+            return Response(administrator_proposal_response(invitation, request.user), status=status.HTTP_201_CREATED)
         return Response(invitation_response(invitation), status=status.HTTP_201_CREATED)
+
+
+class StaffAccountLifecycleView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [IsAuthenticated, StaffAdminPermission]
+    serializer_class = StaffLifecycleSerializer
+    lifecycle_operation = None
+
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            target = User.objects.select_related("person").get(pk=serializer.validated_data["user_id"])
+            if self.lifecycle_operation == "disable":
+                disable_user_account(target_user=target, actor_user=request.user, reason=serializer.validated_data["reason"], request=request)
+                detail = "Global account disabled."
+            else:
+                enable_user_account(target_user=target, actor_user=request.user, reason=serializer.validated_data["reason"], request=request)
+                detail = "Global account enabled. Fresh authentication is required."
+        except User.DoesNotExist:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        except (DjangoValidationError, PermissionError) as error:
+            raise serializers.ValidationError(error.message_dict if hasattr(error, "message_dict") else str(error))
+        return Response({"detail": detail, "user_id": target.pk, "account_state": target.account_lifecycle_state})
+
+
+class StaffAccountDisableView(StaffAccountLifecycleView):
+    lifecycle_operation = "disable"
+
+
+class StaffAccountEnableView(StaffAccountLifecycleView):
+    lifecycle_operation = "enable"
+
+
+class StaffAdministrativePasswordResetView(generics.GenericAPIView):
+    authentication_classes = CRM_SESSION_AUTHENTICATION_CLASSES
+    permission_classes = [IsAuthenticated, StaffAdminPermission]
+    serializer_class = StaffPasswordResetSerializer
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "staff_administrative_password_reset"
+
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            target = User.objects.select_related("person").get(pk=serializer.validated_data["user_id"])
+            job = request_administrative_password_reset(
+                target_user=target,
+                actor_user=request.user,
+                reason=serializer.validated_data["reason"],
+                request=request,
+            )
+        except User.DoesNotExist:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        except (DjangoValidationError, PermissionError) as error:
+            raise serializers.ValidationError(error.message_dict if hasattr(error, "message_dict") else str(error))
+        return Response({
+            "detail": "Password-reset email queued for the registered login address.",
+            "request_id": job.pk,
+            "delivery_status": "QUEUED",
+        }, status=status.HTTP_202_ACCEPTED)

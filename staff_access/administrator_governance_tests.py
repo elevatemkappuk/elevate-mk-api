@@ -125,6 +125,22 @@ class AdministratorProposalTests(TestCase):
                 expected_operation=StaffAdministratorProposal.Operation.REACTIVATE,
             )
 
+    def test_reactivation_approval_issues_reactivate_bound_invitation(self):
+        proposal = create_administrator_proposal(
+            actor_user=self.proposer,
+            operation=StaffAdministratorProposal.Operation.REACTIVATE,
+            target_user=self.onboard_target,
+            reason="Restore Administrator appointment after review.",
+        )
+        approve_administrator_proposal(proposal=proposal, actor_user=self.approver)
+        proposal.refresh_from_db()
+        invitation = StaffInvitation.objects.get(target_user=self.onboard_target)
+        self.assertEqual(proposal.status, StaffAdministratorProposal.Status.APPROVED)
+        self.assertEqual(invitation.operation, StaffAdministratorProposal.Operation.REACTIVATE)
+        self.assertEqual(invitation.pending_role_codes, [StaffRole.CRM_ADMIN])
+        self.assertEqual(proposal.resulting_invitation_id, invitation.pk)
+        self.assertLessEqual(invitation.expires_at, proposal.expires_at)
+
     def test_expired_proposal_is_not_approvable(self):
         proposal = create_administrator_proposal(
             actor_user=self.proposer,

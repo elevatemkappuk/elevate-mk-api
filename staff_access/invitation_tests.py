@@ -108,7 +108,7 @@ class StaffInvitationTests(TestCase):
         self.assertEqual(replacement.pending_role_codes, [StaffRole.CRM_MANAGER])
         self.assertEqual(StaffInvitation.objects.filter(intended_email="roles@example.com").count(), 2)
 
-    def test_reactivation_does_not_use_a_temporary_direct_path(self):
+    def test_reactivation_issues_a_role_bound_invitation(self):
         target = User.objects.create_user(
             email="reactivate@example.com", password="Old-password-123!",
             person=Person.objects.create(first_name="Re", last_name="Activate", primary_email="reactivate@example.com", record_type=Person.RecordType.STAFF),
@@ -123,12 +123,14 @@ class StaffInvitationTests(TestCase):
             actor_user=self.actor,
             reason="Remove operational staff access before reactivation review.",
         )
-        with self.assertRaises(ValidationError):
-            reactivate_staff_user(
-                target_user=target,
-                actor_user=self.actor,
-                reason="Reactivation requires current role review.",
-            )
+        invitation = reactivate_staff_user(
+            target_user=target,
+            actor_user=self.actor,
+            role_code=StaffRole.CRM_VIEWER,
+            reason="Reactivation requires current role review.",
+        )
+        self.assertEqual(invitation.operation, "REACTIVATE")
+        self.assertEqual(invitation.pending_role_codes, [StaffRole.CRM_VIEWER])
 
     def test_invitation_rejects_passwords_that_fail_configured_validators(self):
         invitation = create_staff_invitation(

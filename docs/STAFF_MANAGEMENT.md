@@ -1,6 +1,6 @@
 # Staff Management V1
 
-Status: **Directory, onboarding submission and secure invitation contracts implemented; runtime verification pending**
+Status: **Directory, invitation, staff-access and global account lifecycle contracts implemented; runtime verification pending**
 
 This document is the API repository's authoritative living guide for Staff
 Management V1. It records approved requirements and architecture, existing
@@ -81,8 +81,8 @@ The authoritative submission is `POST /api/v1/staff/onboarding/`. It independent
 revalidates identity, account state, duplicate signals, role and reason, then
 atomically reuses or creates the Person/User, creates a pending invitation and
 durable `STAFF_INVITATION` email job, and records attribution. Manager and Viewer
-roles are supported; CRM Administrator submission remains restricted to the
-separate approved governance workflow.
+roles create invitations; CRM Administrator submission creates a separately
+approved governance proposal.
 
 ## Invitation lifecycle
 
@@ -143,11 +143,11 @@ Operational governance routes are:
 
 Approval independently revalidates proposer, approver, target, operation,
 expiry, expected state and protected-account rules. PROMOTE atomically replaces
-the existing CRM role and invalidates sessions. ONBOARD remains approved but
+the existing CRM role and invalidates sessions. ONBOARD and REACTIVATE remain approved but
 not effective, creates a CRM_ADMIN invitation whose expiration is the earlier
 of 72 hours and the proposal's 30-day expiration, and queues the existing
 transactional email job. Invitation acceptance consumes the exact approved
-ONBOARD proposal once before Administrator authority becomes effective.
+ONBOARD or REACTIVATE proposal once before Administrator authority becomes effective.
 Rejection, cancellation, stale-state invalidation and approval replay are
 preserved in immutable decision history. GDPR capability governance remains a
 separate domain.
@@ -281,8 +281,8 @@ evidence. It does not change `User.is_active`, passwords, Person, Membership
 or Community eligibility. Future complementary role families are outside this
 CRM-family operation.
 
-`disable_user_account` and `enable_user_account` are separate internal service
-foundations. Disablement retains role-assignment history, sets
+`disable_user_account` and `enable_user_account` are the authoritative global
+account lifecycle services exposed through the operational API. Disablement retains role-assignment history, sets
 `User.account_lifecycle_state` to `DISABLED`, revokes global and CRM
 credentials, cancels incompatible lifecycle state and preserves the final
 Administrator invariant. Enablement accepts only an explicitly disabled
@@ -293,10 +293,51 @@ is required.
 
 The new account lifecycle state distinguishes `ACTIVE`, `PENDING_ACTIVATION`
 and `DISABLED`; existing inactive accounts are classified as disabled because
-`is_active` alone cannot distinguish those states. The existing reactivation
-entry point is restricted rather than used as a temporary bypass; complete
-invitation-backed reactivation, including CRM_ADMIN approval consumption,
-remains planned for the invitation-backed reactivation workflow.
+`is_active` alone cannot distinguish those states. Reactivation reuses the
+existing Person and User records. Manager and Viewer requests issue a
+role-bound `REACTIVATE` invitation; Administrator requests create a
+`REACTIVATE` proposal and issue an invitation only after independent approval.
+Disabled global accounts require separate account enablement and are never
+silently enabled.
+
+The global account lifecycle endpoints are:
+
+```text
+POST /api/v1/staff/account/disable/
+POST /api/v1/staff/account/enable/
+POST /api/v1/staff/account/password-reset/
+```
+
+Both require a target User identifier and mandatory reason. Backend
+authorization independently enforces administrator access, self-target and
+protected-account restrictions, target lifecycle validity and final operational
+Administrator continuity. Disablement invalidates global and CRM sessions,
+Mobile sessions, password-reset eligibility, incompatible invitations,
+administrator proposals and pending login-email changes. Enablement requires
+fresh authentication and never resurrects invalidated credentials or revoked
+and suspended authority.
+
+Administrative password-reset initiation requires an active Staff account,
+uses only the registered `User.email`, and returns a queued status plus opaque
+request reference. It never accepts a password, recipient override, token,
+reset URL or redirect. The request is persisted as a `TransactionalEmailJob`
+using job type `ADMIN_PASSWORD_RESET`; the worker rechecks account state and
+generates the existing Django reset token only in memory immediately before
+delivery. The configured template is `BREVO_PASSWORD_RESET_TEMPLATE_ID` (local
+configuration currently identifies template `10`) with the existing
+`reset_url` parameter. No provider call is made by the API endpoint.
+
+The endpoint is throttled at `5/hour` per existing DRF scoped-throttle
+configuration, and a second pending request for the same target within one
+hour is rejected. A successful request does not change the password or revoke
+credentials; successful reset completion continues to use the shared public
+confirmation service and credential-revocation path.
+
+Authentication compatibility was source-reviewed across the API's CRM and
+Community session boundaries, Django login/password-reset paths, and Mobile
+JWT refresh and credential-revocation paths. This confirms the intended
+enforcement contract, but is not runtime verification; full API, CRM,
+Community, and Mobile execution remains deferred until final hardening.
 
 Lifecycle tests were added but not executed during implementation, per the
 final-hardening-only testing policy. Django checks, migration-drift checks and
@@ -515,8 +556,8 @@ payloads or unnecessary personal data.
 
 ## API surface
 
-The following read-only and validation contracts are implemented; persisted
-mutation contracts below remain planned:
+The following read-only, validation and operational contracts are implemented
+with runtime verification pending:
 
 ```text
 GET  /api/v1/staff/directory/
@@ -525,23 +566,25 @@ GET  /api/v1/staff/directory/{user_id}/activity/
 GET  /api/v1/staff/onboarding/roles/
 GET  /api/v1/staff/onboarding/people/?q={query}
 POST /api/v1/staff/onboarding/validate/
-```
-
-The following mutation contracts remain planned:
-
-```text
 POST /api/v1/staff/onboarding/
+POST /api/v1/staff/role-change/
+POST /api/v1/staff/deactivate/
+POST /api/v1/staff/reactivate/
+POST /api/v1/staff/account/disable/
+POST /api/v1/staff/account/enable/
 POST /api/v1/staff/invitations/{id}/resend/
 POST /api/v1/staff/invitations/{id}/cancel/
+GET  /api/v1/staff/administrator-proposals/
+GET  /api/v1/staff/administrator-proposals/{id}/
+POST /api/v1/staff/administrator-proposals/{id}/approve/
+POST /api/v1/staff/administrator-proposals/{id}/reject/
+POST /api/v1/staff/administrator-proposals/{id}/cancel/
+```
+
+The following mutation contracts remain outside this implementation:
+
+```text
 POST /api/v1/staff/invitations/{id}/accept/
-POST /api/v1/staff/admin-proposals/
-POST /api/v1/staff/admin-proposals/{id}/approve/
-POST /api/v1/staff/admin-proposals/{id}/reject/
-POST /api/v1/staff/{id}/role/
-POST /api/v1/staff/{id}/deactivate/
-POST /api/v1/staff/{id}/reactivate/
-POST /api/v1/staff/{id}/account-disable/
-POST /api/v1/staff/{id}/account-enable/
 POST /api/v1/staff/{id}/password-reset/
 POST /api/v1/staff/{id}/email-change/
 GET  /api/v1/staff/{id}/audit-history/

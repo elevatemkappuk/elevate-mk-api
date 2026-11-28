@@ -14,6 +14,7 @@ from django.utils import timezone
 from community.models import CommunityAccountInvitation, CommunityEmailChangeRequest
 from staff_access.models import StaffEmailChangeRequest, StaffInvitation
 from community.services import build_community_activation_url, build_community_email_change_verification_url
+from accounts.views import build_password_reset_url
 from notifications.exceptions import TransactionalEmailConfigurationError, TransactionalEmailError
 from notifications.models import TransactionalEmailJob
 from notifications.services import send_transactional_email
@@ -157,6 +158,8 @@ def _prepare_send(job_id):
         return _prepare_staff_invitation_send(job)
     if job.job_type == TransactionalEmailJob.JobType.STAFF_EMAIL_CHANGE:
         return _prepare_staff_email_change_send(job)
+    if job.job_type == TransactionalEmailJob.JobType.ADMIN_PASSWORD_RESET:
+        return _prepare_administrative_password_reset_send(job)
     invitation_id = job.invitation_id
     invitation = CommunityAccountInvitation.objects.select_for_update().get(pk=invitation_id)
     job = TransactionalEmailJob.objects.select_for_update().get(pk=job.pk)
@@ -265,6 +268,32 @@ def _prepare_staff_email_change_send(job):
             "first_name": job.first_name,
             "verification_url": f"{settings.CRM_FRONTEND_URL.rstrip('/')}/staff/email-change/{change.pk}/{raw_token}",
             "expires_in_hours": job.expires_in_hours,
+        },
+    }
+
+
+def _prepare_administrative_password_reset_send(job):
+    user = get_user_model().objects.select_for_update().select_related("person").get(pk=job.password_reset_user_id)
+    job = TransactionalEmailJob.objects.select_for_update().get(pk=job.pk)
+    if (
+        not user.is_active
+        or user.account_lifecycle_state != user.AccountLifecycleState.ACTIVE
+        or not user.has_usable_password()
+    ):
+        _cancel_job(job, "PASSWORD_RESET_ACCOUNT_NOT_ELIGIBLE")
+        return None
+    # Resolve the recipient at delivery preparation time so a pending job never
+    # sends a recovery credential to an obsolete login address.
+    job.recipient_email = user.email
+    job.recipient_name = user.get_full_name() or ""
+    job.first_name = user.person.first_name
+    job.save(update_fields=["recipient_email", "recipient_name", "first_name", "updated_at"])
+    return {
+        "recipient_email": user.email,
+        "recipient_name": user.get_full_name() or None,
+        "template_id": job.template_id,
+        "template_params": {
+            "reset_url": build_password_reset_url(user=user, frontend_url=settings.CRM_FRONTEND_URL),
         },
     }
 

@@ -2,9 +2,12 @@ from unittest.mock import patch
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.test import TestCase
+from django.test import override_settings
 
 from accounts.models import User
 from accounts.revocation import issue_mobile_token_pair
+from accounts.revocation import validate_mobile_token_claims
+from rest_framework.exceptions import AuthenticationFailed
 from audit.models import AuditEvent
 from config.test_utils import test_actor
 from people.models import Person
@@ -15,6 +18,7 @@ from staff_access.models import (
     StaffRole,
     StaffRoleAssignment,
 )
+from notifications.models import TransactionalEmailJob
 from staff_access.exceptions import FinalCrmAdminProtectionError
 from staff_access.services import (
     deactivate_staff_access,
@@ -135,6 +139,68 @@ class StaffLifecycleFoundationTests(TestCase):
             StaffCapabilityAssignment.objects.get(user=self.target, capability=self.capability).state,
             StaffCapabilityAssignment.State.ACTIVE,
         )
+
+    def test_invalidated_mobile_credentials_remain_invalid_after_enablement(self):
+        refresh = issue_mobile_token_pair(user=self.target)
+        disable_user_account(
+            target_user=self.target,
+            actor_user=self.actor,
+            reason="Invalidate all credentials before account review.",
+        )
+        enable_user_account(
+            target_user=self.target,
+            actor_user=self.actor,
+            reason="Restore account eligibility after review.",
+        )
+        self.target.refresh_from_db()
+        with self.assertRaises(AuthenticationFailed):
+            validate_mobile_token_claims(user=self.target, token=refresh)
+
+    def test_pending_activation_account_cannot_be_enabled_as_disabled_account(self):
+        pending = User.objects.create_user(
+            email="pending-lifecycle@example.com",
+            password="testpass123",
+            person_first_name="Pending",
+            person_last_name="Lifecycle",
+            person_record_type=Person.RecordType.STAFF,
+            is_active=False,
+            account_lifecycle_state=User.AccountLifecycleState.PENDING_ACTIVATION,
+        )
+        with self.assertRaises(ValidationError):
+            enable_user_account(
+                target_user=pending,
+                actor_user=self.actor,
+                reason="Attempt to bypass invitation acceptance.",
+            )
+
+    @override_settings(BREVO_PASSWORD_RESET_TEMPLATE_ID="10")
+    def test_administrative_password_reset_queues_registered_login_only(self):
+        from staff_access.services import request_administrative_password_reset
+
+        before_password = self.target.password
+        job = request_administrative_password_reset(
+            target_user=self.target,
+            actor_user=self.actor,
+            reason="Support requested a secure credential recovery email.",
+        )
+        self.target.refresh_from_db()
+        self.assertEqual(job.job_type, TransactionalEmailJob.JobType.ADMIN_PASSWORD_RESET)
+        self.assertEqual(job.recipient_email, self.target.email)
+        self.assertEqual(job.password_reset_user_id, self.target.pk)
+        self.assertEqual(self.target.password, before_password)
+
+    @override_settings(BREVO_PASSWORD_RESET_TEMPLATE_ID="10")
+    def test_administrative_password_reset_audit_failure_rolls_back_job(self):
+        from staff_access.services import request_administrative_password_reset
+
+        with patch("staff_access.services.record_audit_event", side_effect=RuntimeError("audit unavailable")):
+            with self.assertRaises(RuntimeError):
+                request_administrative_password_reset(
+                    target_user=self.target,
+                    actor_user=self.actor,
+                    reason="Verify fail-closed reset scheduling.",
+                )
+        self.assertFalse(TransactionalEmailJob.objects.filter(password_reset_user=self.target).exists())
 
     def test_final_administrator_cannot_be_deactivated_or_disabled(self):
         manager_assignment = StaffRoleAssignment.objects.get(user=self.target, role__code=StaffRole.CRM_MANAGER)

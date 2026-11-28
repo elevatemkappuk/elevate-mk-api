@@ -97,8 +97,12 @@ def _validate_target(*, operation, target):
         if target.is_active and StaffRoleAssignment.objects.active().filter(user=target, role__family=StaffRole.CRM_ROLE_FAMILY).exists():
             raise ValidationError("Administrator onboarding cannot replace an existing active CRM role; use promotion.")
     elif operation == StaffAdministratorProposal.Operation.REACTIVATE:
-        if target.is_active:
-            raise ValidationError("Reactivation requires an inactive Staff target.")
+        if target.account_lifecycle_state == User.AccountLifecycleState.DISABLED:
+            raise ValidationError("Globally disabled accounts require separate account enablement before reactivation.")
+        if target.is_active and StaffRoleAssignment.objects.active().filter(
+            user=target, role__family=StaffRole.CRM_ROLE_FAMILY,
+        ).exists():
+            raise ValidationError("Reactivation requires a former Staff target without active CRM access.")
     else:
         raise ValidationError("Unsupported Administrator proposal operation.")
 
@@ -123,6 +127,12 @@ def create_administrator_proposal(*, actor_user, operation, target_user, reason,
         if not admin_role.is_active or admin_role.family != StaffRole.CRM_ROLE_FAMILY:
             raise ValidationError("The canonical CRM Administrator role is unavailable.")
         _validate_target(operation=operation, target=target)
+        if StaffAdministratorProposal.objects.select_for_update().filter(
+            target_user=target,
+            operation=operation,
+            status__in=(StaffAdministratorProposal.Status.PENDING, StaffAdministratorProposal.Status.APPROVED),
+        ).exists():
+            raise ValidationError("An actionable Administrator proposal already exists for this operation and target.")
         state = CapabilityPolicyState.objects.select_for_update().get(
             singleton_key=1, key=CAPABILITY_POLICY_STATE_KEY
         )
@@ -191,7 +201,7 @@ def approve_administrator_proposal(*, proposal, actor_user, request=None):
         StaffAdministratorProposalDecision.objects.create(
             proposal=proposal, outcome=proposal.status, decided_by=actor_user, reason=proposal.reason
         )
-        if proposal.operation == StaffAdministratorProposal.Operation.ONBOARD:
+        if proposal.operation in (StaffAdministratorProposal.Operation.ONBOARD, StaffAdministratorProposal.Operation.REACTIVATE):
             from django.conf import settings
             from staff_access.models import StaffInvitation
             from staff_access.services import _queue_staff_invitation_email
@@ -206,7 +216,7 @@ def approve_administrator_proposal(*, proposal, actor_user, request=None):
                 last_name=target.person.last_name,
                 pending_role_codes=[_CRM_ADMIN],
                 target_user=target,
-                operation=StaffAdministratorProposal.Operation.ONBOARD,
+                operation=proposal.operation,
                 reason=proposal.reason,
                 expires_at=invitation_expiry,
                 created_by=actor_user,
